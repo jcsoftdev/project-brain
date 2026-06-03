@@ -26,9 +26,6 @@ export function makeProgressPrinter() {
       case "storing":
         print(`  Indexing  ✓ ${current} files indexed`);
         break;
-      case "optimizing":
-        print(`  Compacting index...`)
-        break;
     }
   }
 

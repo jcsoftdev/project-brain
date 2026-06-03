@@ -10,7 +10,7 @@ const CONFIG_DIR = ".project-brain";
 const HASH_MANIFEST = "hashes.json";
 
 export interface SyncProgress {
-  phase: "scanning" | "reading" | "embedding" | "storing" | "optimizing";
+  phase: "scanning" | "reading" | "embedding" | "storing";
   current: number;
   total: number;
 }
@@ -228,9 +228,6 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       );
       fileOffset += storeBatch.length;
     }
-    // Compact LanceDB fragments accumulated this wave — releases memory
-    onProgress?.({ phase: "optimizing", current: i + wave.length, total: filePaths.length });
-    await store.optimize(projectId);
     // Wave done — GC can reclaim waveChanged and waveVectors
   }
 
