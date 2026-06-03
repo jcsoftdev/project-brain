@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.project-brain/
+*.db
+.lancedb/
+bun.lock

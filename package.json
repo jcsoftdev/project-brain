@@ -1,0 +1,56 @@
+{
+  "name": "project-brain",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local-first MCP server that gives AI tools semantic memory of your codebase.",
+  "author": "jcsoftdev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jcsoftdev/project-brain.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "rag",
+    "codebase",
+    "embeddings",
+    "lancedb",
+    "ollama"
+  ],
+  "files": [
+    "src",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "project-brain": "./src/cli.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/cli.ts",
+    "test": "bun test",
+    "setup": "bun run src/cli.ts setup",
+    "init": "bun run src/cli.ts init",
+    "build": "bun build ./src/cli.ts --compile --outfile project-brain"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@lancedb/lancedb": "^0.30.0",
+    "ollama": "^0.6.3",
+    "zod": "^4.4.3"
+  },
+  "optionalDependencies": {
+    "@lancedb/lancedb-darwin-arm64": "0.30.0",
+    "@lancedb/lancedb-linux-x64-gnu": "0.30.0",
+    "@lancedb/lancedb-linux-arm64-gnu": "0.30.0",
+    "@lancedb/lancedb-linux-x64-musl": "0.30.0",
+    "@lancedb/lancedb-linux-arm64-musl": "0.30.0",
+    "@lancedb/lancedb-win32-x64-msvc": "0.30.0",
+    "@lancedb/lancedb-win32-arm64-msvc": "0.30.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.5.4"
+  }
+}
