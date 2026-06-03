@@ -2,7 +2,30 @@ import { describe, it, expect, afterEach, mock } from "bun:test";
 import { VECTOR_DIM, HEALTH_COOLDOWN_MS } from "../../src/constants.js";
 
 // We'll test OllamaEmbeddingClient with a mock Ollama HTTP server
-import { OllamaEmbeddingClient } from "../../src/embeddings/ollama.js";
+import { OllamaEmbeddingClient, embedTimeoutMs } from "../../src/embeddings/ollama.js";
+
+// ---- FIX 1: embedTimeoutMs pure helper ----
+describe("embedTimeoutMs", () => {
+  it("returns 10000 for count=1 (minimum floor)", () => {
+    expect(embedTimeoutMs(1)).toBe(10_000);
+  });
+
+  it("scales for count=200: max(10000, 200*600) = 120000", () => {
+    expect(embedTimeoutMs(200)).toBe(120_000);
+  });
+
+  it("scales for count=50: max(10000, 50*600) = 30000", () => {
+    expect(embedTimeoutMs(50)).toBe(30_000);
+  });
+
+  it("returns floor for count=0", () => {
+    expect(embedTimeoutMs(0)).toBe(10_000);
+  });
+
+  it("scales linearly above floor", () => {
+    expect(embedTimeoutMs(100)).toBe(60_000);
+  });
+});
 
 let server: ReturnType<typeof Bun.serve> | null = null;
 let port: number;

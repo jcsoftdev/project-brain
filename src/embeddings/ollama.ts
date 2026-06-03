@@ -1,6 +1,15 @@
 import { EMBEDDING_MODEL, HEALTH_COOLDOWN_MS, VECTOR_DIM } from "../constants.js";
 import type { EmbeddingClient } from "../types.js";
 
+/**
+ * Compute embed request timeout in ms, scaling with input size.
+ * Floor: 10 000 ms (single-text query). Per-item budget: 600 ms.
+ * e.g. 200 texts → 120 000 ms, 50 texts → 30 000 ms.
+ */
+export function embedTimeoutMs(count: number): number {
+  return Math.max(10_000, count * 600);
+}
+
 /** Ollama-backed embedding client with circuit breaker cooldown. */
 export class OllamaEmbeddingClient implements EmbeddingClient {
   private readonly host: string;
@@ -30,7 +39,7 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: this.model, input: texts }),
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(embedTimeoutMs(texts.length)),
       });
 
       if (!response.ok) {
