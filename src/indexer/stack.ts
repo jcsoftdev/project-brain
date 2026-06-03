@@ -65,6 +65,23 @@ const LOCK_FILE_MAP: Record<string, string> = {
   "package-lock.json": "npm",
 };
 
+/** Scan one package.json, merge detected language+frameworks into provided arrays. */
+async function scanPackageJson(filePath: string, languages: string[], frameworks: string[]): Promise<void> {
+  try {
+    const content = await Bun.file(filePath).text();
+    const pkg = JSON.parse(content);
+    const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+    const lang = (allDeps.typescript || allDeps["@types/bun"] || allDeps["@types/node"]) ? "TypeScript" : "JavaScript";
+    if (!languages.includes(lang)) languages.push(lang);
+    const detector = MANIFEST_DETECTORS.find((d) => d.file === "package.json");
+    if (detector?.detectFrameworks) {
+      for (const fw of detector.detectFrameworks(content)) {
+        if (!frameworks.includes(fw)) frameworks.push(fw);
+      }
+    }
+  } catch {}
+}
+
 /** Detect the technology stack from manifest files in a directory. */
 export async function detectStack(root: string): Promise<StackInfo> {
   const languages: string[] = [];
@@ -78,28 +95,40 @@ export async function detectStack(root: string): Promise<StackInfo> {
       if (!manifest) manifest = detector.file;
 
       let lang = detector.language;
-      // Special case: TypeScript detection in package.json
       if (detector.file === "package.json") {
         try {
           const pkg = JSON.parse(content);
           const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
-          if (allDeps.typescript || allDeps["@types/bun"] || allDeps["@types/node"]) {
-            lang = "TypeScript";
-          }
+          if (allDeps.typescript || allDeps["@types/bun"] || allDeps["@types/node"]) lang = "TypeScript";
         } catch {}
       }
 
       if (!languages.includes(lang)) languages.push(lang);
-
       if (detector.detectFrameworks) {
         for (const fw of detector.detectFrameworks(content)) {
           if (!frameworks.includes(fw)) frameworks.push(fw);
         }
       }
-    } catch {
-      // File doesn't exist, skip
-    }
+    } catch {}
   }
+
+  // Monorepo: scan workspace sub-packages (apps/*, packages/*, libs/*, services/*)
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    const workspaceDirs = ["apps", "packages", "libs", "services", "modules"];
+    await Promise.all(
+      entries
+        .filter((e) => e.isDirectory() && workspaceDirs.includes(e.name))
+        .flatMap(async (e) => {
+          const subs = await readdir(join(root, e.name), { withFileTypes: true }).catch(() => []);
+          return Promise.all(
+            subs
+              .filter((s) => s.isDirectory())
+              .map((s) => scanPackageJson(join(root, e.name, s.name, "package.json"), languages, frameworks))
+          );
+        })
+    );
+  } catch {}
 
   // Detect package manager from lock files
   for (const [lockFile, pm] of Object.entries(LOCK_FILE_MAP)) {
