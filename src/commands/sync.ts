@@ -132,103 +132,102 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   let skipped = 0;
   const newManifest: Record<string, string> = { ...hashManifest };
 
-  // Wave-based pipeline: read → embed → store N files at a time.
-  // optimize() after each wave compacts LanceDB fragments and releases RAM.
-  // Target: <1GB peak RAM with reasonable throughput.
-  const WAVE_SIZE = 30;         // files per wave — 30 × ~10chunks × ~7KB ≈ 2MB/wave
+  // Pipeline: read all files → embed in large batches → store per mini-wave.
+  // EMBED_BATCH_SIZE=200: fewer HTTP round-trips to Ollama (biggest speedup).
+  // SAVE_EVERY=10: batchReplace every 10 files → continuous progress + few fragments.
+  // READ_CONCURRENCY=20: saturate disk I/O.
   const READ_CONCURRENCY = 20;
-  const EMBED_BATCH_SIZE = 50;  // chunks per Ollama request
-  const STORE_CONCURRENCY = 4;  // parallel LanceDB writes
-  const MAX_FILE_BYTES = 512_000; // skip files >512KB (likely binary/generated)
+  const EMBED_BATCH_SIZE = 200; // bigger = fewer Ollama round-trips = faster
+  const SAVE_EVERY = 10;        // store every N files → progress visible immediately
+  const MAX_FILE_BYTES = 512_000;
 
-  // Count changed files upfront for progress (scan pass without storing)
+  type FileEntry = { relPath: string; hash: string; rawChunks: ReturnType<typeof chunkContent> };
+
   let totalChanged = 0;
   let readDone = 0;
 
-  for (let i = 0; i < filePaths.length; i += WAVE_SIZE) {
-    const wave = filePaths.slice(i, i + WAVE_SIZE);
+  // Phase A: read all files, chunk changed ones, collect into pendingEntries
+  const pendingEntries: FileEntry[] = [];
 
-    // Step 1: read + hash in parallel batches
-    type FileEntry = { relPath: string; hash: string; rawChunks: ReturnType<typeof chunkContent> };
-    const waveChanged: FileEntry[] = [];
+  for (let i = 0; i < filePaths.length; i += READ_CONCURRENCY) {
+    const batch = filePaths.slice(i, i + READ_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (filePath) => {
+        const file = Bun.file(filePath);
+        if (file.size > MAX_FILE_BYTES) return null;
+        let content: string;
+        try { content = await file.text(); } catch { return null; }
 
-    for (let j = 0; j < wave.length; j += READ_CONCURRENCY) {
-      const batch = wave.slice(j, j + READ_CONCURRENCY);
-      const results = await Promise.all(
-        batch.map(async (filePath) => {
-          const file = Bun.file(filePath);
-          if (file.size > MAX_FILE_BYTES) return null; // skip large/binary files
-          let content: string;
-          try { content = await file.text(); } catch { return null; }
+        const relPath = filePath.startsWith(root + "/")
+          ? filePath.slice(root.length + 1) : filePath;
+        const hash = computeHash(content);
 
-          const relPath = filePath.startsWith(root + "/")
-            ? filePath.slice(root.length + 1) : filePath;
-          const hash = computeHash(content);
+        if (hashManifest[relPath] === hash) return "skipped" as const;
 
-          if (hashManifest[relPath] === hash) return "skipped" as const;
+        const parts = relPath.split("/");
+        const module = parts.length > 1 ? parts[0] : "root";
+        return { relPath, hash, rawChunks: chunkContent(content, relPath, module) };
+      })
+    );
 
-          const parts = relPath.split("/");
-          const module = parts.length > 1 ? parts[0] : "root";
-          return { relPath, hash, rawChunks: chunkContent(content, relPath, module) };
-        })
-      );
-
-      for (const r of results) {
-        if (r === null) continue;
-        if (r === "skipped") { skipped++; } else { waveChanged.push(r); totalChanged++; }
-      }
-      readDone += batch.length;
-      onProgress?.({ phase: "reading", current: readDone, total: filePaths.length });
+    for (const r of results) {
+      if (r === null) continue;
+      if (r === "skipped") { skipped++; }
+      else { pendingEntries.push(r); totalChanged++; }
     }
-
-    if (waveChanged.length === 0) continue; // nothing to embed/store this wave
-    const allTexts = waveChanged.flatMap((e) => e.rawChunks.map((c) => c.content));
-    const waveVectors: (number[] | null)[] = new Array(allTexts.length).fill(null);
-    let embedOffset = 0;
-    for (const entry of waveChanged) embedOffset += entry.rawChunks.length; // just used below
-
-    onProgress?.({ phase: "embedding", current: 0, total: allTexts.length });
-    let globalIdx = 0;
-    for (const entry of waveChanged) {
-      const start = globalIdx;
-      globalIdx += entry.rawChunks.length;
-      for (let k = start; k < globalIdx; k += EMBED_BATCH_SIZE) {
-        const end = Math.min(k + EMBED_BATCH_SIZE, globalIdx);
-        const vecs = await embeddings.embed(allTexts.slice(k, end));
-        if (vecs) for (let m = 0; m < vecs.length; m++) waveVectors[k + m] = vecs[m];
-        onProgress?.({ phase: "embedding", current: Math.min(k + EMBED_BATCH_SIZE, globalIdx), total: allTexts.length });
-      }
-    }
-
-    // Step 3: ONE batchReplace per wave → ONE LanceDB fragment (vs N fragments)
-    const waveSources: string[] = [];
-    const waveChunks: Chunk[] = [];
-    let chunkOffset = 0;
-
-    for (const entry of waveChanged) {
-      const entryChunks: Chunk[] = entry.rawChunks
-        .map((raw, ci) => ({ raw, vec: waveVectors[chunkOffset + ci] }))
-        .filter(({ vec }) => vec !== null)
-        .map(({ raw, vec }) => ({
-          id: raw.id, vector: vec!, content: raw.content,
-          source: entry.relPath, module: raw.module,
-          content_hash: raw.content_hash, updated_at: raw.updated_at,
-        }));
-      chunkOffset += entry.rawChunks.length;
-
-      if (entryChunks.length === 0) continue;
-      waveSources.push(entry.relPath);
-      waveChunks.push(...entryChunks);
-      newManifest[entry.relPath] = entry.hash;
-      ingested++;
-      onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
-    }
-
-    if (waveChunks.length > 0) {
-      await store.batchReplace(projectId, waveSources, waveChunks);
-    }
-    // Wave done — GC can reclaim waveChanged and waveVectors
+    readDone += batch.length;
+    onProgress?.({ phase: "reading", current: readDone, total: filePaths.length });
   }
+
+  // Phase B+C: embed in large batches, store every SAVE_EVERY files with progress
+  // Flatten all texts with back-references
+  const allTexts = pendingEntries.flatMap((e) => e.rawChunks.map((c) => c.content));
+  const allVectors: (number[] | null)[] = new Array(allTexts.length).fill(null);
+
+  // Embed in EMBED_BATCH_SIZE chunks — show progress per batch
+  let embedDone = 0;
+  onProgress?.({ phase: "embedding", current: 0, total: allTexts.length });
+  for (let i = 0; i < allTexts.length; i += EMBED_BATCH_SIZE) {
+    const batch = allTexts.slice(i, i + EMBED_BATCH_SIZE);
+    const vecs = await embeddings.embed(batch);
+    if (vecs) for (let j = 0; j < vecs.length; j++) allVectors[i + j] = vecs[j];
+    embedDone = Math.min(i + EMBED_BATCH_SIZE, allTexts.length);
+    onProgress?.({ phase: "embedding", current: embedDone, total: allTexts.length });
+  }
+
+  // Store every SAVE_EVERY files → progress updates, few fragments
+  let chunkCursor = 0;
+  let storeBuf: { sources: string[]; chunks: Chunk[] } = { sources: [], chunks: [] };
+
+  async function flushStore() {
+    if (storeBuf.chunks.length === 0) return;
+    await store.batchReplace(projectId, storeBuf.sources, storeBuf.chunks);
+    storeBuf = { sources: [], chunks: [] };
+  }
+
+  for (let ei = 0; ei < pendingEntries.length; ei++) {
+    const entry = pendingEntries[ei];
+    const entryChunks: Chunk[] = entry.rawChunks
+      .map((raw, ci) => ({ raw, vec: allVectors[chunkCursor + ci] }))
+      .filter(({ vec }) => vec !== null)
+      .map(({ raw, vec }) => ({
+        id: raw.id, vector: vec!, content: raw.content,
+        source: entry.relPath, module: raw.module,
+        content_hash: raw.content_hash, updated_at: raw.updated_at,
+      }));
+    chunkCursor += entry.rawChunks.length;
+
+    if (entryChunks.length === 0) continue;
+    storeBuf.sources.push(entry.relPath);
+    storeBuf.chunks.push(...entryChunks);
+    newManifest[entry.relPath] = entry.hash;
+    ingested++;
+    onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
+
+    // Flush every SAVE_EVERY files
+    if (storeBuf.sources.length >= SAVE_EVERY) await flushStore();
+  }
+  await flushStore(); // flush remainder
 
   // 5. Detect deleted files (in manifest but no longer on disk)
   let deleted = 0;
