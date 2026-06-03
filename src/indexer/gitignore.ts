@@ -43,19 +43,54 @@ export function shouldIgnore(filePath: string, patterns: string[]): boolean {
 }
 
 /**
- * Load .gitignore patterns from a project root.
- * Returns array of pattern strings (comments and blank lines excluded).
+ * Load .gitignore patterns from one directory, prefixed with its relative path.
  */
-export async function loadPatterns(root: string): Promise<string[]> {
+async function loadPatternsFromDir(dir: string, root: string): Promise<string[]> {
   try {
-    const content = await Bun.file(join(root, ".gitignore")).text();
+    const content = await Bun.file(join(dir, ".gitignore")).text();
+    const relDir = dir === root ? "" : dir.slice(root.length + 1).replace(/\\/g, "/");
     return content
       .split("\n")
       .map((line) => line.trim())
-      .filter((line) => line.length > 0 && !line.startsWith("#"));
+      .filter((line) => line.length > 0 && !line.startsWith("#"))
+      .map((pattern) => {
+        if (!relDir) return pattern;
+        const neg = pattern.startsWith("!");
+        const raw = neg ? pattern.slice(1) : pattern;
+        return neg ? `!${relDir}/${raw}` : `${relDir}/${raw}`;
+      });
   } catch {
     return [];
   }
+}
+
+/**
+ * Recursively load .gitignore from root and all subdirectories.
+ * Patterns from subdirs are prefixed with their relative path.
+ */
+export async function loadPatterns(root: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const all: string[] = [];
+
+  async function walk(dir: string): Promise<void> {
+    all.push(...(await loadPatternsFromDir(dir, root)));
+    let entries: Awaited<ReturnType<typeof readdir>>;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    await Promise.all(
+      entries
+        .filter((e) => e.isDirectory() && !ALWAYS_IGNORE.some(
+          (ig) => e.name + "/" === ig || e.name === ig.replace(/\/$/, "")
+        ))
+        .map((e) => walk(join(dir, e.name)))
+    );
+  }
+
+  await walk(root);
+  return all;
 }
 
 /** Simple glob pattern matching for gitignore-style patterns. */
