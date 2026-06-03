@@ -9,6 +9,9 @@ import type { EmbeddingClient, VectorStore, Chunk } from "../types.js";
 const CONFIG_DIR = ".project-brain";
 const HASH_MANIFEST = "hashes.json";
 
+interface ManifestEntry { hash: string; mtime: number; }
+type Manifest = Record<string, ManifestEntry>;
+
 export interface SyncProgress {
   phase: "scanning" | "reading" | "embedding" | "storing";
   current: number;
@@ -41,19 +44,24 @@ export interface SyncResult {
   scanned: number;
 }
 
-/** Load the persisted hash manifest. */
-async function loadHashManifest(root: string): Promise<Record<string, string>> {
+/** Load the persisted hash manifest. Supports both legacy (string) and new ({hash,mtime}) format. */
+async function loadHashManifest(root: string): Promise<Manifest> {
   const path = join(root, CONFIG_DIR, HASH_MANIFEST);
   try {
     const raw = await readFile(path, "utf-8");
-    return JSON.parse(raw) as Record<string, string>;
+    const parsed = JSON.parse(raw) as Record<string, string | ManifestEntry>;
+    const result: Manifest = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      result[k] = typeof v === "string" ? { hash: v, mtime: 0 } : v;
+    }
+    return result;
   } catch {
     return {};
   }
 }
 
 /** Persist the hash manifest. */
-async function saveHashManifest(root: string, manifest: Record<string, string>): Promise<void> {
+async function saveHashManifest(root: string, manifest: Manifest): Promise<void> {
   const dir = join(root, CONFIG_DIR);
   const { mkdir } = await import("node:fs/promises");
   await mkdir(dir, { recursive: true });
@@ -130,43 +138,58 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
   let ingested = 0;
   let skipped = 0;
-  const newManifest: Record<string, string> = { ...hashManifest };
+  const newManifest: Manifest = { ...hashManifest };
 
   // Pipeline: read all files → embed in large batches → store per mini-wave.
-  // EMBED_BATCH_SIZE=200: fewer HTTP round-trips to Ollama (biggest speedup).
-  // SAVE_EVERY=10: batchReplace every 10 files → continuous progress + few fragments.
-  // READ_CONCURRENCY=20: saturate disk I/O.
+  // mtime fast-path: stat() is ~10x cheaper than file.text() + hash.
+  // EMBED_BATCH_SIZE=200: fewer HTTP round-trips to Ollama.
+  // SAVE_EVERY=10: batchReplace every 10 files → continuous progress.
   const READ_CONCURRENCY = 20;
-  const EMBED_BATCH_SIZE = 200; // bigger = fewer Ollama round-trips = faster
-  const SAVE_EVERY = 10;        // store every N files → progress visible immediately
+  const EMBED_BATCH_SIZE = 200;
+  const SAVE_EVERY = 10;
   const MAX_FILE_BYTES = 512_000;
 
-  type FileEntry = { relPath: string; hash: string; rawChunks: ReturnType<typeof chunkContent> };
+  type FileEntry = { relPath: string; hash: string; mtime: number; rawChunks: ReturnType<typeof chunkContent> };
 
   let totalChanged = 0;
   let readDone = 0;
 
-  // Phase A: read all files, chunk changed ones, collect into pendingEntries
+  // Phase A: stat first (mtime fast-path), read only if mtime changed
   const pendingEntries: FileEntry[] = [];
+  const { stat } = await import("node:fs/promises");
 
   for (let i = 0; i < filePaths.length; i += READ_CONCURRENCY) {
     const batch = filePaths.slice(i, i + READ_CONCURRENCY);
     const results = await Promise.all(
       batch.map(async (filePath) => {
-        const file = Bun.file(filePath);
-        if (file.size > MAX_FILE_BYTES) return null;
-        let content: string;
-        try { content = await file.text(); } catch { return null; }
+        // Fast path: check mtime via stat (no content read)
+        let mtime = 0;
+        try {
+          const s = await stat(filePath);
+          if (s.size > MAX_FILE_BYTES) return null;
+          mtime = s.mtimeMs;
+        } catch { return null; }
 
         const relPath = filePath.startsWith(root + "/")
           ? filePath.slice(root.length + 1) : filePath;
+
+        const entry = hashManifest[relPath];
+        if (entry && entry.mtime === mtime) return "skipped" as const; // mtime unchanged → skip
+
+        // mtime changed → read content + verify hash
+        let content: string;
+        try { content = await Bun.file(filePath).text(); } catch { return null; }
         const hash = computeHash(content);
 
-        if (hashManifest[relPath] === hash) return "skipped" as const;
+        if (entry && entry.hash === hash) {
+          // Content identical despite mtime change — update mtime only
+          newManifest[relPath] = { hash, mtime };
+          return "skipped" as const;
+        }
 
         const parts = relPath.split("/");
         const module = parts.length > 1 ? parts[0] : "root";
-        return { relPath, hash, rawChunks: chunkContent(content, relPath, module) };
+        return { relPath, hash, mtime, rawChunks: chunkContent(content, relPath, module) };
       })
     );
 
@@ -220,7 +243,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     if (entryChunks.length === 0) continue;
     storeBuf.sources.push(entry.relPath);
     storeBuf.chunks.push(...entryChunks);
-    newManifest[entry.relPath] = entry.hash;
+    newManifest[entry.relPath] = { hash: entry.hash, mtime: entry.mtime };
     ingested++;
     onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
 
@@ -299,7 +322,8 @@ export async function checkStaleness(options: StalenessOptions): Promise<Stalene
       : filePath;
     const hash = computeHash(content);
 
-    if (hashManifest[relPath] === hash) {
+    const entry = hashManifest[relPath];
+    if (entry && entry.hash === hash) {
       current++;
     } else {
       stale++;

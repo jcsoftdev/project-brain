@@ -97,7 +97,7 @@ describe("Staleness Enhancement", () => {
       const { computeHash } = await import("../../src/indexer/hash.js");
       const expectedHash = computeHash(content);
 
-      expect(manifest["known.md"]).toBe(expectedHash);
+      expect(manifest["known.md"]?.hash ?? manifest["known.md"]).toBe(expectedHash);
     });
 
     it("manifest updates when file content changes", async () => {
@@ -115,7 +115,8 @@ describe("Staleness Enhancement", () => {
       const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
 
       const { computeHash } = await import("../../src/indexer/hash.js");
-      expect(manifest["evolving.md"]).toBe(computeHash("Version 2 — completely different."));
+      const v = manifest["evolving.md"];
+      expect(v?.hash ?? v).toBe(computeHash("Version 2 — completely different."));
     });
   });
 
