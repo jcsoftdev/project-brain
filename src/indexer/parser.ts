@@ -29,7 +29,7 @@ export function chunkContent(
 
   const sections = isMarkdown
     ? splitMarkdown(content)
-    : splitCode(content);
+    : splitCode(content, ext);
 
   const chunks: RawChunk[] = [];
   const now = Date.now();
@@ -107,23 +107,52 @@ function splitMarkdown(content: string): string[] {
   return sections;
 }
 
-/** Split code content by function/class boundaries. */
-function splitCode(content: string): string[] {
+/** Per-language top-level declaration patterns. */
+const DECLARATION_PATTERNS: Record<string, RegExp[]> = {
+  ".js":  [/^(export\s+)?(default\s+)?(async\s+)?function[\s*]/, /^(export\s+)?(abstract\s+)?class\s/, /^(export\s+)?interface\s/, /^(export\s+)?type\s+\w+\s*=/, /^(export\s+)?(const|let|var)\s+\w+\s*=\s*(async\s+)?\(/, /^(export\s+)?enum\s/],
+  ".ts":  [/^(export\s+)?(default\s+)?(async\s+)?function[\s*]/, /^(export\s+)?(abstract\s+)?class\s/, /^(export\s+)?interface\s/, /^(export\s+)?type\s+\w+\s*=/, /^(export\s+)?(const|let|var)\s+\w+\s*=\s*(async\s+)?\(/, /^(export\s+)?enum\s/],
+  ".tsx": [/^(export\s+)?(default\s+)?(async\s+)?function[\s*]/, /^(export\s+)?(abstract\s+)?class\s/, /^(export\s+)?interface\s/, /^(export\s+)?type\s+\w+\s*=/],
+  ".jsx": [/^(export\s+)?(default\s+)?(async\s+)?function[\s*]/, /^(export\s+)?class\s/],
+  // Kotlin / KMP
+  ".kt":  [
+    /^(private\s+|public\s+|internal\s+|protected\s+)?(override\s+)?(suspend\s+)?fun\s/,
+    /^(expect|actual)\s+(suspend\s+)?fun\s/,
+    /^(private\s+|public\s+|internal\s+|protected\s+)?(data\s+|sealed\s+|abstract\s+|open\s+|inner\s+)?class\s/,
+    /^(expect|actual)\s+(data\s+|sealed\s+|abstract\s+|open\s+)?class\s/,
+    /^(private\s+|public\s+|internal\s+)?(data\s+)?object\s/,
+    /^(private\s+|public\s+|internal\s+)?interface\s/,
+    /^(private\s+|public\s+|internal\s+)?enum\s+class\s/,
+    /^(private\s+|public\s+|internal\s+)?typealias\s/,
+  ],
+  ".kts": [/^(private\s+|public\s+)?(suspend\s+)?fun\s/, /^(data\s+|sealed\s+|abstract\s+)?class\s/],
+  // Java
+  ".java": [/^(public|private|protected|static|\s)+(class|interface|enum|record)\s/, /^(public|private|protected|static|\s)+(void|int|String|boolean|long|double|[\w<>\[\]]+)\s+\w+\s*\(/],
+  // Python
+  ".py":  [/^(async\s+)?def\s/, /^class\s/],
+  // Rust
+  ".rs":  [/^(pub(\([\w]+\))?\s+)?(async\s+)?fn\s/, /^(pub(\([\w]+\))?\s+)?(struct|enum|trait|impl|mod)\s/, /^(pub(\([\w]+\))?\s+)?type\s/],
+  // Swift
+  ".swift": [/^(public\s+|private\s+|internal\s+|open\s+|fileprivate\s+)?(override\s+)?(class\s+|static\s+)?func\s/, /^(public\s+|private\s+|internal\s+|open\s+)?(final\s+)?(class|struct|protocol|enum|extension|actor)\s/],
+  // Go
+  ".go":  [/^func\s/, /^type\s+\w+\s+(struct|interface)\s/],
+};
+
+/** Get declaration patterns for a file extension. */
+function getPatternsForExt(ext: string): RegExp[] {
+  return DECLARATION_PATTERNS[ext.toLowerCase()] ?? DECLARATION_PATTERNS[".ts"]!;
+}
+
+/** Split code content by function/class boundaries (language-aware). */
+function splitCode(content: string, ext = ""): string[] {
+  const patterns = getPatternsForExt(ext);
   const lines = content.split("\n");
   const sections: string[] = [];
   let current: string[] = [];
   let braceDepth = 0;
 
   for (const line of lines) {
-    // Detect top-level declarations
-    const isDeclaration =
-      braceDepth === 0 &&
-      (/^(export\s+)?(async\s+)?function\s/.test(line) ||
-        /^(export\s+)?(abstract\s+)?class\s/.test(line) ||
-        /^(export\s+)?interface\s/.test(line) ||
-        /^(export\s+)?type\s/.test(line) ||
-        /^(export\s+)?const\s/.test(line) ||
-        /^(export\s+)?enum\s/.test(line));
+    const trimmed = line.trimStart();
+    const isDeclaration = braceDepth === 0 && patterns.some((re) => re.test(trimmed));
 
     if (isDeclaration && current.length > 0) {
       const section = current.join("\n").trim();
@@ -133,7 +162,6 @@ function splitCode(content: string): string[] {
       current.push(line);
     }
 
-    // Track brace depth for better boundary detection
     for (const char of line) {
       if (char === "{") braceDepth++;
       if (char === "}") braceDepth = Math.max(0, braceDepth - 1);

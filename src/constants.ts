@@ -32,14 +32,40 @@ export const SECTION_MARKER_END = "<!-- project-brain:end -->";
 
 /** Paths to ignore in file watcher (always, regardless of .gitignore). */
 export const WATCHER_ALWAYS_IGNORE = [
+  // universal
   "node_modules/",
   ".git/",
   ".project-brain/",
   "dist/",
   "build/",
+  // JS/TS
   ".next/",
+  ".nuxt/",
+  ".svelte-kit/",
+  ".turbo/",
+  ".vercel/",
+  // JVM / Kotlin / Android
   "target/",
+  ".gradle/",
+  ".idea/",
+  ".kotlin/",
+  "generated/",
+  "intermediates/",
+  "outputs/",
+  // Python
   "__pycache__/",
+  ".venv/",
+  ".mypy_cache/",
+  // Rust
+  "target/",
+  // iOS / Swift
+  ".build/",
+  "DerivedData/",
+  "Pods/",
+  // misc
+  ".cache/",
+  "coverage/",
+  ".nyc_output/",
 ];
 
 /** Default project-brain data directory. */
