@@ -23,6 +23,9 @@ let deps: ToolDeps;
 let ollamaUp = false;
 
 beforeAll(async () => {
+  // Opt-in: real-network tests are excluded from the default suite to keep it
+  // deterministic. Run with PB_REAL_TESTS=1 to exercise them.
+  if (process.env.PB_REAL_TESTS !== "1") return;
   dir = await mkdtemp(join(tmpdir(), "pb-e2e-"));
   embeddings = new OllamaEmbeddingClient(OLLAMA_HOST, undefined, EMBEDDING_MODEL, VECTOR_DIM);
   ollamaUp = await embeddings.isAvailable();
@@ -46,7 +49,7 @@ beforeAll(async () => {
   await store.buildIndexes(PROJECT); // FTS index — without this hybrid is inert
 });
 
-afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
+afterAll(async () => { if (dir) await rm(dir, { recursive: true, force: true }); });
 
 describe("PRUEBA INVERSA: real e2e pipeline", () => {
   it("finds handleSearch by exact symbol name with populated symbol metadata", async () => {

@@ -14,6 +14,12 @@ import { OLLAMA_HOST } from "../../src/constants.js";
 let ollamaUp = false;
 
 beforeAll(async () => {
+  // Opt-in: real-network tests are excluded from the default suite to keep it
+  // deterministic. Run with PB_REAL_TESTS=1 to exercise them.
+  if (process.env.PB_REAL_TESTS !== "1") {
+    ollamaUp = false;
+    return;
+  }
   try {
     const res = await fetch(`${OLLAMA_HOST}/api/tags`, {
       signal: AbortSignal.timeout(3_000),
