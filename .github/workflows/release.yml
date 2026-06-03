@@ -112,7 +112,12 @@ jobs:
             };
             fs.writeFileSync('platform-pkg/package.json', JSON.stringify(pkg, null, 2));
           "
-          cd platform-pkg && npm publish --access public
+          cd platform-pkg
+          if npm view "project-brain-${{ matrix.target }}@${VERSION}" version 2>/dev/null; then
+            echo "project-brain-${{ matrix.target }}@${VERSION} already published, skipping."
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ github.ref_name }}
@@ -143,6 +148,13 @@ jobs:
           VERSION: ${{ github.ref_name }}
 
       - name: Publish
-        run: npm publish --access public
+        shell: bash
+        run: |
+          VERSION=${{ github.ref_name }}
+          if npm view "project-brain@${VERSION}" version 2>/dev/null; then
+            echo "project-brain@${VERSION} already published, skipping."
+          else
+            npm publish --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
