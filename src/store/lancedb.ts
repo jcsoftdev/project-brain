@@ -251,6 +251,13 @@ export class LanceDbStore implements VectorStore {
     }
   }
 
+  async assertDim(project: string, queryDim: number): Promise<void> {
+    const meta = await readTableMeta(this.dbPath, project);
+    if (meta && meta.dim !== queryDim) {
+      throw new Error(`Vector dim mismatch for '${project}': table=${meta.dim}, query=${queryDim}. Reindex with the matching model.`);
+    }
+  }
+
   async getChunkById(project: string, id: string): Promise<import("../types.js").Chunk | null> {
     const table = await this.getTable(project);
     if (!table) return null;

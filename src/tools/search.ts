@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 import { applyThreshold, mmr } from "../retrieval/rank.js";
 import { fillBudget } from "../retrieval/budget.js";
-import { SCORE_THRESHOLD, MMR_LAMBDA, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES } from "../constants.js";
+import { SCORE_THRESHOLD, MMR_LAMBDA, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES, HARDNESS } from "../constants.js";
 
 interface SearchArgs {
   project: string;
@@ -35,6 +35,10 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
       ],
       isError: true,
     };
+  }
+
+  if (HARDNESS) {
+    await deps.store.assertDim(project, deps.embeddings.dim);
   }
 
   const fused = await deps.store.hybridSearch(project, vectors[0], query, Math.max(limit * 3, 20));

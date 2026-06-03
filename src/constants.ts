@@ -82,3 +82,6 @@ export const SEARCH_TOKEN_BUDGET = 1200;
 
 /** Max lines per snippet in adaptive output. */
 export const SNIPPET_MAX_LINES = 5;
+
+/** When true, fail fast on vector dim mismatches instead of silently degrading. */
+export const HARDNESS = process.env.PROJECT_BRAIN_HARDNESS === "1";

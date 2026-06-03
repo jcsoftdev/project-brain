@@ -61,6 +61,8 @@ export interface VectorStore {
   hybridSearch(project: string, vector: number[], text: string, topK: number): Promise<SearchResult[]>;
   /** Fetch a single chunk by its id. Returns null if not found. */
   getChunkById(project: string, id: string): Promise<Chunk | null>;
+  /** Throw if the stored table dim doesn't match queryDim. No-op when no metadata exists yet. */
+  assertDim(project: string, queryDim: number): Promise<void>;
 }
 
 /** Dependencies injected into MCP tool handlers. */
