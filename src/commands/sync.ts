@@ -134,7 +134,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
   // Wave-based pipeline: read → embed → store N files at a time.
   // Caps peak RAM to WAVE_SIZE files in memory simultaneously.
-  const WAVE_SIZE = 50;       // files per wave
+  const WAVE_SIZE = 20;        // files per wave — smaller = lower peak RAM
   const READ_CONCURRENCY = 20;
   const EMBED_BATCH_SIZE = 50; // chunks per Ollama request
   const STORE_CONCURRENCY = 4; // parallel LanceDB writes
@@ -226,6 +226,8 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       );
       fileOffset += storeBatch.length;
     }
+    // Compact LanceDB fragments accumulated this wave — releases memory
+    await store.optimize(projectId);
     // Wave done — GC can reclaim waveChanged and waveVectors
   }
 

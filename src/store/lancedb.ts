@@ -176,4 +176,14 @@ export class LanceDbStore implements VectorStore {
       return 0;
     }
   }
+
+  async optimize(project: string): Promise<void> {
+    const table = await this.getTable(project);
+    if (!table) return;
+    try {
+      await (table as any).optimize();
+    } catch {
+      // optimize() may not be available in all LanceDB versions — non-fatal
+    }
+  }
 }

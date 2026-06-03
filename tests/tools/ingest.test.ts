@@ -15,6 +15,7 @@ function makeMockStore(): VectorStore & { upserted: Chunk[] } {
     listModules: async () => [],
     getModuleChunks: async () => [],
     countChunks: async () => 0,
+      optimize: async () => {},
   };
   return store;
 }

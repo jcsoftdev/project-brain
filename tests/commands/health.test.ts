@@ -13,6 +13,7 @@ function makeStore(count: number): VectorStore {
     listModules: async () => [],
     getModuleChunks: async (): Promise<Chunk[]> => [],
     countChunks: async () => count,
+    optimize: async () => {},
   };
 }
 

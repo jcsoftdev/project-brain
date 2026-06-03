@@ -143,6 +143,7 @@ function makeFakeStore(): VectorStore & { upsertCalls: number } {
     async listModules() { return []; },
     async getModuleChunks() { return [] as Chunk[]; },
     async countChunks() { return 0; },
+    async optimize() {},
   };
 }
 

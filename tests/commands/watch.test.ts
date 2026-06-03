@@ -36,6 +36,7 @@ function makeMemoryStore(): VectorStore & { data: Map<string, Chunk[]> } {
       return chunks.filter((c) => c.module === module);
     },
     countChunks: async (project) => (data.get(project) ?? []).length,
+    optimize: async () => {},
   };
 }
 

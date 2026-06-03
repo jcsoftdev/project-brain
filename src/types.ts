@@ -33,6 +33,8 @@ export interface VectorStore {
   listModules(project: string): Promise<string[]>;
   getModuleChunks(project: string, module: string): Promise<Chunk[]>;
   countChunks(project: string): Promise<number>;
+  /** Compact fragments and release memory. Call after bulk writes. */
+  optimize(project: string): Promise<void>;
 }
 
 /** Dependencies injected into MCP tool handlers. */
