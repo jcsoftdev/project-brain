@@ -6,6 +6,7 @@ import { installGitHook } from "../hooks/git.js";
 import { writeProjectRules } from "../rules/project.js";
 import { detectModules, writeModuleStubs } from "../indexer/modules.js";
 import { runReindex } from "./reindex.js";
+import { runSync } from "./sync.js";
 import type { VectorStore, EmbeddingClient } from "../types.js";
 import type { ReindexResult } from "./reindex.js";
 import type { SyncProgress } from "./sync.js";
@@ -136,7 +137,17 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
         embeddings = new OllamaEmbeddingClient(OLLAMA_HOST);
       }
 
-      indexStats = await runReindex({ root, projectId, store, embeddings, onProgress: options.onProgress });
+      // If already indexed (manifest exists), use incremental sync — not full reindex
+      const manifestPath = join(root, CONFIG_DIR, "hashes.json");
+      let alreadyIndexed = false;
+      try { await readFile(manifestPath, "utf-8"); alreadyIndexed = true; } catch {}
+
+      if (alreadyIndexed) {
+        const syncResult = await runSync({ root, projectId, store, embeddings, onProgress: options.onProgress });
+        indexStats = { ingested: syncResult.ingested, skipped: syncResult.skipped, deleted: syncResult.deleted, scanned: syncResult.scanned };
+      } else {
+        indexStats = await runReindex({ root, projectId, store, embeddings, onProgress: options.onProgress });
+      }
       indexed = true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
