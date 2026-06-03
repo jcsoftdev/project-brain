@@ -24,7 +24,7 @@ describe("init command", () => {
     it("creates .project-brain/ directory in the target root", async () => {
       const { runInit } = await import("../../src/commands/init.js");
 
-      await runInit({ root: tempDir, skipGitHook: true });
+      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
 
       const dotDir = join(tempDir, ".project-brain");
       const proc = Bun.spawn(["test", "-d", dotDir], {
@@ -37,7 +37,7 @@ describe("init command", () => {
     it("writes project.json with projectId field", async () => {
       const { runInit } = await import("../../src/commands/init.js");
 
-      await runInit({ root: tempDir, skipGitHook: true });
+      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
 
       const configPath = join(tempDir, ".project-brain", "project.json");
       const raw = await readFile(configPath, "utf-8");
@@ -49,7 +49,7 @@ describe("init command", () => {
     it("writes project.json with root field matching the initialized root", async () => {
       const { runInit } = await import("../../src/commands/init.js");
 
-      await runInit({ root: tempDir, skipGitHook: true });
+      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
 
       const configPath = join(tempDir, ".project-brain", "project.json");
       const raw = await readFile(configPath, "utf-8");
@@ -67,7 +67,7 @@ describe("init command", () => {
       );
 
       const { runInit } = await import("../../src/commands/init.js");
-      await runInit({ root: tempDir, skipGitHook: true });
+      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
 
       const configPath = join(tempDir, ".project-brain", "project.json");
       const raw = await readFile(configPath, "utf-8");
@@ -78,7 +78,7 @@ describe("init command", () => {
 
     it("stores empty stack gracefully when no manifest is found", async () => {
       const { runInit } = await import("../../src/commands/init.js");
-      await runInit({ root: tempDir, skipGitHook: true });
+      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
 
       const configPath = join(tempDir, ".project-brain", "project.json");
       const raw = await readFile(configPath, "utf-8");
@@ -92,22 +92,22 @@ describe("init command", () => {
     it("does not error when .project-brain already exists", async () => {
       const { runInit } = await import("../../src/commands/init.js");
 
-      await runInit({ root: tempDir, skipGitHook: true });
+      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
       // Second run should not throw
-      await expect(runInit({ root: tempDir, skipGitHook: true })).resolves.toBeDefined();
+      await expect(runInit({ root: tempDir, skipGitHook: true, skipIndex: true })).resolves.toBeDefined();
     });
 
     it("preserves existing projectId across re-runs", async () => {
       const { runInit } = await import("../../src/commands/init.js");
 
-      const r1 = await runInit({ root: tempDir, skipGitHook: true });
+      const r1 = await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
 
       const configPath = join(tempDir, ".project-brain", "project.json");
       const raw1 = await readFile(configPath, "utf-8");
       const config1 = JSON.parse(raw1);
 
       // Second run
-      await runInit({ root: tempDir, skipGitHook: true });
+      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
 
       const raw2 = await readFile(configPath, "utf-8");
       const config2 = JSON.parse(raw2);

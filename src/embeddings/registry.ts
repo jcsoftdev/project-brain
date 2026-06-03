@@ -1,9 +1,14 @@
-export interface ModelSpec { key: string; model: string; dim: number; }
+export interface ModelSpec {
+  key: string;
+  model: string;
+  /** Optional dim hint — used only when detectDim cannot run (offline/unreachable). */
+  dim?: number;
+}
 
-export const DEFAULT_MODEL_KEY = "nomic-code";
+export const DEFAULT_MODEL_KEY = "qwen3-embedding";
 
 const REGISTRY: Record<string, ModelSpec> = {
-  "nomic-code": { key: "nomic-code", model: "nomic-embed-code", dim: 768 },
+  "qwen3-embedding": { key: "qwen3-embedding", model: "qwen3-embedding" },
   "nomic-text": { key: "nomic-text", model: "nomic-embed-text", dim: 768 },
 };
 

@@ -29,7 +29,7 @@ export async function createServer(options: ServerOptions = {}) {
   });
 
   const store = new LanceDbStore(dbPath);
-  const embeddings = options.embeddings ?? await createEmbeddingClient(undefined, { host: ollamaHost });
+  const embeddings = options.embeddings ?? await createEmbeddingClient(undefined, { host: ollamaHost, autoPull: false });
 
   const deps: ToolDeps = { store, embeddings };
 

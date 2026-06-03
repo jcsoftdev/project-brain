@@ -22,14 +22,14 @@ describe("runInit project rules wiring (T-6.2)", () => {
     const { runInit } = await import("../../src/commands/init.js");
 
     await expect(
-      runInit({ root: tempDir, skipGitHook: true, skipRules: true })
+      runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true })
     ).resolves.toBeDefined();
   });
 
   it("runInit writes CLAUDE.md when skipRules is not set", async () => {
     const { runInit } = await import("../../src/commands/init.js");
 
-    await runInit({ root: tempDir, skipGitHook: true });
+    await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
 
     const claudePath = join(tempDir, "CLAUDE.md");
     const content = await readFile(claudePath, "utf-8");
@@ -40,7 +40,7 @@ describe("runInit project rules wiring (T-6.2)", () => {
   it("runInit writes CLAUDE.md with project ID substituted", async () => {
     const { runInit } = await import("../../src/commands/init.js");
 
-    const result = await runInit({ root: tempDir, skipGitHook: true });
+    const result = await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
 
     const claudePath = join(tempDir, "CLAUDE.md");
     const content = await readFile(claudePath, "utf-8");
@@ -51,7 +51,7 @@ describe("runInit project rules wiring (T-6.2)", () => {
   it("runInit does NOT write CLAUDE.md when skipRules is true", async () => {
     const { runInit } = await import("../../src/commands/init.js");
 
-    await runInit({ root: tempDir, skipGitHook: true, skipRules: true });
+    await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true });
 
     const claudePath = join(tempDir, "CLAUDE.md");
     const file = Bun.file(claudePath);
@@ -62,8 +62,8 @@ describe("runInit project rules wiring (T-6.2)", () => {
   it("runInit is still idempotent on re-run with rules enabled", async () => {
     const { runInit } = await import("../../src/commands/init.js");
 
-    await runInit({ root: tempDir, skipGitHook: true });
-    await runInit({ root: tempDir, skipGitHook: true });
+    await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
+    await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
 
     const claudePath = join(tempDir, "CLAUDE.md");
     const content = await readFile(claudePath, "utf-8");
