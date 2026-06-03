@@ -15,6 +15,10 @@ function makeStore(count: number): VectorStore {
     countChunks: async () => count,
     optimize: async () => {},
       batchReplace: async () => {},
+      buildIndexes: async () => {},
+      hybridSearch: async (): Promise<SearchResult[]> => [],
+      getChunkById: async () => null,
+      assertDim: async () => {},
   };
 }
 

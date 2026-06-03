@@ -34,6 +34,10 @@ function makeMemoryStore(): VectorStore {
     countChunks: async (project) => (data.get(project) ?? []).length,
     optimize: async () => {},
       batchReplace: async () => {},
+      buildIndexes: async () => {},
+      hybridSearch: async (): Promise<SearchResult[]> => [],
+      getChunkById: async () => null,
+      assertDim: async () => {},
   };
 }
 

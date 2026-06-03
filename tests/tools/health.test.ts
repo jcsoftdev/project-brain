@@ -13,6 +13,10 @@ function makeMockStore(count = 42): VectorStore {
     countChunks: async () => count,
     optimize: async () => {},
       batchReplace: async () => {},
+      buildIndexes: async () => {},
+      hybridSearch: async () => [],
+      getChunkById: async () => null,
+      assertDim: async () => {},
   };
 }
 

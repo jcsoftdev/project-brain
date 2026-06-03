@@ -14,6 +14,10 @@ function makeMockStore(modules: string[] = ["api", "auth", "core"], chunks: Chun
     countChunks: async () => chunks.length,
     optimize: async () => {},
       batchReplace: async () => {},
+      buildIndexes: async () => {},
+      hybridSearch: async () => [],
+      getChunkById: async () => null,
+      assertDim: async () => {},
   };
 }
 

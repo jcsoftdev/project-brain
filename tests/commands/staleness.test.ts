@@ -40,6 +40,10 @@ function makeMemoryStore(): VectorStore {
         const existing = (data.get(project) ?? []).filter((c) => !sources.includes(c.source));
         data.set(project, [...existing, ...chunks]);
       },
+      buildIndexes: async () => {},
+      hybridSearch: async (): Promise<SearchResult[]> => [],
+      getChunkById: async () => null,
+      assertDim: async () => {},
   };
 }
 

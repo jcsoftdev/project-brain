@@ -60,8 +60,12 @@ export async function handleIngest(args: IngestArgs, deps: ToolDeps): Promise<To
     updated_at: Date.now(),
   };
 
-  await deps.store.ensureTable(project);
+  const tableMeta = deps.embeddings.model
+    ? { model: deps.embeddings.model, dim: deps.embeddings.dim }
+    : undefined;
+  await deps.store.ensureTable(project, tableMeta);
   await deps.store.upsert(project, [chunk]);
+  await deps.store.buildIndexes(project);
 
   return {
     content: [{ type: "text", text: JSON.stringify({ id, source, status: "stored" }) }],

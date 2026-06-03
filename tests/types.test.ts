@@ -50,6 +50,10 @@ describe("types", () => {
       countChunks: async () => 0,
       optimize: async () => {},
       batchReplace: async () => {},
+      buildIndexes: async () => {},
+      hybridSearch: async () => [],
+      getChunkById: async () => null,
+      assertDim: async () => {},
     };
 
     const mockEmbeddings: EmbeddingClient = {

@@ -134,8 +134,11 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   }
   onProgress?.({ phase: "scanning", current: filePaths.length, total: filePaths.length });
 
-  // 3. Ensure table exists
-  await store.ensureTable(projectId);
+  // 3. Ensure table exists (pass model+dim so metadata is stored correctly)
+  const tableMeta = embeddings.model
+    ? { model: embeddings.model, dim: embeddings.dim }
+    : undefined;
+  await store.ensureTable(projectId, tableMeta);
 
   let ingested = 0;
   let skipped = 0;
@@ -243,6 +246,11 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
         id: raw.id, vector: vec!, content: raw.content,
         source: entry.relPath, module: raw.module,
         content_hash: raw.content_hash, updated_at: raw.updated_at,
+        symbol_name: raw.symbol_name,
+        symbol_kind: raw.symbol_kind as import("../types.js").SymbolKind | undefined,
+        signature: raw.signature,
+        start_line: raw.start_line,
+        end_line: raw.end_line,
       }));
     chunkCursor += entry.rawChunks.length;
 
@@ -273,7 +281,10 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     }
   }
 
-  // 6. Persist updated manifest
+  // 6. Build FTS + vector indexes so hybridSearch works
+  await store.buildIndexes(projectId);
+
+  // 7. Persist updated manifest
   await saveHashManifest(root, newManifest);
 
   return {
@@ -343,7 +354,6 @@ export async function checkStaleness(options: StalenessOptions): Promise<Stalene
 export async function execute(args: string[]): Promise<void> {
   // Dynamic imports to avoid circular deps and keep CLI lean
   const { LanceDbStore } = await import("../store/lancedb.js");
-  const { OllamaEmbeddingClient } = await import("../embeddings/ollama.js");
   const { readFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
 
@@ -365,8 +375,9 @@ export async function execute(args: string[]): Promise<void> {
   }
 
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
+  const { createEmbeddingClient } = await import("../embeddings/factory.js");
   const store = new LanceDbStore(DB_PATH);
-  const embeddings = new OllamaEmbeddingClient(OLLAMA_HOST);
+  const embeddings = await createEmbeddingClient(undefined, { host: OLLAMA_HOST });
 
   console.log(`Syncing project: ${projectId}\n`);
 
