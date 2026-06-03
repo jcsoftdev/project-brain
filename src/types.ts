@@ -55,6 +55,10 @@ export interface VectorStore {
   countChunks(project: string): Promise<number>;
   /** Compact fragments and release memory. Call after bulk writes. */
   optimize(project: string): Promise<void>;
+  /** Create FTS + vector indexes. Safe to call on existing indexes (no-op). */
+  buildIndexes(project: string): Promise<void>;
+  /** Hybrid lexical + vector search with RRF reranking. Falls back to vector-only on FTS miss. */
+  hybridSearch(project: string, vector: number[], text: string, topK: number): Promise<SearchResult[]>;
 }
 
 /** Dependencies injected into MCP tool handlers. */

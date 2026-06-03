@@ -1,4 +1,5 @@
 import * as lancedb from "@lancedb/lancedb";
+import { Index, rerankers } from "@lancedb/lancedb";
 import { EMBEDDING_MODEL, TABLE_SUFFIX, VECTOR_DIM } from "../constants.js";
 import { readTableMeta, writeTableMeta } from "./meta.js";
 import type { TableMeta } from "./meta.js";
@@ -208,6 +209,45 @@ export class LanceDbStore implements VectorStore {
       ]);
     } catch {
       // optimize() may not be available or may timeout — non-fatal
+    }
+  }
+
+  async buildIndexes(project: string): Promise<void> {
+    const table = await this.getTable(project);
+    if (!table) return;
+    try {
+      await table.createIndex("content", { config: Index.fts() });
+    } catch {
+      // Index may already exist or table has too few rows — non-fatal
+    }
+  }
+
+  async hybridSearch(project: string, vector: number[], text: string, topK: number): Promise<SearchResult[]> {
+    const table = await this.getTable(project);
+    if (!table) return [];
+    try {
+      if ((await table.countRows()) === 0) return [];
+      const reranker = await rerankers.RRFReranker.create();
+      const rows = await table.query()
+        .nearestTo(vector)
+        .fullTextSearch(text)
+        .rerank(reranker)
+        .limit(topK)
+        .toArray();
+      return rows.map((r) => ({
+        id: r.id as string,
+        content: r.content as string,
+        source: r.source as string,
+        module: r.module as string,
+        score: 1 / (1 + ((r._distance as number) ?? 0)),
+        symbol_name: r.symbol_name as string | undefined,
+        signature: r.signature as string | undefined,
+        start_line: r.start_line as number | undefined,
+        end_line: r.end_line as number | undefined,
+      }));
+    } catch {
+      // FTS index may be missing on tiny tables — fall back to pure vector search
+      return this.search(project, vector, topK);
     }
   }
 }
