@@ -1,6 +1,6 @@
 {
   "name": "project-brain",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "type": "module",
   "description": "Local-first MCP server that gives AI tools semantic memory of your codebase.",
   "author": "jcsoftdev",
@@ -20,7 +20,7 @@
   ],
   "files": [
     "bin",
-    "src",
+    "scripts",
     "templates",
     "README.md",
     "LICENSE"
@@ -33,7 +33,8 @@
     "test": "bun test",
     "setup": "bun run src/cli.ts setup",
     "init": "bun run src/cli.ts init",
-    "build": "bun build ./src/cli.ts --compile --outfile project-brain"
+    "build": "bun build ./src/cli.ts --compile --outfile dist/project-brain",
+    "postinstall": "node scripts/postinstall.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

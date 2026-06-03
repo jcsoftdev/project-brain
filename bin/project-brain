@@ -1,2 +1,15 @@
-#!/usr/bin/env bun
-import "../src/cli.ts";
+#!/usr/bin/env node
+import { execFileSync } from "child_process";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+import { existsSync } from "fs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const nativeBin = join(__dirname, "project-brain-native");
+
+if (!existsSync(nativeBin)) {
+  console.error("project-brain: binary not found. Run `npm install` to download it.");
+  process.exit(1);
+}
+
+execFileSync(nativeBin, process.argv.slice(2), { stdio: "inherit" });
