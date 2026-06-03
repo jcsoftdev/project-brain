@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { detectStack } from "../indexer/stack.js";
 import { deriveProjectId } from "../indexer/project-id.js";
 import { installGitHook } from "../hooks/git.js";
+import { upsertContextHook } from "../hooks/claude-settings.js";
 import { writeProjectRules } from "../rules/project.js";
 import { detectModules, writeModuleStubs } from "../indexer/modules.js";
 import { runReindex } from "./reindex.js";
@@ -23,6 +24,8 @@ export interface InitOptions {
   skipRules?: boolean;
   /** Skip the initial index pass (useful in tests / CI / offline envs). */
   skipIndex?: boolean;
+  /** Skip installing the .claude/settings.json UserPromptSubmit hook. */
+  skipClaudeHook?: boolean;
   /** DI seam: inject fake store and embeddings for tests. */
   indexDeps?: { store: VectorStore; embeddings: EmbeddingClient };
   /** Progress callback forwarded to runReindex. */
@@ -115,6 +118,29 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
     }
   }
 
+  // 8b. Install UserPromptSubmit hook in .claude/settings.json unless skipped
+  if (!options.skipClaudeHook) {
+    try {
+      const claudeDir = join(root, ".claude");
+      await mkdir(claudeDir, { recursive: true });
+
+      const settingsPath = join(claudeDir, "settings.json");
+      let existing: object | null = null;
+      try {
+        const raw = await readFile(settingsPath, "utf-8");
+        existing = JSON.parse(raw) as object;
+      } catch {
+        // No existing file — start fresh
+      }
+
+      const merged = upsertContextHook(existing);
+      await writeFile(settingsPath, JSON.stringify(merged, null, 2));
+      console.log("Installed project-brain context hook in .claude/settings.json");
+    } catch {
+      // Non-fatal: don't block init if hook installation fails
+    }
+  }
+
   // 9. Initial index pass unless skipped
   let indexed = false;
   let indexWarning: string | undefined;
@@ -170,6 +196,7 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
 /** CLI entry point for the init command. */
 export async function execute(args: string[]): Promise<void> {
   const skipIndex = args.includes("--skip-index");
+  const skipClaudeHook = args.includes("--no-hook");
   const root = args.find((a) => !a.startsWith("--")) ?? process.cwd();
 
   console.log(`Initializing project-brain in: ${root}\n`);
@@ -177,7 +204,7 @@ export async function execute(args: string[]): Promise<void> {
   const { makeProgressPrinter } = await import("../indexer/progress.js");
   const { onProgress, clear } = makeProgressPrinter();
 
-  const result = await runInit({ root, skipIndex, onProgress });
+  const result = await runInit({ root, skipIndex, skipClaudeHook, onProgress });
 
   clear();
   console.log(`Project ID: ${result.projectId}`);
