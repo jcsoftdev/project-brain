@@ -9,6 +9,12 @@ import type { EmbeddingClient, VectorStore, Chunk } from "../types.js";
 const CONFIG_DIR = ".project-brain";
 const HASH_MANIFEST = "hashes.json";
 
+export interface SyncProgress {
+  phase: "scanning" | "reading" | "embedding" | "storing";
+  current: number;
+  total: number;
+}
+
 export interface SyncOptions {
   /** Absolute path to the project root. */
   root: string;
@@ -20,6 +26,8 @@ export interface SyncOptions {
   embeddings: EmbeddingClient;
   /** Only process files listed here (used by --changed-only flag). */
   changedFiles?: string[];
+  /** Progress callback fired at each phase checkpoint. */
+  onProgress?: (p: SyncProgress) => void;
 }
 
 export interface SyncResult {
@@ -97,7 +105,7 @@ async function listAllFiles(
  * Scans the project, ingests new/changed files, skips unchanged ones.
  */
 export async function runSync(options: SyncOptions): Promise<SyncResult> {
-  const { root, projectId, store, embeddings } = options;
+  const { root, projectId, store, embeddings, onProgress } = options;
 
   // 1. Load hash manifest and gitignore patterns
   const [hashManifest, gitignorePatterns] = await Promise.all([
@@ -106,15 +114,16 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   ]);
 
   // 2. Collect files to process
+  onProgress?.({ phase: "scanning", current: 0, total: 0 });
   let filePaths: string[];
   if (options.changedFiles && options.changedFiles.length > 0) {
-    // Only process specified files (--changed-only mode)
     filePaths = options.changedFiles.map((f) =>
       f.startsWith("/") ? f : join(root, f)
     );
   } else {
     filePaths = await listAllFiles(root, root, gitignorePatterns);
   }
+  onProgress?.({ phase: "scanning", current: filePaths.length, total: filePaths.length });
 
   // 3. Ensure table exists
   await store.ensureTable(projectId);
@@ -136,6 +145,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
   const changed: FileEntry[] = [];
 
+  let readDone = 0;
   for (let i = 0; i < filePaths.length; i += READ_CONCURRENCY) {
     const batch = filePaths.slice(i, i + READ_CONCURRENCY);
     const results = await Promise.all(
@@ -166,9 +176,11 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
     for (const result of results) {
       if (result === null) continue;
-      if (result === "skipped") { skipped++; continue; }
-      changed.push(result);
+      if (result === "skipped") { skipped++; }
+      else changed.push(result);
     }
+    readDone += batch.length;
+    onProgress?.({ phase: "reading", current: readDone, total: filePaths.length });
   }
 
   // 4. Phase B — batch embed all chunks (EMBED_BATCH_SIZE chunks per request)
@@ -188,6 +200,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     for (let j = 0; j < batchRefs.length; j++) {
       vectors[i + j] = batchVectors[j];
     }
+    onProgress?.({ phase: "embedding", current: Math.min(i + EMBED_BATCH_SIZE, allChunkRefs.length), total: allChunkRefs.length });
   }
 
   // 4. Phase C — upsert each file's chunks in parallel
@@ -218,6 +231,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       await store.upsert(projectId, chunks);
       newManifest[entry.relPath] = entry.hash;
       ingested++;
+      onProgress?.({ phase: "storing", current: ingested, total: changed.length });
     })
   );
 
@@ -330,7 +344,15 @@ export async function execute(args: string[]): Promise<void> {
   const store = new LanceDbStore(DB_PATH);
   const embeddings = new OllamaEmbeddingClient(OLLAMA_HOST);
 
-  console.log(`Syncing project: ${projectId}`);
+  console.log(`Syncing project: ${projectId}\n`);
+
+  const isTTY = process.stdout.isTTY;
+  const clear = () => isTTY && process.stdout.write("\r\x1b[K");
+  const print = (msg: string) => {
+    clear();
+    if (isTTY) process.stdout.write(msg);
+    else console.log(msg);
+  };
 
   const result = await runSync({
     root,
@@ -338,8 +360,27 @@ export async function execute(args: string[]): Promise<void> {
     store,
     embeddings,
     changedFiles: changedOnly ? [] : undefined,
+    onProgress({ phase, current, total }) {
+      const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+      const bar = "█".repeat(Math.floor(pct / 5)) + "░".repeat(20 - Math.floor(pct / 5));
+      switch (phase) {
+        case "scanning":
+          print(total === 0 ? `  Scanning files...` : `  Scanned  ${current} files`);
+          break;
+        case "reading":
+          print(`  Reading   [${bar}] ${pct}%  ${current}/${total} files`);
+          break;
+        case "embedding":
+          print(`  Embedding [${bar}] ${pct}%  ${current}/${total} chunks`);
+          break;
+        case "storing":
+          print(`  Storing   [${bar}] ${pct}%  ${current}/${total} files`);
+          break;
+      }
+    },
   });
 
+  clear();
   console.log(`  Scanned:  ${result.scanned} files`);
   console.log(`  Ingested: ${result.ingested} files`);
   console.log(`  Skipped:  ${result.skipped} files (unchanged)`);

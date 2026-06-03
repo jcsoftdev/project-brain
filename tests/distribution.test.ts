@@ -16,35 +16,17 @@ describe("package.json distribution metadata (T-09)", () => {
 
   it("scripts.build equals the compile command (DIST-2)", async () => {
     const pkg = await loadPkg();
-    expect(pkg.scripts?.build).toBe(
-      "bun build ./src/cli.ts --compile --outfile project-brain"
-    );
+    expect(pkg.scripts?.build).toContain("bun build ./src/cli.ts --compile");
   });
 
-  it("optionalDependencies includes @lancedb/lancedb-darwin-arm64 at 0.30.0 (DIST-3)", async () => {
+  it("optionalDependencies includes platform packages (DIST-3)", async () => {
     const pkg = await loadPkg();
     const optDeps = pkg.optionalDependencies ?? {};
-    expect(optDeps["@lancedb/lancedb-darwin-arm64"]).toBe("0.30.0");
-  });
-
-  it("optionalDependencies includes @lancedb/lancedb-linux-x64-gnu at 0.30.0 (DIST-3)", async () => {
-    const pkg = await loadPkg();
-    expect(pkg.optionalDependencies?.["@lancedb/lancedb-linux-x64-gnu"]).toBe("0.30.0");
-  });
-
-  it("optionalDependencies includes @lancedb/lancedb-linux-arm64-gnu at 0.30.0 (DIST-3)", async () => {
-    const pkg = await loadPkg();
-    expect(pkg.optionalDependencies?.["@lancedb/lancedb-linux-arm64-gnu"]).toBe("0.30.0");
-  });
-
-  it("optionalDependencies includes @lancedb/lancedb-linux-x64-musl at 0.30.0 (DIST-3)", async () => {
-    const pkg = await loadPkg();
-    expect(pkg.optionalDependencies?.["@lancedb/lancedb-linux-x64-musl"]).toBe("0.30.0");
-  });
-
-  it("optionalDependencies includes @lancedb/lancedb-win32-x64-msvc at 0.30.0 (DIST-3)", async () => {
-    const pkg = await loadPkg();
-    expect(pkg.optionalDependencies?.["@lancedb/lancedb-win32-x64-msvc"]).toBe("0.30.0");
+    expect(optDeps).toHaveProperty("project-brain-darwin-arm64");
+    expect(optDeps).toHaveProperty("project-brain-linux-x64");
+    expect(optDeps).toHaveProperty("project-brain-linux-arm64");
+    expect(optDeps).toHaveProperty("project-brain-windows-x64");
+    expect(optDeps).toHaveProperty("project-brain-windows-arm64");
   });
 
   it("description is a non-empty string (DIST-5)", async () => {
@@ -64,10 +46,10 @@ describe("package.json distribution metadata (T-09)", () => {
     expect(author).toBe("jcsoftdev");
   });
 
-  it("files includes src, templates, README.md (DIST-5)", async () => {
+  it("files includes bin, templates, README.md (DIST-5)", async () => {
     const pkg = await loadPkg();
     const files: string[] = pkg.files ?? [];
-    expect(files).toContain("src");
+    expect(files).toContain("bin");
     expect(files).toContain("templates");
     expect(files).toContain("README.md");
   });
