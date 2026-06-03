@@ -39,9 +39,12 @@ export interface EmbeddingClient {
   isAvailable(): Promise<boolean>;
 }
 
+/** Per-table metadata (model name + vector dim). */
+export interface TableMeta { model: string; dim: number; }
+
 /** Vector store contract — all operations are project-namespaced. */
 export interface VectorStore {
-  ensureTable(project: string): Promise<void>;
+  ensureTable(project: string, meta?: TableMeta): Promise<void>;
   upsert(project: string, chunks: Chunk[]): Promise<void>;
   /** Delete all sources then add all chunks in ONE table.add() — minimizes fragments. */
   batchReplace(project: string, sources: string[], chunks: Chunk[]): Promise<void>;

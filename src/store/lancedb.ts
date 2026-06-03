@@ -1,5 +1,7 @@
 import * as lancedb from "@lancedb/lancedb";
-import { TABLE_SUFFIX, VECTOR_DIM } from "../constants.js";
+import { EMBEDDING_MODEL, TABLE_SUFFIX, VECTOR_DIM } from "../constants.js";
+import { readTableMeta, writeTableMeta } from "./meta.js";
+import type { TableMeta } from "./meta.js";
 import type { Chunk, SearchResult, VectorStore } from "../types.js";
 
 /** Sanitize project name for use as table name. */
@@ -43,7 +45,7 @@ export class LanceDbStore implements VectorStore {
     return table;
   }
 
-  async ensureTable(project: string): Promise<void> {
+  async ensureTable(project: string, meta: TableMeta = { model: EMBEDDING_MODEL, dim: VECTOR_DIM }): Promise<void> {
     const name = this.tableName(project);
     const db = await this.getDb();
     const names = await db.tableNames();
@@ -58,16 +60,22 @@ export class LanceDbStore implements VectorStore {
     // Create with a seed record that we immediately delete
     const seed = {
       id: "__seed__",
-      vector: new Array(VECTOR_DIM).fill(0),
+      vector: new Array(meta.dim).fill(0),
       content: "",
       source: "__seed__",
       module: "__seed__",
       content_hash: "",
       updated_at: 0,
+      symbol_name: "",
+      symbol_kind: "",
+      signature: "",
+      start_line: 0,
+      end_line: 0,
     };
     const table = await db.createTable(name, [seed]);
     await table.delete("id = '__seed__'");
     this.tables.set(name, table);
+    await writeTableMeta(this.dbPath, project, meta);
   }
 
   async upsert(project: string, chunks: Chunk[]): Promise<void> {
