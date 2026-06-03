@@ -70,4 +70,10 @@ export interface VectorStore {
 export interface ToolDeps {
   store: VectorStore;
   embeddings: EmbeddingClient;
+  /**
+   * Per-project embedding resolver. When present, handleSearch uses this to
+   * obtain an EmbeddingClient whose model/dim matches the project's indexed table.
+   * When absent, handlers fall back to `embeddings` (backward-compatible).
+   */
+  embeddingsFor?: (project: string) => Promise<EmbeddingClient>;
 }

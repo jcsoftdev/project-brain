@@ -85,6 +85,93 @@ describe("search_context tool", () => {
   });
 });
 
+describe("handleSearch — embeddingsFor per-project resolver", () => {
+  const SENTINEL_DIM = 42;
+
+  function makeSentinelClient(): EmbeddingClient {
+    return {
+      dim: SENTINEL_DIM,
+      model: "sentinel-model",
+      embed: async (texts) => texts.map(() => new Array(SENTINEL_DIM).fill(0.9)),
+      isAvailable: async () => true,
+    };
+  }
+
+  it("uses embeddingsFor(project) when provided — hybridSearch receives vector from resolved client", async () => {
+    const sentinel = makeSentinelClient();
+    let capturedVector: number[] | null = null;
+
+    const store = makeMockStore();
+    store.hybridSearch = async (_project, vector, _text, _topK) => {
+      capturedVector = vector;
+      return mockResults;
+    };
+
+    await handleSearch(
+      { project: "myproj", query: "auth flow" },
+      {
+        store,
+        embeddings: makeMockEmbeddings(), // default — should NOT be used
+        embeddingsFor: async (project) => {
+          expect(project).toBe("myproj");
+          return sentinel;
+        },
+      }
+    );
+
+    // The vector passed to hybridSearch must come from the sentinel (dim=42, value=0.9)
+    expect(capturedVector).not.toBeNull();
+    expect(capturedVector!.length).toBe(SENTINEL_DIM);
+    expect(capturedVector![0]).toBeCloseTo(0.9);
+  });
+
+  it("falls back to deps.embeddings when embeddingsFor is absent (back-compat)", async () => {
+    let capturedVector: number[] | null = null;
+    const defaultDim = VECTOR_DIM;
+
+    const store = makeMockStore();
+    store.hybridSearch = async (_project, vector, _text, _topK) => {
+      capturedVector = vector;
+      return mockResults;
+    };
+
+    await handleSearch(
+      { project: "myproj", query: "auth flow" },
+      {
+        store,
+        embeddings: makeMockEmbeddings(), // value = 0.1, dim = VECTOR_DIM
+        // embeddingsFor absent
+      }
+    );
+
+    expect(capturedVector).not.toBeNull();
+    expect(capturedVector!.length).toBe(defaultDim);
+    expect(capturedVector![0]).toBeCloseTo(0.1);
+  });
+
+  it("returns EMBEDDINGS_UNAVAILABLE when resolved client embed returns null", async () => {
+    const nullClient: EmbeddingClient = {
+      dim: 768,
+      model: "unavailable-model",
+      embed: async () => null,
+      isAvailable: async () => false,
+    };
+
+    const result = await handleSearch(
+      { project: "myproj", query: "test" },
+      {
+        store: makeMockStore(),
+        embeddings: makeMockEmbeddings(),
+        embeddingsFor: async () => nullClient,
+      }
+    );
+
+    expect(result.isError).toBe(true);
+    const data = JSON.parse(result.content[0].text);
+    expect(data.code).toBe("EMBEDDINGS_UNAVAILABLE");
+  });
+});
+
 describe("handleSearch adaptive output", () => {
   it("returns snippets with chunk_id, not full bodies + internal id", async () => {
     function deps() {

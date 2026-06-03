@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { LanceDbStore } from "./store/lancedb.js";
 import { createEmbeddingClient } from "./embeddings/factory.js";
+import { makeEmbeddingResolver } from "./embeddings/resolver.js";
 import { DB_PATH, OLLAMA_HOST, VERSION, SERVER_INSTRUCTIONS } from "./constants.js";
 import { register as registerSearch } from "./tools/search.js";
 import { register as registerIngest } from "./tools/ingest.js";
@@ -31,7 +32,13 @@ export async function createServer(options: ServerOptions = {}) {
   const store = new LanceDbStore(dbPath);
   const embeddings = options.embeddings ?? await createEmbeddingClient(undefined, { host: ollamaHost, autoPull: false });
 
-  const deps: ToolDeps = { store, embeddings };
+  const embeddingsFor = makeEmbeddingResolver({
+    dbPath,
+    host: ollamaHost,
+    defaultClient: embeddings,
+  });
+
+  const deps: ToolDeps = { store, embeddings, embeddingsFor };
 
   // Register all tools
   registerSearch(server, deps);

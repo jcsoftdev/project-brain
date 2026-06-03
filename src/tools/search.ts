@@ -21,7 +21,9 @@ interface ToolResult {
 export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<ToolResult> {
   const { project, query, limit = 10 } = args;
 
-  const vectors = await deps.embeddings.embed([query]);
+  const emb = deps.embeddingsFor ? await deps.embeddingsFor(project) : deps.embeddings;
+
+  const vectors = await emb.embed([query]);
   if (!vectors) {
     return {
       content: [
@@ -38,7 +40,7 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
   }
 
   if (HARDNESS) {
-    await deps.store.assertDim(project, deps.embeddings.dim);
+    await deps.store.assertDim(project, emb.dim);
   }
 
   const fused = await deps.store.hybridSearch(project, vectors[0], query, Math.max(limit * 3, 20));
@@ -52,14 +54,16 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
 
 /** Register search_context tool with MCP server. */
 export function register(server: McpServer, deps: ToolDeps): void {
-  server.tool(
+  server.registerTool(
     "search_context",
-    "Semantic/conceptual search of THIS project (code + docs). Use for cross-file or fuzzy context when you may not know the exact symbol name (e.g. 'how does auth work', 'where is X handled'). Returns ranked snippets each with a chunk_id; follow up with expand_context for full bodies. For exact symbol/caller/AST lookups, prefer a structural tool.",
     {
-      project: z.string().describe("Project identifier"),
-      query: z.string().describe("Search query text"),
-      limit: z.number().optional().describe("Max results (default 10)"),
-      module: z.string().optional().describe("Filter by module name"),
+      description: "Semantic/conceptual search of THIS project (code + docs). Use for cross-file or fuzzy context when you may not know the exact symbol name (e.g. 'how does auth work', 'where is X handled'). Returns ranked snippets each with a chunk_id; follow up with expand_context for full bodies. For exact symbol/caller/AST lookups, prefer a structural tool.",
+      inputSchema: {
+        project: z.string().describe("Project identifier"),
+        query: z.string().describe("Search query text"),
+        limit: z.number().optional().describe("Max results (default 10)"),
+        module: z.string().optional().describe("Filter by module name"),
+      },
     },
     async (args) => handleSearch(args, deps)
   );
