@@ -31,6 +31,9 @@ jobs:
           - os: windows-latest
             target: windows-x64
             bun_target: bun-windows-x64
+          - os: windows-11-arm
+            target: windows-arm64
+            bun_target: bun-windows-arm64
 
     steps:
       - uses: actions/checkout@v4
