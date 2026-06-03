@@ -43,6 +43,16 @@ export interface SyncResult {
   deleted: number;
   /** Total files scanned. */
   scanned: number;
+  /**
+   * Number of text chunks that failed to embed (null returned by embed client).
+   * 0 means all embeds succeeded (or there was nothing to embed).
+   */
+  embedFailed: number;
+  /**
+   * Set when ALL embeds failed (total embed failure, nothing stored).
+   * Undefined on success or partial failure.
+   */
+  error?: string;
 }
 
 /** Load the persisted hash manifest. Supports both legacy (string) and new ({hash,mtime}) format. */
@@ -149,7 +159,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   // EMBED_BATCH_SIZE=200: fewer HTTP round-trips to Ollama.
   // SAVE_EVERY=10: batchReplace every 10 files → continuous progress.
   const READ_CONCURRENCY = 20;
-  const EMBED_BATCH_SIZE = 200;
+  const EMBED_BATCH_SIZE = 64;
   const SAVE_EVERY = 10;
   const MAX_FILE_BYTES = 512_000;
 
@@ -219,12 +229,17 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     batches.push({ startIdx: i, texts: allTexts.slice(i, i + EMBED_BATCH_SIZE) });
   }
   let embedDone = 0;
+  let embedFailed = 0;
   onProgress?.({ phase: "embedding", current: 0, total: allTexts.length });
   await mapLimit(batches, EMBED_CONCURRENCY, async ({ startIdx, texts }) => {
     const vecs = await embeddings.embed(texts);
-    if (vecs) for (let j = 0; j < vecs.length; j++) allVectors[startIdx + j] = vecs[j];
-    embedDone = Math.min(embedDone + texts.length, allTexts.length);
-    onProgress?.({ phase: "embedding", current: embedDone, total: allTexts.length });
+    if (vecs) {
+      for (let j = 0; j < vecs.length; j++) allVectors[startIdx + j] = vecs[j];
+      embedDone = Math.min(embedDone + vecs.length, allTexts.length);
+      onProgress?.({ phase: "embedding", current: embedDone, total: allTexts.length });
+    } else {
+      embedFailed += texts.length;
+    }
   });
 
   // Store every SAVE_EVERY files → progress updates, few fragments
@@ -287,11 +302,19 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   // 7. Persist updated manifest
   await saveHashManifest(root, newManifest);
 
+  // Detect total embed failure: had texts to embed but every vector is null
+  const totalEmbedFailure = allTexts.length > 0 && embedFailed === allTexts.length;
+  const error = totalEmbedFailure
+    ? `Embedding failed: 0/${allTexts.length} vectors produced (Ollama timeout or model unavailable). Nothing was stored.`
+    : undefined;
+
   return {
     ingested,
     skipped,
     deleted,
     scanned: filePaths.length,
+    embedFailed,
+    error,
   };
 }
 
@@ -394,11 +417,21 @@ export async function execute(args: string[]): Promise<void> {
   });
 
   clear();
+
+  if (result.error) {
+    // Total embed failure: do not report "Ingested: 0" as success
+    console.error(`\nError: ${result.error}`);
+    process.exit(1);
+  }
+
   console.log(`  Scanned:  ${result.scanned} files`);
   console.log(`  Ingested: ${result.ingested} files`);
   console.log(`  Skipped:  ${result.skipped} files (unchanged)`);
   if (result.deleted > 0) {
     console.log(`  Deleted:  ${result.deleted} files (removed from disk)`);
+  }
+  if (result.embedFailed > 0) {
+    console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);
   }
   console.log("\nSync complete.");
 }
