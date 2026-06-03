@@ -15,6 +15,7 @@ Commands:
   sync               Incremental sync (re-index changed files)
   reindex            Full re-index (drop + rebuild)
   health             Check system health and staleness
+  search "<query>"   Search indexed context (used by hooks); prints compact results
 
 Options for serve --http:
   --port <n>         HTTP listen port (default: 3000; env: BRAIN_HTTP_PORT)
@@ -100,6 +101,11 @@ switch (command) {
     await execute(args);
     break;
   }
+  case "search": {
+    const { execute } = await import("./commands/search.js");
+    await execute(args);
+    break;
+  }
   case "--help":
   case "-h":
     printHelp();
@@ -108,7 +114,7 @@ switch (command) {
   default:
     console.error(`Unknown command: ${command}`);
     console.error(
-      "Usage: project-brain [setup|init|sync|reindex|health|serve]"
+      "Usage: project-brain [setup|init|sync|reindex|health|search|serve]"
     );
     process.exit(1);
 }
