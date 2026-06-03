@@ -181,9 +181,12 @@ export class LanceDbStore implements VectorStore {
     const table = await this.getTable(project);
     if (!table) return;
     try {
-      await (table as any).optimize();
+      await Promise.race([
+        (table as any).optimize(),
+        new Promise<void>((_, reject) => setTimeout(() => reject(new Error("timeout")), 10_000)),
+      ]);
     } catch {
-      // optimize() may not be available in all LanceDB versions — non-fatal
+      // optimize() may not be available or may timeout — non-fatal
     }
   }
 }

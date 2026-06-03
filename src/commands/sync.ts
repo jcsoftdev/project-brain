@@ -181,9 +181,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       onProgress?.({ phase: "reading", current: readDone, total: filePaths.length });
     }
 
-    if (waveChanged.length === 0) continue;
-
-    // Step 2: embed all chunks in this wave
+    if (waveChanged.length === 0) continue; // nothing to embed/store this wave
     const allTexts = waveChanged.flatMap((e) => e.rawChunks.map((c) => c.content));
     const waveVectors: (number[] | null)[] = new Array(allTexts.length).fill(null);
     let embedOffset = 0;
