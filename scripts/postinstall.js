@@ -22,6 +22,7 @@ const targetMap = {
   "darwin-x64": "darwin-x64",
   "linux-x64": "linux-x64",
   "linux-arm64": "linux-arm64",
+  "win32-x64": "windows-x64",
 };
 
 const key = `${platform}-${arch}`;
@@ -32,10 +33,11 @@ if (!target) {
   process.exit(0);
 }
 
-const binaryName = `project-brain-${target}`;
+const ext = platform === "win32" ? ".exe" : "";
+const binaryName = `project-brain-${target}${ext}`;
 const url = `https://github.com/${REPO}/releases/download/v${VERSION}/${binaryName}`;
 const destDir = join(__dirname, "../bin");
-const destPath = join(destDir, "project-brain-native");
+const destPath = join(destDir, `project-brain-native${ext}`);
 
 if (existsSync(destPath)) {
   process.exit(0);
