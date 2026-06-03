@@ -17,6 +17,7 @@ let deps: ToolDeps;
 
 /** Mock embeddings that return deterministic vectors based on content. */
 const mockEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async (texts) =>
     texts.map((t) => {
       // Create a deterministic vector: hash-like distribution based on char codes
@@ -56,7 +57,7 @@ describe("Integration: ingest → search → delete flow", () => {
     expect(searchResult.isError).toBeFalsy();
     const data = JSON.parse(searchResult.content[0].text);
     expect(data.results.length).toBeGreaterThan(0);
-    expect(data.results[0].content).toContain("JWT");
+    expect(data.results[0].snippet).toContain("JWT");
   });
 
   it("delete_knowledge → subsequent search returns empty", async () => {
