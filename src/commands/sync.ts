@@ -10,7 +10,7 @@ const CONFIG_DIR = ".project-brain";
 const HASH_MANIFEST = "hashes.json";
 
 export interface SyncProgress {
-  phase: "scanning" | "reading" | "embedding" | "storing";
+  phase: "scanning" | "reading" | "embedding" | "storing" | "optimizing";
   current: number;
   total: number;
 }
@@ -189,17 +189,17 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     let embedOffset = 0;
     for (const entry of waveChanged) embedOffset += entry.rawChunks.length; // just used below
 
+    onProgress?.({ phase: "embedding", current: 0, total: allTexts.length });
     let globalIdx = 0;
     for (const entry of waveChanged) {
       const start = globalIdx;
       globalIdx += entry.rawChunks.length;
-      // embed in chunks of EMBED_BATCH_SIZE
       for (let k = start; k < globalIdx; k += EMBED_BATCH_SIZE) {
         const end = Math.min(k + EMBED_BATCH_SIZE, globalIdx);
         const vecs = await embeddings.embed(allTexts.slice(k, end));
         if (vecs) for (let m = 0; m < vecs.length; m++) waveVectors[k + m] = vecs[m];
+        onProgress?.({ phase: "embedding", current: Math.min(k + EMBED_BATCH_SIZE, globalIdx), total: allTexts.length });
       }
-      onProgress?.({ phase: "embedding", current: globalIdx, total: allTexts.length });
     }
 
     // Step 3: store with bounded concurrency
@@ -231,6 +231,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       fileOffset += storeBatch.length;
     }
     // Compact LanceDB fragments accumulated this wave — releases memory
+    onProgress?.({ phase: "optimizing", current: i + wave.length, total: filePaths.length });
     await store.optimize(projectId);
     // Wave done — GC can reclaim waveChanged and waveVectors
   }
