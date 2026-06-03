@@ -51,12 +51,37 @@ export class LanceDbStore implements VectorStore {
     const db = await this.getDb();
     const names = await db.tableNames();
     if (names.includes(name)) {
-      // Table already exists, just cache and return
-      if (!this.tables.has(name)) {
-        const table = await db.openTable(name);
+      // Table already exists — open it (or use cached handle) and check the vector dim.
+      let table = this.tables.get(name);
+      if (!table) {
+        table = await db.openTable(name);
         this.tables.set(name, table);
       }
-      return;
+
+      // Read the actual vector dim from the Arrow schema.
+      // The "vector" field type is a FixedSizeList whose size gives the dim.
+      let existingDim: number | undefined;
+      try {
+        const schema = await table.schema();
+        const vectorField = schema.fields.find((f: { name: string }) => f.name === "vector");
+        const listSize = (vectorField?.type as { listSize?: number } | undefined)?.listSize;
+        if (typeof listSize === "number") existingDim = listSize;
+      } catch {
+        // schema() not available — fall through to no-drop path
+      }
+
+      // If dims match (or we couldn't detect), keep the table as-is.
+      if (existingDim === undefined || existingDim === meta.dim) {
+        return;
+      }
+
+      // Dims differ → the stored vectors are incompatible. Drop and recreate.
+      process.stderr.write(
+        `[project-brain] embedding dim changed (${existingDim} -> ${meta.dim}) for '${project}'; rebuilding table.\n`
+      );
+      this.tables.delete(name);
+      await db.dropTable(name);
+      // Fall through to the create-table path below.
     }
     // Create with a seed record that we immediately delete
     const seed = {
