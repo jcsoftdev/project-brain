@@ -42,7 +42,6 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
 /** CLI entry point for the health command. */
 export async function execute(args: string[]): Promise<void> {
   const { LanceDbStore } = await import("../store/lancedb.js");
-  const { OllamaEmbeddingClient } = await import("../embeddings/ollama.js");
   const { readFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
 
@@ -60,8 +59,9 @@ export async function execute(args: string[]): Promise<void> {
   }
 
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
+  const { createEmbeddingClient } = await import("../embeddings/factory.js");
   const store = new LanceDbStore(DB_PATH);
-  const embeddings = new OllamaEmbeddingClient(OLLAMA_HOST);
+  const embeddings = await createEmbeddingClient(undefined, { host: OLLAMA_HOST });
 
   const result = await runHealth({ projectId, store, embeddings });
 

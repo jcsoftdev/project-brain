@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { LanceDbStore } from "./store/lancedb.js";
-import { OllamaEmbeddingClient } from "./embeddings/ollama.js";
-import { DB_PATH, OLLAMA_HOST, EMBEDDING_MODEL, VERSION } from "./constants.js";
+import { createEmbeddingClient } from "./embeddings/factory.js";
+import { DB_PATH, OLLAMA_HOST, VERSION } from "./constants.js";
 import { register as registerSearch } from "./tools/search.js";
 import { register as registerIngest } from "./tools/ingest.js";
 import { register as registerModules } from "./tools/modules.js";
@@ -20,7 +20,6 @@ interface ServerOptions {
 export async function createServer(options: ServerOptions = {}) {
   const dbPath = options.dbPath || DB_PATH;
   const ollamaHost = options.ollamaHost || OLLAMA_HOST;
-  const embedModel = options.embedModel || EMBEDDING_MODEL;
 
   const server = new McpServer({
     name: "project-brain",
@@ -28,7 +27,7 @@ export async function createServer(options: ServerOptions = {}) {
   });
 
   const store = new LanceDbStore(dbPath);
-  const embeddings = new OllamaEmbeddingClient(ollamaHost, undefined, embedModel);
+  const embeddings = await createEmbeddingClient(undefined, { host: ollamaHost });
 
   const deps: ToolDeps = { store, embeddings };
 

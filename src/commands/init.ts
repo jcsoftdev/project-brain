@@ -131,10 +131,10 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
       } else {
         // Dynamic import to keep static import graph lean (same pattern as reindex.execute)
         const { LanceDbStore } = await import("../store/lancedb.js");
-        const { OllamaEmbeddingClient } = await import("../embeddings/ollama.js");
+        const { createEmbeddingClient } = await import("../embeddings/factory.js");
         const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
         store = new LanceDbStore(DB_PATH);
-        embeddings = new OllamaEmbeddingClient(OLLAMA_HOST);
+        embeddings = await createEmbeddingClient(undefined, { host: OLLAMA_HOST });
       }
 
       // If already indexed (manifest exists), use incremental sync — not full reindex
