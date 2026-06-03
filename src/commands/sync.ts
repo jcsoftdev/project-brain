@@ -133,11 +133,13 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   const newManifest: Record<string, string> = { ...hashManifest };
 
   // Wave-based pipeline: read → embed → store N files at a time.
-  // Caps peak RAM to WAVE_SIZE files in memory simultaneously.
-  const WAVE_SIZE = 20;        // files per wave — smaller = lower peak RAM
+  // optimize() after each wave compacts LanceDB fragments and releases RAM.
+  // Target: <1GB peak RAM with reasonable throughput.
+  const WAVE_SIZE = 30;         // files per wave — 30 × ~10chunks × ~7KB ≈ 2MB/wave
   const READ_CONCURRENCY = 20;
-  const EMBED_BATCH_SIZE = 50; // chunks per Ollama request
-  const STORE_CONCURRENCY = 4; // parallel LanceDB writes
+  const EMBED_BATCH_SIZE = 50;  // chunks per Ollama request
+  const STORE_CONCURRENCY = 4;  // parallel LanceDB writes
+  const MAX_FILE_BYTES = 512_000; // skip files >512KB (likely binary/generated)
 
   // Count changed files upfront for progress (scan pass without storing)
   let totalChanged = 0;
@@ -154,8 +156,10 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       const batch = wave.slice(j, j + READ_CONCURRENCY);
       const results = await Promise.all(
         batch.map(async (filePath) => {
+          const file = Bun.file(filePath);
+          if (file.size > MAX_FILE_BYTES) return null; // skip large/binary files
           let content: string;
-          try { content = await Bun.file(filePath).text(); } catch { return null; }
+          try { content = await file.text(); } catch { return null; }
 
           const relPath = filePath.startsWith(root + "/")
             ? filePath.slice(root.length + 1) : filePath;
