@@ -22,18 +22,33 @@ jobs:
           - os: macos-latest
             target: darwin-arm64
             bun_target: bun-darwin-arm64
+            node_os: darwin
+            node_cpu: arm64
+            ext: ""
           - os: ubuntu-latest
             target: linux-x64
             bun_target: bun-linux-x64
+            node_os: linux
+            node_cpu: x64
+            ext: ""
           - os: ubuntu-24.04-arm
             target: linux-arm64
             bun_target: bun-linux-arm64
+            node_os: linux
+            node_cpu: arm64
+            ext: ""
           - os: windows-latest
             target: windows-x64
             bun_target: bun-windows-x64
+            node_os: win32
+            node_cpu: x64
+            ext: ".exe"
           - os: windows-11-arm
             target: windows-arm64
             bun_target: bun-windows-arm64
+            node_os: win32
+            node_cpu: arm64
+            ext: ".exe"
 
     steps:
       - uses: actions/checkout@v5
@@ -41,6 +56,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
         run: bun install
@@ -55,6 +75,31 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Publish platform package
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p platform-pkg/bin
+          cp "dist/project-brain-${{ matrix.target }}${{ matrix.ext }}" "platform-pkg/bin/project-brain-native${{ matrix.ext }}"
+          chmod +x "platform-pkg/bin/project-brain-native${{ matrix.ext }}" || true
+          node -e "
+            const fs = require('fs');
+            const pkg = {
+              name: 'project-brain-${{ matrix.target }}',
+              version: process.env.VERSION,
+              description: '${{ matrix.target }} binary for project-brain',
+              os: ['${{ matrix.node_os }}'],
+              cpu: ['${{ matrix.node_cpu }}'],
+              license: 'MIT',
+              files: ['bin']
+            };
+            fs.writeFileSync('platform-pkg/package.json', JSON.stringify(pkg, null, 2));
+          "
+          cd platform-pkg && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+
   publish-npm:
     name: Publish to npm
     needs: build
@@ -66,6 +111,20 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Sync optionalDependencies version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            for (const k of Object.keys(pkg.optionalDependencies || {})) {
+              pkg.optionalDependencies[k] = process.env.VERSION;
+            }
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+        env:
+          VERSION: ${{ github.ref_name }}
 
       - name: Publish
         run: npm publish --access public

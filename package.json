@@ -1,6 +1,6 @@
 {
   "name": "project-brain",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "description": "Local-first MCP server that gives AI tools semantic memory of your codebase.",
   "author": "jcsoftdev",
@@ -20,7 +20,6 @@
   ],
   "files": [
     "bin",
-    "scripts",
     "templates",
     "README.md",
     "LICENSE"
@@ -33,8 +32,7 @@
     "test": "bun test",
     "setup": "bun run src/cli.ts setup",
     "init": "bun run src/cli.ts init",
-    "build": "bun build ./src/cli.ts --compile --outfile dist/project-brain",
-    "postinstall": "node scripts/postinstall.js"
+    "build": "bun build ./src/cli.ts --compile --outfile dist/project-brain"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -43,13 +41,11 @@
     "zod": "^4.4.3"
   },
   "optionalDependencies": {
-    "@lancedb/lancedb-darwin-arm64": "0.30.0",
-    "@lancedb/lancedb-linux-x64-gnu": "0.30.0",
-    "@lancedb/lancedb-linux-arm64-gnu": "0.30.0",
-    "@lancedb/lancedb-linux-x64-musl": "0.30.0",
-    "@lancedb/lancedb-linux-arm64-musl": "0.30.0",
-    "@lancedb/lancedb-win32-x64-msvc": "0.30.0",
-    "@lancedb/lancedb-win32-arm64-msvc": "0.30.0"
+    "project-brain-darwin-arm64": "*",
+    "project-brain-linux-x64": "*",
+    "project-brain-linux-arm64": "*",
+    "project-brain-windows-x64": "*",
+    "project-brain-windows-arm64": "*"
   },
   "devDependencies": {
     "@types/bun": "latest",
