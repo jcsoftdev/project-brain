@@ -71,14 +71,14 @@ export class LanceDbStore implements VectorStore {
   }
 
   async upsert(project: string, chunks: Chunk[]): Promise<void> {
+    if (chunks.length === 0) return;
     const table = await this.getTable(project);
     if (!table) {
       throw new Error(`Table for project '${project}' does not exist. Call ensureTable first.`);
     }
-    // Delete existing chunks with same IDs, then add
-    for (const chunk of chunks) {
-      await table.delete(`id = '${chunk.id.replace(/'/g, "''")}'`);
-    }
+    // Single DELETE with IN clause (N deletes → 1)
+    const ids = chunks.map((c) => `'${c.id.replace(/'/g, "''")}'`).join(", ");
+    await table.delete(`id IN (${ids})`);
     const records = chunks.map((c) => ({
       id: c.id,
       vector: c.vector,

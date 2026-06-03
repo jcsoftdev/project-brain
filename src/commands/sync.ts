@@ -203,37 +203,43 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     onProgress?.({ phase: "embedding", current: Math.min(i + EMBED_BATCH_SIZE, allChunkRefs.length), total: allChunkRefs.length });
   }
 
-  // 4. Phase C — upsert each file's chunks in parallel
-  await Promise.all(
-    changed.map(async (entry, entryIdx) => {
-      const myRefs = allChunkRefs
-        .map((ref, i) => ({ ref, globalIdx: i }))
-        .filter(({ ref }) => ref.entryIdx === entryIdx);
+  // 4. Phase C — upsert with bounded concurrency (LanceDB dislikes too many parallel writes)
+  const STORE_CONCURRENCY = 4;
 
-      const chunks: Chunk[] = myRefs
-        .filter(({ globalIdx }) => vectors[globalIdx] !== null)
-        .map(({ ref, globalIdx }) => {
-          const raw = entry.rawChunks[ref.chunkIdx];
-          return {
-            id: raw.id,
-            vector: vectors[globalIdx]!,
-            content: raw.content,
-            source: entry.relPath,
-            module: raw.module,
-            content_hash: raw.content_hash,
-            updated_at: raw.updated_at,
-          };
-        });
+  async function storeEntry(entry: FileEntry, entryIdx: number): Promise<void> {
+    const myRefs = allChunkRefs
+      .map((ref, i) => ({ ref, globalIdx: i }))
+      .filter(({ ref }) => ref.entryIdx === entryIdx);
 
-      if (chunks.length === 0) return;
+    const chunks: Chunk[] = myRefs
+      .filter(({ globalIdx }) => vectors[globalIdx] !== null)
+      .map(({ ref, globalIdx }) => {
+        const raw = entry.rawChunks[ref.chunkIdx];
+        return {
+          id: raw.id,
+          vector: vectors[globalIdx]!,
+          content: raw.content,
+          source: entry.relPath,
+          module: raw.module,
+          content_hash: raw.content_hash,
+          updated_at: raw.updated_at,
+        };
+      });
 
-      await store.deleteBySource(projectId, entry.relPath);
-      await store.upsert(projectId, chunks);
-      newManifest[entry.relPath] = entry.hash;
-      ingested++;
-      onProgress?.({ phase: "storing", current: ingested, total: changed.length });
-    })
-  );
+    if (chunks.length === 0) return;
+
+    await store.deleteBySource(projectId, entry.relPath);
+    await store.upsert(projectId, chunks);
+    newManifest[entry.relPath] = entry.hash;
+    ingested++;
+    onProgress?.({ phase: "storing", current: ingested, total: changed.length });
+  }
+
+  for (let i = 0; i < changed.length; i += STORE_CONCURRENCY) {
+    await Promise.all(
+      changed.slice(i, i + STORE_CONCURRENCY).map((entry, j) => storeEntry(entry, i + j))
+    );
+  }
 
   // 5. Detect deleted files (in manifest but no longer on disk)
   let deleted = 0;
