@@ -4,6 +4,7 @@ import { computeHash } from "../indexer/hash.js";
 import { chunkContent } from "../indexer/parser.js";
 import { shouldIgnore, loadPatterns } from "../indexer/gitignore.js";
 import { WATCHER_ALWAYS_IGNORE } from "../constants.js";
+import { mapLimit } from "../indexer/concurrency.js";
 import type { EmbeddingClient, VectorStore, Chunk } from "../types.js";
 
 const CONFIG_DIR = ".project-brain";
@@ -207,16 +208,21 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   const allTexts = pendingEntries.flatMap((e) => e.rawChunks.map((c) => c.content));
   const allVectors: (number[] | null)[] = new Array(allTexts.length).fill(null);
 
-  // Embed in EMBED_BATCH_SIZE chunks — show progress per batch
+  // Embed in EMBED_BATCH_SIZE chunks with bounded concurrency (max 3 parallel requests)
+  // mapLimit preserves output order, so batch i's vectors correctly land at allVectors[i*EMBED_BATCH_SIZE..]
+  const EMBED_CONCURRENCY = 3;
+  const batches: Array<{ startIdx: number; texts: string[] }> = [];
+  for (let i = 0; i < allTexts.length; i += EMBED_BATCH_SIZE) {
+    batches.push({ startIdx: i, texts: allTexts.slice(i, i + EMBED_BATCH_SIZE) });
+  }
   let embedDone = 0;
   onProgress?.({ phase: "embedding", current: 0, total: allTexts.length });
-  for (let i = 0; i < allTexts.length; i += EMBED_BATCH_SIZE) {
-    const batch = allTexts.slice(i, i + EMBED_BATCH_SIZE);
-    const vecs = await embeddings.embed(batch);
-    if (vecs) for (let j = 0; j < vecs.length; j++) allVectors[i + j] = vecs[j];
-    embedDone = Math.min(i + EMBED_BATCH_SIZE, allTexts.length);
+  await mapLimit(batches, EMBED_CONCURRENCY, async ({ startIdx, texts }) => {
+    const vecs = await embeddings.embed(texts);
+    if (vecs) for (let j = 0; j < vecs.length; j++) allVectors[startIdx + j] = vecs[j];
+    embedDone = Math.min(embedDone + texts.length, allTexts.length);
     onProgress?.({ phase: "embedding", current: embedDone, total: allTexts.length });
-  }
+  });
 
   // Store every SAVE_EVERY files → progress updates, few fragments
   let chunkCursor = 0;
