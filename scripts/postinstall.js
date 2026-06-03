@@ -19,7 +19,6 @@ const arch = process.arch; // arm64, x64
 
 const targetMap = {
   "darwin-arm64": "darwin-arm64",
-  "darwin-x64": "darwin-x64",
   "linux-x64": "linux-x64",
   "linux-arm64": "linux-arm64",
   "win32-x64": "windows-x64",
