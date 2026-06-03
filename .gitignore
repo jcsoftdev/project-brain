@@ -4,3 +4,12 @@ dist/
 *.db
 .lancedb/
 bun.lock
+
+# specs/docs
+openspec/
+plan.md
+README.md
+ARCHIVE-REPORT-CONTENT.md
+templates/
+--skip-index/
+.atl/
