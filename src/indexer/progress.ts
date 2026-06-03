@@ -24,7 +24,8 @@ export function makeProgressPrinter() {
         print(`  Embedding [${bar}] ${pct}%  ${current}/${total} chunks`);
         break;
       case "storing":
-        print(`  Storing   [${bar}] ${pct}%  ${current}/${total} files`);
+        // total is unknown until all waves are read — show running counter only
+        print(`  Indexing  ✓ ${current} files indexed`);
         break;
     }
   }
