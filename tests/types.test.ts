@@ -67,6 +67,28 @@ describe("types", () => {
   });
 });
 
+describe("Chunk symbol metadata", () => {
+  it("carries symbol fields", () => {
+    const c: Chunk = {
+      id: "h-0", vector: [0], content: "x", source: "a.ts", module: "src",
+      content_hash: "h", updated_at: 1,
+      symbol_name: "handleSearch", symbol_kind: "function",
+      signature: "async function handleSearch(args, deps)",
+      start_line: 18, end_line: 41,
+    };
+    expect(c.symbol_name).toBe("handleSearch");
+  });
+
+  it("SearchResult exposes symbol + signature + chunk_id", () => {
+    const r: SearchResult = {
+      id: "h-0", content: "x", source: "a.ts", module: "src", score: 0.9,
+      symbol_name: "handleSearch", signature: "async function handleSearch(args, deps)",
+      start_line: 18, end_line: 41,
+    };
+    expect(r.signature).toContain("handleSearch");
+  });
+});
+
 describe("constants", () => {
   it("exports all required constants", () => {
     expect(VECTOR_DIM).toBe(768);

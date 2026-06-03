@@ -1,3 +1,7 @@
+export type SymbolKind =
+  | "function" | "method" | "class" | "interface" | "type"
+  | "enum" | "variable" | "section" | "unknown";
+
 /** A chunk of knowledge stored in the vector database. */
 export interface Chunk {
   id: string;
@@ -7,6 +11,11 @@ export interface Chunk {
   module: string;
   content_hash: string;
   updated_at: number;
+  symbol_name?: string;
+  symbol_kind?: SymbolKind;
+  signature?: string;
+  start_line?: number;
+  end_line?: number;
 }
 
 /** A search result with normalized similarity score. */
@@ -16,6 +25,10 @@ export interface SearchResult {
   source: string;
   module: string;
   score: number;
+  symbol_name?: string;
+  signature?: string;
+  start_line?: number;
+  end_line?: number;
 }
 
 /** Embedding client contract — returns null on failure for graceful degradation. */
