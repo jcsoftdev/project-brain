@@ -76,3 +76,9 @@ export const SCORE_THRESHOLD = 0.2;
 
 /** MMR lambda: 1 = pure relevance, 0 = pure diversity. */
 export const MMR_LAMBDA = 0.6;
+
+/** Maximum tokens to fill in search_context adaptive output. */
+export const SEARCH_TOKEN_BUDGET = 1200;
+
+/** Max lines per snippet in adaptive output. */
+export const SNIPPET_MAX_LINES = 5;
