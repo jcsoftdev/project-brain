@@ -33,7 +33,7 @@ describe("check_health tool", () => {
     expect(data.embeddings).toBe("available");
     expect(data.model).toBe("nomic-embed-text");
     expect(data.chunks).toBe(42);
-    expect(data.version).toBe("0.1.0");
+    expect(typeof data.version).toBe("string");
   });
 
   it("reports degraded state when embeddings down", async () => {

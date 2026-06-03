@@ -123,58 +123,103 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   let skipped = 0;
   const newManifest: Record<string, string> = { ...hashManifest };
 
-  // 4. Process each file
-  for (const filePath of filePaths) {
-    let content: string;
-    try {
-      content = await Bun.file(filePath).text();
-    } catch {
-      // File might have been deleted between listing and reading
-      continue;
+  // 4. Phase A — read + hash files in parallel (concurrency 20)
+  const READ_CONCURRENCY = 20;
+  const EMBED_BATCH_SIZE = 50;
+
+  type FileEntry = {
+    filePath: string;
+    relPath: string;
+    hash: string;
+    rawChunks: ReturnType<typeof chunkContent>;
+  };
+
+  const changed: FileEntry[] = [];
+
+  for (let i = 0; i < filePaths.length; i += READ_CONCURRENCY) {
+    const batch = filePaths.slice(i, i + READ_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (filePath) => {
+        let content: string;
+        try {
+          content = await Bun.file(filePath).text();
+        } catch {
+          return null;
+        }
+
+        const relPath = filePath.startsWith(root + "/")
+          ? filePath.slice(root.length + 1)
+          : filePath;
+        const hash = computeHash(content);
+
+        if (hashManifest[relPath] === hash) {
+          return "skipped" as const;
+        }
+
+        const parts = relPath.split("/");
+        const module = parts.length > 1 ? parts[0] : "root";
+        const rawChunks = chunkContent(content, relPath, module);
+
+        return { filePath, relPath, hash, rawChunks };
+      })
+    );
+
+    for (const result of results) {
+      if (result === null) continue;
+      if (result === "skipped") { skipped++; continue; }
+      changed.push(result);
     }
-
-    const hash = computeHash(content);
-    const relPath = filePath.startsWith(root + "/")
-      ? filePath.slice(root.length + 1)
-      : filePath;
-
-    // Skip if hash unchanged
-    if (hashManifest[relPath] === hash) {
-      skipped++;
-      continue;
-    }
-
-    // Determine module from first path segment
-    const parts = relPath.split("/");
-    const module = parts.length > 1 ? parts[0] : "root";
-
-    // Chunk and embed
-    const rawChunks = chunkContent(content, relPath, module);
-
-    const vectors = await embeddings.embed(rawChunks.map((c) => c.content));
-    if (!vectors) {
-      // Embeddings unavailable — skip this file silently
-      continue;
-    }
-
-    // Delete old chunks for this source before reinserting
-    await store.deleteBySource(projectId, relPath);
-
-    // Build typed chunks
-    const chunks: Chunk[] = rawChunks.map((raw, i) => ({
-      id: raw.id,
-      vector: vectors[i],
-      content: raw.content,
-      source: relPath,
-      module: raw.module,
-      content_hash: raw.content_hash,
-      updated_at: raw.updated_at,
-    }));
-
-    await store.upsert(projectId, chunks);
-    newManifest[relPath] = hash;
-    ingested++;
   }
+
+  // 4. Phase B — batch embed all chunks (EMBED_BATCH_SIZE chunks per request)
+  // Flatten all chunks into one list with back-references
+  type ChunkRef = { entryIdx: number; chunkIdx: number; text: string };
+  const allChunkRefs: ChunkRef[] = changed.flatMap((entry, entryIdx) =>
+    entry.rawChunks.map((c, chunkIdx) => ({ entryIdx, chunkIdx, text: c.content }))
+  );
+
+  // vectors[i] maps 1:1 to allChunkRefs[i]
+  const vectors: (number[] | null)[] = new Array(allChunkRefs.length).fill(null);
+
+  for (let i = 0; i < allChunkRefs.length; i += EMBED_BATCH_SIZE) {
+    const batchRefs = allChunkRefs.slice(i, i + EMBED_BATCH_SIZE);
+    const batchVectors = await embeddings.embed(batchRefs.map((r) => r.text));
+    if (!batchVectors) continue;
+    for (let j = 0; j < batchRefs.length; j++) {
+      vectors[i + j] = batchVectors[j];
+    }
+  }
+
+  // 4. Phase C — upsert each file's chunks in parallel
+  await Promise.all(
+    changed.map(async (entry, entryIdx) => {
+      const myRefs = allChunkRefs
+        .map((ref, i) => ({ ref, globalIdx: i }))
+        .filter(({ ref }) => ref.entryIdx === entryIdx);
+
+      const chunks: Chunk[] = myRefs
+        .filter(({ globalIdx }) => vectors[globalIdx] !== null)
+        .map(({ ref, globalIdx }) => {
+          const raw = entry.rawChunks[ref.chunkIdx];
+          return {
+            id: raw.id,
+            vector: vectors[globalIdx]!,
+            content: raw.content,
+            source: entry.relPath,
+            module: raw.module,
+            content_hash: raw.content_hash,
+            updated_at: raw.updated_at,
+          };
+        });
+
+      if (chunks.length === 0) return;
+
+      await store.deleteBySource(projectId, entry.relPath);
+      await store.upsert(projectId, chunks);
+      newManifest[entry.relPath] = entry.hash;
+      ingested++;
+    })
+  );
 
   // 5. Detect deleted files (in manifest but no longer on disk)
   let deleted = 0;
