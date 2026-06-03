@@ -30,31 +30,166 @@ const MANIFEST_DETECTORS: ManifestDetector[] = [
       const frameworks: string[] = [];
       try {
         const pkg = JSON.parse(content);
-        const allDeps = {
-          ...pkg.dependencies,
-          ...pkg.devDependencies,
-        };
-        if (allDeps.typescript || allDeps["@types/node"]) {
-          // Override language detection below
-        }
+        const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
         if (allDeps.react) frameworks.push("React");
         if (allDeps.vue) frameworks.push("Vue");
         if (allDeps.next) frameworks.push("Next.js");
         if (allDeps.nuxt) frameworks.push("Nuxt");
         if (allDeps.svelte) frameworks.push("Svelte");
+        if (allDeps["@sveltejs/kit"]) frameworks.push("SvelteKit");
         if (allDeps.express) frameworks.push("Express");
         if (allDeps.fastify) frameworks.push("Fastify");
         if (allDeps.hono) frameworks.push("Hono");
+        if (allDeps["@nestjs/core"]) frameworks.push("NestJS");
+        if (allDeps["@remix-run/node"] || allDeps["@remix-run/react"]) frameworks.push("Remix");
+        if (allDeps["@tanstack/react-router"]) frameworks.push("TanStack Router");
+        if (allDeps.astro) frameworks.push("Astro");
+        if (allDeps.elysia) frameworks.push("Elysia");
+        if (allDeps["react-native"]) frameworks.push("React Native");
+        if (allDeps.expo) frameworks.push("Expo");
+        if (allDeps["@angular/core"]) frameworks.push("Angular");
+        if (allDeps.solid || allDeps["solid-js"]) frameworks.push("SolidJS");
       } catch {}
       return frameworks;
     },
   },
-  { file: "go.mod", language: "Go" },
-  { file: "Cargo.toml", language: "Rust" },
-  { file: "pyproject.toml", language: "Python" },
-  { file: "mix.exs", language: "Elixir" },
-  { file: "build.gradle", language: "Java" },
-  { file: "build.gradle.kts", language: "Kotlin" },
+  // Go
+  {
+    file: "go.mod",
+    language: "Go",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("gin-gonic/gin")) frameworks.push("Gin");
+      if (content.includes("labstack/echo")) frameworks.push("Echo");
+      if (content.includes("gofiber/fiber")) frameworks.push("Fiber");
+      if (content.includes("go-chi/chi")) frameworks.push("Chi");
+      return frameworks;
+    },
+  },
+  // Rust
+  {
+    file: "Cargo.toml",
+    language: "Rust",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("actix-web")) frameworks.push("Actix");
+      if (content.includes("axum")) frameworks.push("Axum");
+      if (content.includes("rocket")) frameworks.push("Rocket");
+      if (content.includes("tauri")) frameworks.push("Tauri");
+      return frameworks;
+    },
+  },
+  // Python
+  {
+    file: "pyproject.toml",
+    language: "Python",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("fastapi")) frameworks.push("FastAPI");
+      if (content.includes("django")) frameworks.push("Django");
+      if (content.includes("flask")) frameworks.push("Flask");
+      if (content.includes("sqlalchemy")) frameworks.push("SQLAlchemy");
+      return frameworks;
+    },
+  },
+  {
+    file: "requirements.txt",
+    language: "Python",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.toLowerCase().includes("fastapi")) frameworks.push("FastAPI");
+      if (content.toLowerCase().includes("django")) frameworks.push("Django");
+      if (content.toLowerCase().includes("flask")) frameworks.push("Flask");
+      return frameworks;
+    },
+  },
+  // Kotlin / KMP
+  {
+    file: "build.gradle.kts",
+    language: "Kotlin",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("kotlin-multiplatform") || content.includes("multiplatform")) frameworks.push("Kotlin Multiplatform");
+      if (content.includes("compose")) frameworks.push("Jetpack Compose");
+      if (content.includes("ktor")) frameworks.push("Ktor");
+      if (content.includes("spring-boot") || content.includes("org.springframework")) frameworks.push("Spring Boot");
+      if (content.includes("android")) frameworks.push("Android");
+      return frameworks;
+    },
+  },
+  {
+    file: "build.gradle",
+    language: "Kotlin",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("kotlin-multiplatform") || content.includes("multiplatform")) frameworks.push("Kotlin Multiplatform");
+      if (content.includes("compose")) frameworks.push("Jetpack Compose");
+      if (content.includes("ktor")) frameworks.push("Ktor");
+      if (content.includes("spring-boot") || content.includes("springframework")) frameworks.push("Spring Boot");
+      if (content.includes("android")) frameworks.push("Android");
+      return frameworks;
+    },
+  },
+  // Java
+  {
+    file: "pom.xml",
+    language: "Java",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("spring-boot")) frameworks.push("Spring Boot");
+      if (content.includes("quarkus")) frameworks.push("Quarkus");
+      if (content.includes("micronaut")) frameworks.push("Micronaut");
+      return frameworks;
+    },
+  },
+  // Swift / iOS
+  {
+    file: "Package.swift",
+    language: "Swift",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("vapor")) frameworks.push("Vapor");
+      if (content.includes("hummingbird")) frameworks.push("Hummingbird");
+      return frameworks;
+    },
+  },
+  // Dart / Flutter
+  {
+    file: "pubspec.yaml",
+    language: "Dart",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("flutter")) frameworks.push("Flutter");
+      return frameworks;
+    },
+  },
+  // C# / .NET (detected via glob scan below, not by fixed filename)
+  // Ruby
+  { file: "Gemfile", language: "Ruby",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("rails")) frameworks.push("Rails");
+      if (content.includes("sinatra")) frameworks.push("Sinatra");
+      return frameworks;
+    },
+  },
+  // PHP
+  { file: "composer.json", language: "PHP",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("laravel")) frameworks.push("Laravel");
+      if (content.includes("symfony")) frameworks.push("Symfony");
+      return frameworks;
+    },
+  },
+  // Elixir
+  { file: "mix.exs", language: "Elixir",
+    detectFrameworks: (content) => {
+      const frameworks: string[] = [];
+      if (content.includes("phoenix")) frameworks.push("Phoenix");
+      return frameworks;
+    },
+  },
 ];
 
 const LOCK_FILE_MAP: Record<string, string> = {
@@ -128,6 +263,35 @@ export async function detectStack(root: string): Promise<StackInfo> {
           );
         })
     );
+  } catch {}
+
+  // C# / .NET: scan for *.csproj files
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    const csproj = entries.find((e) => e.isFile() && e.name.endsWith(".csproj"));
+    if (csproj) {
+      if (!languages.includes("C#")) languages.push("C#");
+      const content = await Bun.file(join(root, csproj.name)).text();
+      if (content.includes("Microsoft.AspNetCore") && !frameworks.includes("ASP.NET Core")) frameworks.push("ASP.NET Core");
+      if (content.includes("Blazor") && !frameworks.includes("Blazor")) frameworks.push("Blazor");
+      if (content.includes("MAUI") && !frameworks.includes(".NET MAUI")) frameworks.push(".NET MAUI");
+    }
+  } catch {}
+
+  // KMP: check settings.gradle.kts for multiplatform plugin
+  try {
+    const settings = await Bun.file(join(root, "settings.gradle.kts")).text();
+    if ((settings.includes("kotlin-multiplatform") || settings.includes("multiplatform")) && !frameworks.includes("Kotlin Multiplatform")) {
+      frameworks.push("Kotlin Multiplatform");
+    }
+    if (!languages.includes("Kotlin")) languages.push("Kotlin");
+  } catch {}
+
+  // Android: check for AndroidManifest.xml
+  try {
+    const manifest_ = await Bun.file(join(root, "app/src/main/AndroidManifest.xml")).text();
+    if (manifest_ && !frameworks.includes("Android")) frameworks.push("Android");
+    if (!languages.includes("Kotlin")) languages.push("Kotlin");
   } catch {}
 
   // Detect package manager from lock files
