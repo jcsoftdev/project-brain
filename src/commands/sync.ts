@@ -132,113 +132,101 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   let skipped = 0;
   const newManifest: Record<string, string> = { ...hashManifest };
 
-  // 4. Phase A — read + hash files in parallel (concurrency 20)
+  // Wave-based pipeline: read → embed → store N files at a time.
+  // Caps peak RAM to WAVE_SIZE files in memory simultaneously.
+  const WAVE_SIZE = 50;       // files per wave
   const READ_CONCURRENCY = 20;
-  const EMBED_BATCH_SIZE = 50;
+  const EMBED_BATCH_SIZE = 50; // chunks per Ollama request
+  const STORE_CONCURRENCY = 4; // parallel LanceDB writes
 
-  type FileEntry = {
-    filePath: string;
-    relPath: string;
-    hash: string;
-    rawChunks: ReturnType<typeof chunkContent>;
-  };
-
-  const changed: FileEntry[] = [];
-
+  // Count changed files upfront for progress (scan pass without storing)
+  let totalChanged = 0;
   let readDone = 0;
-  for (let i = 0; i < filePaths.length; i += READ_CONCURRENCY) {
-    const batch = filePaths.slice(i, i + READ_CONCURRENCY);
-    const results = await Promise.all(
-      batch.map(async (filePath) => {
-        let content: string;
-        try {
-          content = await Bun.file(filePath).text();
-        } catch {
-          return null;
-        }
 
-        const relPath = filePath.startsWith(root + "/")
-          ? filePath.slice(root.length + 1)
-          : filePath;
-        const hash = computeHash(content);
+  for (let i = 0; i < filePaths.length; i += WAVE_SIZE) {
+    const wave = filePaths.slice(i, i + WAVE_SIZE);
 
-        if (hashManifest[relPath] === hash) {
-          return "skipped" as const;
-        }
+    // Step 1: read + hash in parallel batches
+    type FileEntry = { relPath: string; hash: string; rawChunks: ReturnType<typeof chunkContent> };
+    const waveChanged: FileEntry[] = [];
 
-        const parts = relPath.split("/");
-        const module = parts.length > 1 ? parts[0] : "root";
-        const rawChunks = chunkContent(content, relPath, module);
+    for (let j = 0; j < wave.length; j += READ_CONCURRENCY) {
+      const batch = wave.slice(j, j + READ_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (filePath) => {
+          let content: string;
+          try { content = await Bun.file(filePath).text(); } catch { return null; }
 
-        return { filePath, relPath, hash, rawChunks };
-      })
-    );
+          const relPath = filePath.startsWith(root + "/")
+            ? filePath.slice(root.length + 1) : filePath;
+          const hash = computeHash(content);
 
-    for (const result of results) {
-      if (result === null) continue;
-      if (result === "skipped") { skipped++; }
-      else changed.push(result);
+          if (hashManifest[relPath] === hash) return "skipped" as const;
+
+          const parts = relPath.split("/");
+          const module = parts.length > 1 ? parts[0] : "root";
+          return { relPath, hash, rawChunks: chunkContent(content, relPath, module) };
+        })
+      );
+
+      for (const r of results) {
+        if (r === null) continue;
+        if (r === "skipped") { skipped++; } else { waveChanged.push(r); totalChanged++; }
+      }
+      readDone += batch.length;
+      onProgress?.({ phase: "reading", current: readDone, total: filePaths.length });
     }
-    readDone += batch.length;
-    onProgress?.({ phase: "reading", current: readDone, total: filePaths.length });
-  }
 
-  // 4. Phase B — batch embed all chunks (EMBED_BATCH_SIZE chunks per request)
-  // Flatten all chunks into one list with back-references
-  type ChunkRef = { entryIdx: number; chunkIdx: number; text: string };
-  const allChunkRefs: ChunkRef[] = changed.flatMap((entry, entryIdx) =>
-    entry.rawChunks.map((c, chunkIdx) => ({ entryIdx, chunkIdx, text: c.content }))
-  );
+    if (waveChanged.length === 0) continue;
 
-  // vectors[i] maps 1:1 to allChunkRefs[i]
-  const vectors: (number[] | null)[] = new Array(allChunkRefs.length).fill(null);
+    // Step 2: embed all chunks in this wave
+    const allTexts = waveChanged.flatMap((e) => e.rawChunks.map((c) => c.content));
+    const waveVectors: (number[] | null)[] = new Array(allTexts.length).fill(null);
+    let embedOffset = 0;
+    for (const entry of waveChanged) embedOffset += entry.rawChunks.length; // just used below
 
-  for (let i = 0; i < allChunkRefs.length; i += EMBED_BATCH_SIZE) {
-    const batchRefs = allChunkRefs.slice(i, i + EMBED_BATCH_SIZE);
-    const batchVectors = await embeddings.embed(batchRefs.map((r) => r.text));
-    if (!batchVectors) continue;
-    for (let j = 0; j < batchRefs.length; j++) {
-      vectors[i + j] = batchVectors[j];
+    let globalIdx = 0;
+    for (const entry of waveChanged) {
+      const start = globalIdx;
+      globalIdx += entry.rawChunks.length;
+      // embed in chunks of EMBED_BATCH_SIZE
+      for (let k = start; k < globalIdx; k += EMBED_BATCH_SIZE) {
+        const end = Math.min(k + EMBED_BATCH_SIZE, globalIdx);
+        const vecs = await embeddings.embed(allTexts.slice(k, end));
+        if (vecs) for (let m = 0; m < vecs.length; m++) waveVectors[k + m] = vecs[m];
+      }
+      onProgress?.({ phase: "embedding", current: globalIdx, total: allTexts.length });
     }
-    onProgress?.({ phase: "embedding", current: Math.min(i + EMBED_BATCH_SIZE, allChunkRefs.length), total: allChunkRefs.length });
-  }
 
-  // 4. Phase C — upsert with bounded concurrency (LanceDB dislikes too many parallel writes)
-  const STORE_CONCURRENCY = 4;
+    // Step 3: store with bounded concurrency
+    let fileOffset = 0;
+    for (let j = 0; j < waveChanged.length; j += STORE_CONCURRENCY) {
+      const storeBatch = waveChanged.slice(j, j + STORE_CONCURRENCY);
+      await Promise.all(
+        storeBatch.map(async (entry, k) => {
+          const base = fileOffset + k > 0
+            ? waveChanged.slice(0, j + k).reduce((s, e) => s + e.rawChunks.length, 0)
+            : 0;
+          const chunks: Chunk[] = entry.rawChunks
+            .map((raw, ci) => ({ raw, vec: waveVectors[base + ci] }))
+            .filter(({ vec }) => vec !== null)
+            .map(({ raw, vec }) => ({
+              id: raw.id, vector: vec!, content: raw.content,
+              source: entry.relPath, module: raw.module,
+              content_hash: raw.content_hash, updated_at: raw.updated_at,
+            }));
 
-  async function storeEntry(entry: FileEntry, entryIdx: number): Promise<void> {
-    const myRefs = allChunkRefs
-      .map((ref, i) => ({ ref, globalIdx: i }))
-      .filter(({ ref }) => ref.entryIdx === entryIdx);
-
-    const chunks: Chunk[] = myRefs
-      .filter(({ globalIdx }) => vectors[globalIdx] !== null)
-      .map(({ ref, globalIdx }) => {
-        const raw = entry.rawChunks[ref.chunkIdx];
-        return {
-          id: raw.id,
-          vector: vectors[globalIdx]!,
-          content: raw.content,
-          source: entry.relPath,
-          module: raw.module,
-          content_hash: raw.content_hash,
-          updated_at: raw.updated_at,
-        };
-      });
-
-    if (chunks.length === 0) return;
-
-    await store.deleteBySource(projectId, entry.relPath);
-    await store.upsert(projectId, chunks);
-    newManifest[entry.relPath] = entry.hash;
-    ingested++;
-    onProgress?.({ phase: "storing", current: ingested, total: changed.length });
-  }
-
-  for (let i = 0; i < changed.length; i += STORE_CONCURRENCY) {
-    await Promise.all(
-      changed.slice(i, i + STORE_CONCURRENCY).map((entry, j) => storeEntry(entry, i + j))
-    );
+          if (chunks.length === 0) return;
+          await store.deleteBySource(projectId, entry.relPath);
+          await store.upsert(projectId, chunks);
+          newManifest[entry.relPath] = entry.hash;
+          ingested++;
+          onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
+        })
+      );
+      fileOffset += storeBatch.length;
+    }
+    // Wave done — GC can reclaim waveChanged and waveVectors
   }
 
   // 5. Detect deleted files (in manifest but no longer on disk)
