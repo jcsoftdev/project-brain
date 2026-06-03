@@ -96,6 +96,8 @@ jobs:
       - name: Publish platform package
         shell: bash
         run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"   # strip leading 'v' (v0.3.7 → 0.3.7)
           mkdir -p platform-pkg/bin
           cp "dist/project-brain-${{ matrix.target }}${{ matrix.ext }}" "platform-pkg/bin/project-brain-native${{ matrix.ext }}"
           chmod +x "platform-pkg/bin/project-brain-native${{ matrix.ext }}" || true
@@ -135,7 +137,10 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Sync optionalDependencies version
+        shell: bash
         run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
@@ -150,7 +155,8 @@ jobs:
       - name: Publish
         shell: bash
         run: |
-          VERSION=${{ github.ref_name }}
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
           if npm view "project-brain@${VERSION}" version 2>/dev/null; then
             echo "project-brain@${VERSION} already published, skipping."
           else
