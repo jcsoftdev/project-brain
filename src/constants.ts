@@ -70,3 +70,9 @@ export const WATCHER_ALWAYS_IGNORE = [
 
 /** Default project-brain data directory. */
 export const DATA_DIR = join(homedir(), ".project-brain");
+
+/** Minimum score to include a search result. */
+export const SCORE_THRESHOLD = 0.2;
+
+/** MMR lambda: 1 = pure relevance, 0 = pure diversity. */
+export const MMR_LAMBDA = 0.6;
