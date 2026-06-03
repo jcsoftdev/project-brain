@@ -1,6 +1,6 @@
 {
   "name": "project-brain",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "type": "module",
   "description": "Local-first MCP server that gives AI tools semantic memory of your codebase.",
   "author": "jcsoftdev",
