@@ -141,4 +141,124 @@ describe("sync command", () => {
       expect(result2.ingested).toBe(0);
     });
   });
+
+  // ---- FIX 3: embed failure surfacing ----
+
+  describe("T-7.4: total embed failure is distinguishable from zero-changed success", () => {
+    it("returns embedFailed count > 0 and error string when embed returns null for all batches", async () => {
+      const store = makeMemoryStore();
+      await writeFile(join(tempDir, "file.md"), "Some content to embed.");
+
+      const nullEmbeddings: EmbeddingClient = {
+        embed: async (_texts) => null,
+        isAvailable: async () => true,
+      };
+
+      const { runSync } = await import("../../src/commands/sync.js");
+      const result = await runSync({
+        root: tempDir,
+        projectId: "test-proj",
+        store,
+        embeddings: nullEmbeddings,
+      });
+
+      // Must be distinguishable from a real "nothing changed" run
+      expect(result.ingested).toBe(0);
+      // Must signal total embed failure
+      expect(result.embedFailed).toBeGreaterThan(0);
+      expect(result.error).toBeDefined();
+      expect(result.error).toContain("Embedding failed");
+    });
+
+    it("zero-changed success has embedFailed=0 and no error", async () => {
+      const store = makeMemoryStore();
+      await writeFile(join(tempDir, "stable.md"), "Stable.");
+
+      const { runSync } = await import("../../src/commands/sync.js");
+
+      // First sync to build manifest
+      await runSync({
+        root: tempDir,
+        projectId: "test-proj",
+        store,
+        embeddings: mockEmbeddings,
+      });
+
+      // Second sync — nothing changed
+      const result2 = await runSync({
+        root: tempDir,
+        projectId: "test-proj",
+        store,
+        embeddings: mockEmbeddings,
+      });
+
+      expect(result2.ingested).toBe(0);
+      expect(result2.embedFailed).toBe(0);
+      expect(result2.error).toBeUndefined();
+    });
+  });
+
+  describe("T-7.5: partial embed failure — only succeeded chunks stored, warning provided", () => {
+    it("embedFailed tracks only the texts that returned null, not the whole run", async () => {
+      const store = makeMemoryStore();
+      // We need 2 batches. EMBED_BATCH_SIZE=64, so write 65 tiny files.
+      for (let i = 0; i < 65; i++) {
+        await writeFile(join(tempDir, `file-${i}.md`), `Content of file ${i}`);
+      }
+
+      let callCount = 0;
+      const partialEmbeddings: EmbeddingClient = {
+        embed: async (texts) => {
+          callCount++;
+          // Second batch fails, first succeeds
+          if (callCount === 2) return null;
+          return texts.map(() => new Array(VECTOR_DIM).fill(0.1));
+        },
+        isAvailable: async () => true,
+      };
+
+      const { runSync } = await import("../../src/commands/sync.js");
+      const result = await runSync({
+        root: tempDir,
+        projectId: "test-proj",
+        store,
+        embeddings: partialEmbeddings,
+      });
+
+      // Some ingested (first batch succeeded), some failed (second batch)
+      expect(result.ingested).toBeGreaterThan(0);
+      expect(result.embedFailed).toBeGreaterThan(0);
+      // Partial failure: error should NOT be set (only total failure triggers it)
+      expect(result.error).toBeUndefined();
+    });
+  });
+
+  describe("T-7.6: embedDone progress reflects only successful embeds", () => {
+    it("progress events only advance for non-null vector batches", async () => {
+      const store = makeMemoryStore();
+      await writeFile(join(tempDir, "c.md"), "Content C");
+
+      const progressEvents: Array<{ phase: string; current: number }> = [];
+
+      const nullEmbeddings: EmbeddingClient = {
+        embed: async (_texts) => null,
+        isAvailable: async () => true,
+      };
+
+      const { runSync } = await import("../../src/commands/sync.js");
+      await runSync({
+        root: tempDir,
+        projectId: "test-proj",
+        store,
+        embeddings: nullEmbeddings,
+        onProgress: (p) => progressEvents.push(p),
+      });
+
+      // Embedding phase progress events with current > 0 should only come
+      // from successful embeds. With all-null embed, current should stay 0
+      // for all embedding progress events (or have no embedding events).
+      const embedEvents = progressEvents.filter((e) => e.phase === "embedding" && e.current > 0);
+      expect(embedEvents.length).toBe(0);
+    });
+  });
 });
