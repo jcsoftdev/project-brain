@@ -7,6 +7,7 @@ import { register as registerIngest } from "./tools/ingest.js";
 import { register as registerModules } from "./tools/modules.js";
 import { register as registerForget } from "./tools/forget.js";
 import { register as registerHealth } from "./tools/health.js";
+import { register as registerExpand } from "./tools/expand.js";
 import type { ToolDeps } from "./types.js";
 
 interface ServerOptions {
@@ -37,6 +38,7 @@ export async function createServer(options: ServerOptions = {}) {
   registerModules(server, deps);
   registerForget(server, deps);
   registerHealth(server, deps);
+  registerExpand(server, deps);
 
   const toolNames = [
     "search_context",
@@ -45,6 +47,7 @@ export async function createServer(options: ServerOptions = {}) {
     "get_module",
     "delete_knowledge",
     "check_health",
+    "expand_context",
   ];
 
   return { server, store, embeddings, toolNames };

@@ -59,6 +59,8 @@ export interface VectorStore {
   buildIndexes(project: string): Promise<void>;
   /** Hybrid lexical + vector search with RRF reranking. Falls back to vector-only on FTS miss. */
   hybridSearch(project: string, vector: number[], text: string, topK: number): Promise<SearchResult[]>;
+  /** Fetch a single chunk by its id. Returns null if not found. */
+  getChunkById(project: string, id: string): Promise<Chunk | null>;
 }
 
 /** Dependencies injected into MCP tool handlers. */

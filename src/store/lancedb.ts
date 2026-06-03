@@ -250,4 +250,27 @@ export class LanceDbStore implements VectorStore {
       return this.search(project, vector, topK);
     }
   }
+
+  async getChunkById(project: string, id: string): Promise<import("../types.js").Chunk | null> {
+    const table = await this.getTable(project);
+    if (!table) return null;
+    try {
+      const rows = await table.query().where(`id = '${id.replace(/'/g, "''")}'`).limit(1).toArray();
+      if (rows.length === 0) return null;
+      const r = rows[0];
+      return {
+        id: r.id as string,
+        vector: Array.from(r.vector as number[]),
+        content: r.content as string,
+        source: r.source as string,
+        module: r.module as string,
+        content_hash: r.content_hash as string,
+        updated_at: r.updated_at as number,
+        symbol_name: r.symbol_name as string | undefined,
+        signature: r.signature as string | undefined,
+        start_line: r.start_line as number | undefined,
+        end_line: r.end_line as number | undefined,
+      };
+    } catch { return null; }
+  }
 }
