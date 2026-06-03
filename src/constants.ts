@@ -85,3 +85,23 @@ export const SNIPPET_MAX_LINES = 5;
 
 /** When true, fail fast on vector dim mismatches instead of silently degrading. */
 export const HARDNESS = process.env.PROJECT_BRAIN_HARDNESS === "1";
+
+/**
+ * Server-level instructions injected into MCP clients so AI agents understand
+ * when and how to use project-brain vs structural/AST tools.
+ */
+export const SERVER_INSTRUCTIONS = `project-brain — semantic memory of THIS project's code and docs. Retrieves by MEANING, not by string match.
+
+WHEN TO USE: conceptual, cross-file, or fuzzy questions — "how does X work", "where is the logic that handles Y", "what deals with Z" — ESPECIALLY when you don't know the exact symbol name.
+
+WHEN NOT TO USE (prefer an AST/structural tool or grep): exact symbol definition, who-calls-this, call graph, rename/refactor impact. project-brain and structural tools are COMPLEMENTARY — structural answers "exact symbol X", project-brain answers "the area/concept that does Y".
+
+WORKFLOW (token-efficient): call search_context first → it returns ranked snippets, each with a chunk_id. Read the snippets; for only the ones you actually need, call expand_context(chunk_id) for the full body — do NOT re-read whole files.
+
+Tools by intent:
+- search_context — semantic/conceptual lookup; returns snippets + chunk_id. PRIMARY.
+- expand_context — full body of a chunk_id from search_context.
+- list_modules / get_module — browse the indexed structure by module.
+- add_knowledge — persist a note/decision into the brain for future sessions.
+- delete_knowledge — remove chunks by source (deleted/renamed files).
+- check_health — embedding service + index status; run if results look empty or stale.`;

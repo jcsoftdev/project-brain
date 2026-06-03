@@ -76,7 +76,7 @@ export async function handleIngest(args: IngestArgs, deps: ToolDeps): Promise<To
 export function register(server: McpServer, deps: ToolDeps): void {
   server.tool(
     "add_knowledge",
-    "Add a piece of knowledge to the project brain",
+    "Persist a note, decision, or context chunk into this project's brain so future sessions retrieve it semantically.",
     {
       project: z.string().describe("Project identifier"),
       content: z.string().describe("Text content to store"),

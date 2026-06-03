@@ -24,7 +24,7 @@ export async function handleExpand(args: ExpandArgs, deps: ToolDeps): Promise<To
 export function register(server: McpServer, deps: ToolDeps): void {
   server.tool(
     "expand_context",
-    "Fetch the full body of a chunk returned by search_context",
+    "Get the full body of a chunk_id returned by search_context. Use after search_context to read the exact code you selected instead of re-reading entire files.",
     {
       project: z.string().describe("Project identifier"),
       chunk_id: z.string().describe("chunk_id from search_context results"),

@@ -35,7 +35,7 @@ export async function handleHealth(
 export function register(server: McpServer, deps: ToolDeps): void {
   server.tool(
     "check_health",
-    "Check project brain health status",
+    "Check embedding service + index status. Run when search_context returns empty/weak results to diagnose a down Ollama or stale/missing index.",
     {
       project: z.string().describe("Project identifier"),
     },

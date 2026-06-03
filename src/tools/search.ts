@@ -54,7 +54,7 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
 export function register(server: McpServer, deps: ToolDeps): void {
   server.tool(
     "search_context",
-    "Search project knowledge base by semantic similarity",
+    "Semantic/conceptual search of THIS project (code + docs). Use for cross-file or fuzzy context when you may not know the exact symbol name (e.g. 'how does auth work', 'where is X handled'). Returns ranked snippets each with a chunk_id; follow up with expand_context for full bodies. For exact symbol/caller/AST lookups, prefer a structural tool.",
     {
       project: z.string().describe("Project identifier"),
       query: z.string().describe("Search query text"),

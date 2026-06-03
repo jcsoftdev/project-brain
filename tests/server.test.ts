@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { createServer } from "../src/server.js";
+import { SERVER_INSTRUCTIONS } from "../src/constants.js";
 import type { EmbeddingClient } from "../src/types.js";
 
 const stubEmbeddings: EmbeddingClient = {
@@ -30,5 +31,10 @@ describe("Server", () => {
       expect(toolNames).toContain(name);
     }
     expect(toolNames.length).toBe(7);
+  });
+
+  it("wires SERVER_INSTRUCTIONS into the server (instructions const is passed)", async () => {
+    const { instructions } = await createServer({ dbPath: "/tmp/brain-test-server", embeddings: stubEmbeddings });
+    expect(instructions).toBe(SERVER_INSTRUCTIONS);
   });
 });

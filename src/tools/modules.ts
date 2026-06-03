@@ -39,7 +39,7 @@ export async function handleGetModule(
 export function register(server: McpServer, deps: ToolDeps): void {
   server.tool(
     "list_modules",
-    "List all modules in a project",
+    "List this project's indexed modules. Use to orient before a targeted get_module or search_context.",
     {
       project: z.string().describe("Project identifier"),
     },
@@ -48,7 +48,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
 
   server.tool(
     "get_module",
-    "Get all chunks for a specific module",
+    "Retrieve all chunks for one known module. Use when you need a full module rather than a semantic slice.",
     {
       project: z.string().describe("Project identifier"),
       module: z.string().describe("Module name"),

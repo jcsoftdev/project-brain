@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { LanceDbStore } from "./store/lancedb.js";
 import { createEmbeddingClient } from "./embeddings/factory.js";
-import { DB_PATH, OLLAMA_HOST, VERSION } from "./constants.js";
+import { DB_PATH, OLLAMA_HOST, VERSION, SERVER_INSTRUCTIONS } from "./constants.js";
 import { register as registerSearch } from "./tools/search.js";
 import { register as registerIngest } from "./tools/ingest.js";
 import { register as registerModules } from "./tools/modules.js";
@@ -23,10 +23,10 @@ export async function createServer(options: ServerOptions = {}) {
   const dbPath = options.dbPath || DB_PATH;
   const ollamaHost = options.ollamaHost || OLLAMA_HOST;
 
-  const server = new McpServer({
-    name: "project-brain",
-    version: VERSION,
-  });
+  const server = new McpServer(
+    { name: "project-brain", version: VERSION },
+    { instructions: SERVER_INSTRUCTIONS }
+  );
 
   const store = new LanceDbStore(dbPath);
   const embeddings = options.embeddings ?? await createEmbeddingClient(undefined, { host: ollamaHost, autoPull: false });
@@ -51,5 +51,5 @@ export async function createServer(options: ServerOptions = {}) {
     "expand_context",
   ];
 
-  return { server, store, embeddings, toolNames };
+  return { server, store, embeddings, toolNames, instructions: SERVER_INSTRUCTIONS };
 }

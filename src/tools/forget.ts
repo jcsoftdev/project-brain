@@ -27,7 +27,7 @@ export async function handleForget(
 export function register(server: McpServer, deps: ToolDeps): void {
   server.tool(
     "delete_knowledge",
-    "Delete all chunks from a specific source",
+    "Remove all chunks from a given source (e.g. a deleted or renamed file) to keep the index accurate.",
     {
       project: z.string().describe("Project identifier"),
       source: z.string().describe("Source file or identifier to delete"),

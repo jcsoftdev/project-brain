@@ -12,6 +12,10 @@ This project is indexed with project-brain.
 
 Use the project-brain MCP tools (search_context, add_knowledge, list_modules, get_module, delete_knowledge, check_health) for codebase knowledge retrieval.
 
+### Usage
+
+Use \`search_context\` for semantic/conceptual or cross-file questions (when you don't know the exact symbol); for exact symbol/caller lookups prefer a structural/AST tool or grep. After \`search_context\`, use \`expand_context(chunk_id)\` to read full bodies instead of re-reading whole files.
+
 ### Project Context
 
 - **Project ID**: {{projectId}}
