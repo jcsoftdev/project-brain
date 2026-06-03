@@ -200,33 +200,32 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       }
     }
 
-    // Step 3: store with bounded concurrency
-    let fileOffset = 0;
-    for (let j = 0; j < waveChanged.length; j += STORE_CONCURRENCY) {
-      const storeBatch = waveChanged.slice(j, j + STORE_CONCURRENCY);
-      await Promise.all(
-        storeBatch.map(async (entry, k) => {
-          const base = fileOffset + k > 0
-            ? waveChanged.slice(0, j + k).reduce((s, e) => s + e.rawChunks.length, 0)
-            : 0;
-          const chunks: Chunk[] = entry.rawChunks
-            .map((raw, ci) => ({ raw, vec: waveVectors[base + ci] }))
-            .filter(({ vec }) => vec !== null)
-            .map(({ raw, vec }) => ({
-              id: raw.id, vector: vec!, content: raw.content,
-              source: entry.relPath, module: raw.module,
-              content_hash: raw.content_hash, updated_at: raw.updated_at,
-            }));
+    // Step 3: ONE batchReplace per wave → ONE LanceDB fragment (vs N fragments)
+    const waveSources: string[] = [];
+    const waveChunks: Chunk[] = [];
+    let chunkOffset = 0;
 
-          if (chunks.length === 0) return;
-          await store.deleteBySource(projectId, entry.relPath);
-          await store.upsert(projectId, chunks);
-          newManifest[entry.relPath] = entry.hash;
-          ingested++;
-          onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
-        })
-      );
-      fileOffset += storeBatch.length;
+    for (const entry of waveChanged) {
+      const entryChunks: Chunk[] = entry.rawChunks
+        .map((raw, ci) => ({ raw, vec: waveVectors[chunkOffset + ci] }))
+        .filter(({ vec }) => vec !== null)
+        .map(({ raw, vec }) => ({
+          id: raw.id, vector: vec!, content: raw.content,
+          source: entry.relPath, module: raw.module,
+          content_hash: raw.content_hash, updated_at: raw.updated_at,
+        }));
+      chunkOffset += entry.rawChunks.length;
+
+      if (entryChunks.length === 0) continue;
+      waveSources.push(entry.relPath);
+      waveChunks.push(...entryChunks);
+      newManifest[entry.relPath] = entry.hash;
+      ingested++;
+      onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
+    }
+
+    if (waveChunks.length > 0) {
+      await store.batchReplace(projectId, waveSources, waveChunks);
     }
     // Wave done — GC can reclaim waveChanged and waveVectors
   }

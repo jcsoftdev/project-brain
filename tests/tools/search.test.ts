@@ -18,6 +18,7 @@ function makeMockStore(results: SearchResult[] = mockResults): VectorStore {
     getModuleChunks: async () => [],
     countChunks: async () => 10,
     optimize: async () => {},
+      batchReplace: async () => {},
   };
 }
 

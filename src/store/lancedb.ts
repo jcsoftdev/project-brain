@@ -76,19 +76,32 @@ export class LanceDbStore implements VectorStore {
     if (!table) {
       throw new Error(`Table for project '${project}' does not exist. Call ensureTable first.`);
     }
-    // Single DELETE with IN clause (N deletes → 1)
     const ids = chunks.map((c) => `'${c.id.replace(/'/g, "''")}'`).join(", ");
     await table.delete(`id IN (${ids})`);
-    const records = chunks.map((c) => ({
-      id: c.id,
-      vector: c.vector,
-      content: c.content,
-      source: c.source,
-      module: c.module,
-      content_hash: c.content_hash,
-      updated_at: c.updated_at,
-    }));
-    await table.add(records);
+    await table.add(chunks.map((c) => ({
+      id: c.id, vector: c.vector, content: c.content,
+      source: c.source, module: c.module,
+      content_hash: c.content_hash, updated_at: c.updated_at,
+    })));
+  }
+
+  /** Delete N sources then insert all chunks in ONE add() call — 1 fragment per wave. */
+  async batchReplace(project: string, sources: string[], chunks: Chunk[]): Promise<void> {
+    if (chunks.length === 0) return;
+    const table = await this.getTable(project);
+    if (!table) {
+      throw new Error(`Table for project '${project}' does not exist. Call ensureTable first.`);
+    }
+    // Delete all sources in parallel (each delete is one SQL call)
+    await Promise.all(
+      sources.map((src) => table.delete(`source = '${src.replace(/'/g, "''")}'`))
+    );
+    // ONE add() for all chunks → ONE fragment (vs N fragments with per-file upsert)
+    await table.add(chunks.map((c) => ({
+      id: c.id, vector: c.vector, content: c.content,
+      source: c.source, module: c.module,
+      content_hash: c.content_hash, updated_at: c.updated_at,
+    })));
   }
 
   async search(project: string, vector: number[], topK: number): Promise<SearchResult[]> {

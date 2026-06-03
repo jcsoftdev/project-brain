@@ -12,6 +12,7 @@ function makeMockStore(count = 42): VectorStore {
     getModuleChunks: async () => [],
     countChunks: async () => count,
     optimize: async () => {},
+      batchReplace: async () => {},
   };
 }
 

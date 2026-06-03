@@ -28,6 +28,8 @@ export interface EmbeddingClient {
 export interface VectorStore {
   ensureTable(project: string): Promise<void>;
   upsert(project: string, chunks: Chunk[]): Promise<void>;
+  /** Delete all sources then add all chunks in ONE table.add() — minimizes fragments. */
+  batchReplace(project: string, sources: string[], chunks: Chunk[]): Promise<void>;
   search(project: string, vector: number[], topK: number): Promise<SearchResult[]>;
   deleteBySource(project: string, source: string): Promise<void>;
   listModules(project: string): Promise<string[]>;

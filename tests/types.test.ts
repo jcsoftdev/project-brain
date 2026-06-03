@@ -49,6 +49,7 @@ describe("types", () => {
       getModuleChunks: async () => [],
       countChunks: async () => 0,
       optimize: async () => {},
+      batchReplace: async () => {},
     };
 
     const mockEmbeddings: EmbeddingClient = {

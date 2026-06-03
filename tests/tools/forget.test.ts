@@ -15,6 +15,7 @@ function makeMockStore(chunksWithSource: number = 3): VectorStore & { deletedSou
     getModuleChunks: async () => [],
     countChunks: async () => chunksWithSource,
     optimize: async () => {},
+      batchReplace: async () => {},
   };
   return store;
 }

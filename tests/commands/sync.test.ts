@@ -38,6 +38,10 @@ function makeMemoryStore(): VectorStore & { data: Map<string, Chunk[]> } {
     },
     countChunks: async (project) => (data.get(project) ?? []).length,
     optimize: async () => {},
+      batchReplace: async (project, sources, chunks) => {
+        const existing = (data.get(project) ?? []).filter((c) => !sources.includes(c.source));
+        data.set(project, [...existing, ...chunks]);
+      },
   };
 }
 

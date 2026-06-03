@@ -33,6 +33,7 @@ function makeMemoryStore(): VectorStore {
     },
     countChunks: async (project) => (data.get(project) ?? []).length,
     optimize: async () => {},
+      batchReplace: async () => {},
   };
 }
 

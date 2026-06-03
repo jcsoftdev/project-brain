@@ -138,6 +138,9 @@ function makeFakeStore(): VectorStore & { upsertCalls: number } {
     async upsert(_project: string, _chunks: Chunk[]) {
       this.upsertCalls++;
     },
+    async batchReplace(_project: string, _sources: string[], _chunks: Chunk[]) {
+      this.upsertCalls++;
+    },
     async search() { return [] as SearchResult[]; },
     async deleteBySource() {},
     async listModules() { return []; },
