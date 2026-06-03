@@ -19,13 +19,14 @@
     "ollama"
   ],
   "files": [
+    "bin",
     "src",
     "templates",
     "README.md",
     "LICENSE"
   ],
   "bin": {
-    "project-brain": "./src/cli.ts"
+    "project-brain": "./bin/project-brain.js"
   },
   "scripts": {
     "dev": "bun run src/cli.ts",
