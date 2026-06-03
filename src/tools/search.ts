@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
+import { applyThreshold, mmr } from "../retrieval/rank.js";
+import { fillBudget } from "../retrieval/budget.js";
+import { SCORE_THRESHOLD, MMR_LAMBDA, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES } from "../constants.js";
 
 interface SearchArgs {
   project: string;
@@ -34,7 +37,10 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
     };
   }
 
-  const results = await deps.store.search(project, vectors[0], limit);
+  const fused = await deps.store.hybridSearch(project, vectors[0], query, Math.max(limit * 3, 20));
+  const kept = applyThreshold(fused, SCORE_THRESHOLD);
+  const diverse = mmr(kept, limit, MMR_LAMBDA);
+  const results = fillBudget(diverse, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES);
   return {
     content: [{ type: "text", text: JSON.stringify({ results }) }],
   };
