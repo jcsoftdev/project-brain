@@ -8,7 +8,9 @@ export interface ModelSpec {
 export const DEFAULT_MODEL_KEY = "qwen3-embedding";
 
 const REGISTRY: Record<string, ModelSpec> = {
-  "qwen3-embedding": { key: "qwen3-embedding", model: "qwen3-embedding" },
+  // Default: 0.6b variant — 1024-dim, fast, code-capable. The bare tag resolves
+  // to the 8B model (4096-dim) which is far too slow for bulk indexing batches.
+  "qwen3-embedding": { key: "qwen3-embedding", model: "qwen3-embedding:0.6b" },
   "nomic-text": { key: "nomic-text", model: "nomic-embed-text", dim: 768 },
 };
 

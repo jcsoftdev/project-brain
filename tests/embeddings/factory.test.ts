@@ -60,7 +60,7 @@ describe("createEmbeddingClient factory", () => {
     expect(client.dim).toBe(768);
   });
 
-  it("defaults to qwen3-embedding as the code model key", async () => {
+  it("defaults to qwen3-embedding as the code model key (0.6b fast variant)", async () => {
     const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
 
     const client = await createEmbeddingClient(undefined, {
@@ -68,7 +68,8 @@ describe("createEmbeddingClient factory", () => {
       host: "http://127.0.0.1:11434",
     });
 
-    expect(client.model).toBe("qwen3-embedding");
+    // Default resolves to the fast 0.6b variant, not the slow bare 8B tag
+    expect(client.model).toBe("qwen3-embedding:0.6b");
   });
 
   // ── RED: auto-detect dim via injected embed ──────────────────────────────────
