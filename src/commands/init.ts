@@ -160,7 +160,7 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
         const { createEmbeddingClient } = await import("../embeddings/factory.js");
         const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
         store = new LanceDbStore(DB_PATH);
-        embeddings = await createEmbeddingClient(undefined, { host: OLLAMA_HOST, autoPull: true });
+        embeddings = await createEmbeddingClient(process.env.BRAIN_EMBED_MODEL || undefined, { host: OLLAMA_HOST, autoPull: true });
       }
 
       // If already indexed (manifest exists), use incremental sync — not full reindex

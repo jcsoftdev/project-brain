@@ -400,7 +400,7 @@ export async function execute(args: string[]): Promise<void> {
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
   const { createEmbeddingClient } = await import("../embeddings/factory.js");
   const store = new LanceDbStore(DB_PATH);
-  const embeddings = await createEmbeddingClient(undefined, { host: OLLAMA_HOST, autoPull: true });
+  const embeddings = await createEmbeddingClient(process.env.BRAIN_EMBED_MODEL || undefined, { host: OLLAMA_HOST, autoPull: true });
 
   console.log(`Syncing project: ${projectId}\n`);
 

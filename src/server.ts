@@ -30,7 +30,10 @@ export async function createServer(options: ServerOptions = {}) {
   );
 
   const store = new LanceDbStore(dbPath);
-  const embeddings = options.embeddings ?? await createEmbeddingClient(undefined, { host: ollamaHost, autoPull: false });
+  const embeddings = options.embeddings ?? await createEmbeddingClient(
+    options.embedModel || process.env.BRAIN_EMBED_MODEL || undefined,
+    { host: ollamaHost, autoPull: false }
+  );
 
   const embeddingsFor = makeEmbeddingResolver({
     dbPath,

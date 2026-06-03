@@ -16,9 +16,13 @@ const REGISTRY: Record<string, ModelSpec> = {
 
 export function resolveModel(key: string | undefined): ModelSpec {
   const k = key ?? DEFAULT_MODEL_KEY;
+  if (!k) throw new Error(`Embedding model key must be a non-empty string. Known registry keys: ${Object.keys(REGISTRY).join(", ")}`);
   const spec = REGISTRY[k];
-  if (!spec) throw new Error(`Unknown embedding model '${k}'. Known: ${Object.keys(REGISTRY).join(", ")}`);
-  return spec;
+  // Known registry key → return the spec as-is
+  if (spec) return spec;
+  // Unknown key but non-empty → treat as a raw Ollama model name (e.g. "nomic-embed-text", "qwen3-embedding:0.6b")
+  // dim is left undefined — it will be auto-detected downstream via detectDim.
+  return { key: k, model: k };
 }
 
 export function registerModel(spec: ModelSpec): void { REGISTRY[spec.key] = spec; }

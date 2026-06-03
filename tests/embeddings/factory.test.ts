@@ -143,6 +143,20 @@ describe("createEmbeddingClient factory", () => {
     expect(pullCalled).toBe(false);
     expect(client.model).toBe("nomic-embed-text");
   });
+
+  it("accepts a raw ollama model name (not a registry key) as modelKey", async () => {
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+
+    // "nomic-embed-text" is a raw ollama model name, not a registry key like "nomic-text"
+    const client = await createEmbeddingClient("nomic-embed-text", {
+      isModelAvailable: alwaysAvailable,
+      host: "http://127.0.0.1:11434",
+      embed: makeEmbed(512),
+    });
+
+    expect(client.model).toBe("nomic-embed-text");
+    expect(client.dim).toBe(512); // detected via injected embed
+  });
 });
 
 describe("ensureEmbeddingModel", () => {
