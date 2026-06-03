@@ -1,7 +1,7 @@
 import { computeHash } from "./hash.js";
 
-const MAX_CHUNK_SIZE = 6000;
-const OVERLAP_SIZE = 200;
+const MAX_CHUNK_SIZE = 1600;
+const OVERLAP_SIZE = 120;
 
 interface RawChunk {
   id: string;
@@ -10,6 +10,20 @@ interface RawChunk {
   module: string;
   content_hash: string;
   updated_at: number;
+  symbol_name?: string;
+  symbol_kind?: string;
+  signature?: string;
+  start_line?: number;
+  end_line?: number;
+}
+
+interface Section {
+  content: string;
+  symbol_name?: string;
+  symbol_kind?: string;
+  signature?: string;
+  start_line?: number;
+  end_line?: number;
 }
 
 /** Markdown file extensions. */
@@ -35,16 +49,17 @@ export function chunkContent(
   const now = Date.now();
 
   for (let i = 0; i < sections.length; i++) {
-    let sectionContent = sections[i];
+    const section = sections[i];
+    const sectionContent = section.content;
 
     // If a section exceeds max size, split it further
     if (sectionContent.length > MAX_CHUNK_SIZE) {
       const subChunks = splitBySize(sectionContent);
       for (let j = 0; j < subChunks.length; j++) {
-        chunks.push(makeChunk(subChunks[j], source, module, now, i, j));
+        chunks.push(makeChunk(subChunks[j], source, module, now, i, j, section));
       }
     } else {
-      chunks.push(makeChunk(sectionContent, source, module, now, i));
+      chunks.push(makeChunk(sectionContent, source, module, now, i, undefined, section));
     }
   }
 
@@ -69,7 +84,8 @@ function makeChunk(
   module: string,
   now: number,
   sectionIdx: number,
-  subIdx?: number
+  subIdx?: number,
+  section?: Section
 ): RawChunk {
   const suffix = subIdx !== undefined ? `-${sectionIdx}-${subIdx}` : `-${sectionIdx}`;
   const id = `${computeHash(source)}${suffix}`;
@@ -80,28 +96,66 @@ function makeChunk(
     module,
     content_hash: computeHash(content),
     updated_at: now,
+    symbol_name: section?.symbol_name,
+    symbol_kind: section?.symbol_kind,
+    signature: section?.signature,
+    start_line: section?.start_line,
+    end_line: section?.end_line,
   };
 }
 
 /** Split markdown content by headings. */
-function splitMarkdown(content: string): string[] {
+function splitMarkdown(content: string): Section[] {
   const lines = content.split("\n");
-  const sections: string[] = [];
+  const sections: Section[] = [];
   let current: string[] = [];
+  let currentStartLine = 1;
+  let currentSymbolName: string | undefined;
 
-  for (const line of lines) {
-    if (/^#{1,3}\s/.test(line) && current.length > 0) {
-      const section = current.join("\n").trim();
-      if (section.length > 0) sections.push(section);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+    const headingMatch = /^(#{1,3})\s+(.+)/.exec(line);
+
+    if (headingMatch && current.length > 0) {
+      const sectionContent = current.join("\n").trim();
+      if (sectionContent.length > 0) {
+        sections.push({
+          content: sectionContent,
+          symbol_kind: "section",
+          symbol_name: currentSymbolName,
+          signature: currentSymbolName,
+          start_line: currentStartLine,
+          end_line: lineNum - 1,
+        });
+      }
+      currentStartLine = lineNum;
+      currentSymbolName = headingMatch[2].trim();
       current = [line];
     } else {
+      if (current.length === 0) {
+        currentStartLine = lineNum;
+        const headingMatchFirst = /^(#{1,3})\s+(.+)/.exec(line);
+        if (headingMatchFirst) {
+          currentSymbolName = headingMatchFirst[2].trim();
+        }
+      }
       current.push(line);
     }
   }
 
   if (current.length > 0) {
-    const section = current.join("\n").trim();
-    if (section.length > 0) sections.push(section);
+    const sectionContent = current.join("\n").trim();
+    if (sectionContent.length > 0) {
+      sections.push({
+        content: sectionContent,
+        symbol_kind: "section",
+        symbol_name: currentSymbolName,
+        signature: currentSymbolName,
+        start_line: currentStartLine,
+        end_line: lines.length,
+      });
+    }
   }
 
   return sections;
@@ -187,35 +241,116 @@ function getPatternsForExt(ext: string): RegExp[] {
   return DECLARATION_PATTERNS[ext.toLowerCase()] ?? DECLARATION_PATTERNS[".ts"]!;
 }
 
+/**
+ * Count net brace depth for a line, ignoring braces inside string/char literals
+ * and line/block comments.
+ */
+function countBraces(line: string, state: { inBlock: boolean }): number {
+  let depth = 0;
+  let inStr: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    const next = line[i + 1];
+    if (state.inBlock) {
+      if (ch === "*" && next === "/") { state.inBlock = false; i++; }
+      continue;
+    }
+    if (inStr) {
+      if (ch === "\\") { i++; continue; }
+      if (ch === inStr) inStr = null;
+      continue;
+    }
+    if (ch === "/" && next === "/") break;            // line comment
+    if (ch === "/" && next === "*") { state.inBlock = true; i++; continue; }
+    if (ch === '"' || ch === "'" || ch === "`") { inStr = ch; continue; }
+    if (ch === "{") depth++;
+    if (ch === "}") depth--;
+  }
+  return depth;
+}
+
+/**
+ * Extract symbol name and kind from a declaration line (best-effort, language-agnostic).
+ */
+function extractSymbol(line: string): { name: string; kind: string } {
+  const t = line.trim();
+  const m = t.match(/\b(function|class|interface|type|enum|struct|trait|impl|fn|def|func|val|var|const)\b\s+([A-Za-z_][\w]*)/)
+    ?? t.match(/\b([A-Za-z_][\w]*)\s*[:=]\s*(?:async\s*)?\(/)   // const f = (..) =>
+    ?? t.match(/\b([A-Za-z_][\w]*)\s*\(/);                      // method(...)
+  if (!m) return { name: "", kind: "unknown" };
+  const kw = /^(function|class|interface|type|enum|struct|trait|impl|fn|def|func|val|var|const)$/.test(m[1] ?? "");
+  return { name: (kw ? m[2] : m[1]) ?? "", kind: kw ? (m[1] as string) : "function" };
+}
+
 /** Split code content by function/class boundaries (language-aware). */
-function splitCode(content: string, ext = ""): string[] {
+function splitCode(content: string, ext = ""): Section[] {
   const patterns = getPatternsForExt(ext);
   const lines = content.split("\n");
-  const sections: string[] = [];
+  const sections: Section[] = [];
   let current: string[] = [];
   let braceDepth = 0;
+  const braceState = { inBlock: false };
 
-  for (const line of lines) {
+  // Track symbol metadata for current section
+  let currentSymbolName: string | undefined;
+  let currentSymbolKind: string | undefined;
+  let currentSignature: string | undefined;
+  let currentStartLine = 1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
     const trimmed = line.trimStart();
     const isDeclaration = braceDepth === 0 && patterns.some((re) => re.test(trimmed));
 
     if (isDeclaration && current.length > 0) {
-      const section = current.join("\n").trim();
-      if (section.length > 0) sections.push(section);
+      const sectionContent = current.join("\n").trim();
+      if (sectionContent.length > 0) {
+        sections.push({
+          content: sectionContent,
+          symbol_name: currentSymbolName,
+          symbol_kind: currentSymbolKind,
+          signature: currentSignature,
+          start_line: currentStartLine,
+          end_line: lineNum - 1,
+        });
+      }
+      // Start new section
+      const sym = extractSymbol(line);
+      currentSymbolName = sym.name || undefined;
+      currentSymbolKind = sym.kind !== "unknown" ? sym.kind : undefined;
+      currentSignature = line.trim().slice(0, 160) || undefined;
+      currentStartLine = lineNum;
       current = [line];
     } else {
+      if (current.length === 0) {
+        // First line of the whole file — check if it's a declaration
+        if (isDeclaration || braceDepth === 0) {
+          const sym = extractSymbol(line);
+          currentSymbolName = sym.name || undefined;
+          currentSymbolKind = sym.kind !== "unknown" ? sym.kind : undefined;
+          currentSignature = line.trim().slice(0, 160) || undefined;
+          currentStartLine = lineNum;
+        }
+      }
       current.push(line);
     }
 
-    for (const char of line) {
-      if (char === "{") braceDepth++;
-      if (char === "}") braceDepth = Math.max(0, braceDepth - 1);
-    }
+    braceDepth = Math.max(0, braceDepth + countBraces(line, braceState));
   }
 
   if (current.length > 0) {
-    const section = current.join("\n").trim();
-    if (section.length > 0) sections.push(section);
+    const sectionContent = current.join("\n").trim();
+    if (sectionContent.length > 0) {
+      sections.push({
+        content: sectionContent,
+        symbol_name: currentSymbolName,
+        symbol_kind: currentSymbolKind,
+        signature: currentSignature,
+        start_line: currentStartLine,
+        end_line: lines.length,
+      });
+    }
   }
 
   return sections;
