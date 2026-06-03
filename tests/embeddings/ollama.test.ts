@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
+import { describe, it, expect, afterEach, mock } from "bun:test";
 import { VECTOR_DIM, HEALTH_COOLDOWN_MS } from "../../src/constants.js";
 
 // We'll test OllamaEmbeddingClient with a mock Ollama HTTP server
@@ -176,5 +176,12 @@ describe("OllamaEmbeddingClient — circuit breaker cooldown", () => {
     // Client should still be in healthy state — subsequent calls work
     const r2 = await client.embed(["world"]);
     expect(r2).not.toBeNull();
+  });
+});
+
+describe("OllamaEmbeddingClient.dim", () => {
+  it("reports configured dim", () => {
+    const c = new OllamaEmbeddingClient("http://x", 30000, "nomic-embed-code", 768);
+    expect(c.dim).toBe(768);
   });
 });

@@ -33,6 +33,8 @@ export interface SearchResult {
 
 /** Embedding client contract — returns null on failure for graceful degradation. */
 export interface EmbeddingClient {
+  readonly dim: number;
+  readonly model?: string;
   embed(texts: string[]): Promise<number[][] | null>;
   isAvailable(): Promise<boolean>;
 }

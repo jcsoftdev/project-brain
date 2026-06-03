@@ -1,17 +1,19 @@
-import { EMBEDDING_MODEL, HEALTH_COOLDOWN_MS } from "../constants.js";
+import { EMBEDDING_MODEL, HEALTH_COOLDOWN_MS, VECTOR_DIM } from "../constants.js";
 import type { EmbeddingClient } from "../types.js";
 
 /** Ollama-backed embedding client with circuit breaker cooldown. */
 export class OllamaEmbeddingClient implements EmbeddingClient {
   private readonly host: string;
-  private readonly model: string;
+  readonly model: string;
   private readonly cooldownMs: number;
+  readonly dim: number;
   private lastFailure: number | null = null;
 
-  constructor(host: string, cooldownMs: number = HEALTH_COOLDOWN_MS, model: string = EMBEDDING_MODEL) {
+  constructor(host: string, cooldownMs: number = HEALTH_COOLDOWN_MS, model: string = EMBEDDING_MODEL, dim: number = VECTOR_DIM) {
     this.host = host;
     this.model = model;
     this.cooldownMs = cooldownMs;
+    this.dim = dim;
   }
 
   async embed(texts: string[]): Promise<number[][] | null> {
