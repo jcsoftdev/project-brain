@@ -55,10 +55,9 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
 
   if (!options.skipRegistration) {
     const registrars = await getRegistrars();
-    const serverPath = join(
-      import.meta.dir,
-      "../../src/cli.ts"
-    );
+    const serverPath =
+      Bun.which("project-brain") ??
+      join(import.meta.dir, "../../src/cli.ts");
 
     for (const registrar of registrars) {
       const installed = await registrar.isInstalled();
