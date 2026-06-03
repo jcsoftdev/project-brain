@@ -8,6 +8,7 @@ import { detectModules, writeModuleStubs } from "../indexer/modules.js";
 import { runReindex } from "./reindex.js";
 import type { VectorStore, EmbeddingClient } from "../types.js";
 import type { ReindexResult } from "./reindex.js";
+import type { SyncProgress } from "./sync.js";
 
 const CONFIG_DIR = ".project-brain";
 const CONFIG_FILE = "project.json";
@@ -23,6 +24,8 @@ export interface InitOptions {
   skipIndex?: boolean;
   /** DI seam: inject fake store and embeddings for tests. */
   indexDeps?: { store: VectorStore; embeddings: EmbeddingClient };
+  /** Progress callback forwarded to runReindex. */
+  onProgress?: (p: SyncProgress) => void;
 }
 
 export interface InitResult {
@@ -133,7 +136,7 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
         embeddings = new OllamaEmbeddingClient(OLLAMA_HOST);
       }
 
-      indexStats = await runReindex({ root, projectId, store, embeddings });
+      indexStats = await runReindex({ root, projectId, store, embeddings, onProgress: options.onProgress });
       indexed = true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -160,8 +163,12 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`Initializing project-brain in: ${root}\n`);
 
-  const result = await runInit({ root, skipIndex });
+  const { makeProgressPrinter } = await import("../indexer/progress.js");
+  const { onProgress, clear } = makeProgressPrinter();
 
+  const result = await runInit({ root, skipIndex, onProgress });
+
+  clear();
   console.log(`Project ID: ${result.projectId}`);
   console.log(`Config:     ${result.configPath}`);
   console.log(

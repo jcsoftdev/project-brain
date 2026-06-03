@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { writeFile, mkdir } from "node:fs/promises";
 import { runSync } from "./sync.js";
+import type { SyncProgress } from "./sync.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
 
 const CONFIG_DIR = ".project-brain";
@@ -15,6 +16,8 @@ export interface ReindexOptions {
   store: VectorStore;
   /** Injected embedding client (for DI / testing). */
   embeddings: EmbeddingClient;
+  /** Progress callback forwarded to runSync. */
+  onProgress?: (p: SyncProgress) => void;
 }
 
 export interface ReindexResult {
@@ -34,7 +37,7 @@ export interface ReindexResult {
  * then runs a full sync. This is equivalent to a "cold start" index.
  */
 export async function runReindex(options: ReindexOptions): Promise<ReindexResult> {
-  const { root, projectId, store, embeddings } = options;
+  const { root, projectId, store, embeddings, onProgress } = options;
 
   // 1. Clear the hash manifest so runSync treats all files as new
   const manifestDir = join(root, CONFIG_DIR);
@@ -42,7 +45,7 @@ export async function runReindex(options: ReindexOptions): Promise<ReindexResult
   await writeFile(join(manifestDir, HASH_MANIFEST), JSON.stringify({}));
 
   // 2. Run a full sync — no files will be skipped (all hashes are cleared)
-  const result = await runSync({ root, projectId, store, embeddings });
+  const result = await runSync({ root, projectId, store, embeddings, onProgress });
 
   return result;
 }
@@ -74,10 +77,14 @@ export async function execute(args: string[]): Promise<void> {
   const store = new LanceDbStore(DB_PATH);
   const embeddings = new OllamaEmbeddingClient(OLLAMA_HOST);
 
-  console.log(`Re-indexing project: ${projectId} (full scan)`);
+  console.log(`Re-indexing project: ${projectId} (full scan)\n`);
 
-  const result = await runReindex({ root, projectId, store, embeddings });
+  const { makeProgressPrinter } = await import("../indexer/progress.js");
+  const { onProgress, clear } = makeProgressPrinter();
 
+  const result = await runReindex({ root, projectId, store, embeddings, onProgress });
+
+  clear();
   console.log(`  Scanned:  ${result.scanned} files`);
   console.log(`  Ingested: ${result.ingested} files`);
   console.log("\nReindex complete.");

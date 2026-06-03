@@ -346,13 +346,8 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`Syncing project: ${projectId}\n`);
 
-  const isTTY = process.stdout.isTTY;
-  const clear = () => isTTY && process.stdout.write("\r\x1b[K");
-  const print = (msg: string) => {
-    clear();
-    if (isTTY) process.stdout.write(msg);
-    else console.log(msg);
-  };
+  const { makeProgressPrinter } = await import("../indexer/progress.js");
+  const { onProgress, clear } = makeProgressPrinter();
 
   const result = await runSync({
     root,
@@ -360,24 +355,7 @@ export async function execute(args: string[]): Promise<void> {
     store,
     embeddings,
     changedFiles: changedOnly ? [] : undefined,
-    onProgress({ phase, current, total }) {
-      const pct = total > 0 ? Math.round((current / total) * 100) : 0;
-      const bar = "█".repeat(Math.floor(pct / 5)) + "░".repeat(20 - Math.floor(pct / 5));
-      switch (phase) {
-        case "scanning":
-          print(total === 0 ? `  Scanning files...` : `  Scanned  ${current} files`);
-          break;
-        case "reading":
-          print(`  Reading   [${bar}] ${pct}%  ${current}/${total} files`);
-          break;
-        case "embedding":
-          print(`  Embedding [${bar}] ${pct}%  ${current}/${total} chunks`);
-          break;
-        case "storing":
-          print(`  Storing   [${bar}] ${pct}%  ${current}/${total} files`);
-          break;
-      }
-    },
+    onProgress,
   });
 
   clear();
