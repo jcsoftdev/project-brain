@@ -91,6 +91,11 @@ export class LanceDbStore implements VectorStore {
       id: c.id, vector: c.vector, content: c.content,
       source: c.source, module: c.module,
       content_hash: c.content_hash, updated_at: c.updated_at,
+      symbol_name: c.symbol_name ?? "",
+      symbol_kind: c.symbol_kind ?? "",
+      signature: c.signature ?? "",
+      start_line: c.start_line ?? 0,
+      end_line: c.end_line ?? 0,
     })));
   }
 
@@ -110,6 +115,11 @@ export class LanceDbStore implements VectorStore {
       id: c.id, vector: c.vector, content: c.content,
       source: c.source, module: c.module,
       content_hash: c.content_hash, updated_at: c.updated_at,
+      symbol_name: c.symbol_name ?? "",
+      symbol_kind: c.symbol_kind ?? "",
+      signature: c.signature ?? "",
+      start_line: c.start_line ?? 0,
+      end_line: c.end_line ?? 0,
     })));
   }
 
@@ -180,6 +190,11 @@ export class LanceDbStore implements VectorStore {
         module: r.module as string,
         content_hash: r.content_hash as string,
         updated_at: r.updated_at as number,
+        symbol_name: r.symbol_name as string | undefined,
+        symbol_kind: r.symbol_kind as string | undefined,
+        signature: r.signature as string | undefined,
+        start_line: r.start_line as number | undefined,
+        end_line: r.end_line as number | undefined,
       }));
       return chunks.sort((a, b) => a.source.localeCompare(b.source));
     } catch {
@@ -241,6 +256,7 @@ export class LanceDbStore implements VectorStore {
         module: r.module as string,
         score: 1 / (1 + ((r._distance as number) ?? 0)),
         symbol_name: r.symbol_name as string | undefined,
+        symbol_kind: r.symbol_kind as string | undefined,
         signature: r.signature as string | undefined,
         start_line: r.start_line as number | undefined,
         end_line: r.end_line as number | undefined,
@@ -274,6 +290,7 @@ export class LanceDbStore implements VectorStore {
         content_hash: r.content_hash as string,
         updated_at: r.updated_at as number,
         symbol_name: r.symbol_name as string | undefined,
+        symbol_kind: r.symbol_kind as string | undefined,
         signature: r.signature as string | undefined,
         start_line: r.start_line as number | undefined,
         end_line: r.end_line as number | undefined,

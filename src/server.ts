@@ -8,12 +8,14 @@ import { register as registerModules } from "./tools/modules.js";
 import { register as registerForget } from "./tools/forget.js";
 import { register as registerHealth } from "./tools/health.js";
 import { register as registerExpand } from "./tools/expand.js";
-import type { ToolDeps } from "./types.js";
+import type { EmbeddingClient, ToolDeps } from "./types.js";
 
 interface ServerOptions {
   dbPath?: string;
   ollamaHost?: string;
   embedModel?: string;
+  /** Injectable embeddings client — when provided, skips the startup probe entirely. */
+  embeddings?: EmbeddingClient;
 }
 
 /** Create and configure the MCP server with all tools registered. */
@@ -27,7 +29,7 @@ export async function createServer(options: ServerOptions = {}) {
   });
 
   const store = new LanceDbStore(dbPath);
-  const embeddings = await createEmbeddingClient(undefined, { host: ollamaHost });
+  const embeddings = options.embeddings ?? await createEmbeddingClient(undefined, { host: ollamaHost });
 
   const deps: ToolDeps = { store, embeddings };
 
