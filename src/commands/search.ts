@@ -1,6 +1,34 @@
 import type { EmbeddingClient, VectorStore } from "../types.js";
 import { handleSearch } from "../tools/search.js";
 
+/**
+ * Parses the `prompt` field out of a raw JSON string from stdin.
+ * Returns the prompt string, or "" for any failure case:
+ *   - empty / whitespace-only input
+ *   - invalid JSON
+ *   - JSON without a string `.prompt` field
+ *   - non-object JSON (array, primitive, etc.)
+ *
+ * Never throws.
+ */
+export function parsePromptFromStdin(raw: string): string {
+  if (!raw.trim()) return "";
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      return "";
+    }
+    const obj = parsed as Record<string, unknown>;
+    return typeof obj.prompt === "string" ? obj.prompt : "";
+  } catch {
+    return "";
+  }
+}
+
 export interface SearchArgs {
   query: string;
   project: string;
@@ -80,7 +108,11 @@ export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<voi
 }
 
 /** CLI entry point for the search command. */
-export async function execute(args: string[]): Promise<void> {
+export async function execute(
+  args: string[],
+  /** Optional DI seam for reading stdin — defaults to Bun.stdin.text(). */
+  readStdin: () => Promise<string> = () => Bun.stdin.text()
+): Promise<void> {
   // Hard self-timeout: race against 4000ms so a hung ollama never blocks a prompt
   const timeoutPromise = new Promise<void>((resolve) => {
     setTimeout(resolve, 4000);
@@ -88,13 +120,17 @@ export async function execute(args: string[]): Promise<void> {
 
   const workPromise = (async (): Promise<void> => {
     try {
+      const useStdin = args.includes("--stdin");
+
       // Parse args: collect positional words as query, --project <id>, --limit <n>
       let project: string | undefined;
       let limit = 8;
       const queryParts: string[] = [];
 
       for (let i = 0; i < args.length; i++) {
-        if (args[i] === "--project" && i + 1 < args.length) {
+        if (args[i] === "--stdin") {
+          // Handled above — skip
+        } else if (args[i] === "--project" && i + 1 < args.length) {
           project = args[++i];
         } else if (args[i] === "--limit" && i + 1 < args.length) {
           const n = parseInt(args[++i], 10);
@@ -104,7 +140,21 @@ export async function execute(args: string[]): Promise<void> {
         }
       }
 
-      const query = queryParts.join(" ");
+      let query: string;
+
+      if (useStdin) {
+        // Read ALL of stdin, parse JSON, use .prompt as query.
+        // Any failure (empty, bad JSON, missing .prompt) → no-op.
+        try {
+          const raw = await readStdin();
+          query = parsePromptFromStdin(raw);
+        } catch {
+          return;
+        }
+      } else {
+        query = queryParts.join(" ");
+      }
+
       if (!query.trim()) return;
 
       // Resolve projectId from cwd config if not supplied

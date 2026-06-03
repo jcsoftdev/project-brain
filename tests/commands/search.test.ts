@@ -248,3 +248,85 @@ describe("search command", () => {
     });
   });
 });
+
+// ── --stdin flag integration tests ────────────────────────────────────────
+
+describe("execute --stdin flag", () => {
+  let output: string[];
+  let originalLog: typeof console.log;
+
+  beforeEach(() => {
+    output = [];
+    originalLog = console.log;
+    console.log = (...args: unknown[]) => {
+      output.push(args.map(String).join(" "));
+    };
+  });
+
+  afterEach(() => {
+    console.log = originalLog;
+  });
+
+  it("prints nothing and exits 0 when stdin is empty", async () => {
+    const { execute } = await import("../../src/commands/search.js");
+    // Should not throw even with empty stdin
+    await expect(execute(["--stdin"], async () => "")).resolves.toBeUndefined();
+    expect(output).toHaveLength(0);
+  });
+
+  it("prints nothing and exits 0 when stdin is invalid JSON", async () => {
+    const { execute } = await import("../../src/commands/search.js");
+    await expect(execute(["--stdin"], async () => "{bad json")).resolves.toBeUndefined();
+    expect(output).toHaveLength(0);
+  });
+
+  it("prints nothing and exits 0 when JSON has no .prompt field", async () => {
+    const { execute } = await import("../../src/commands/search.js");
+    await expect(
+      execute(["--stdin"], async () => JSON.stringify({ message: "hello" }))
+    ).resolves.toBeUndefined();
+    expect(output).toHaveLength(0);
+  });
+});
+
+// ── parsePromptFromStdin unit tests ───────────────────────────────────────
+
+describe("parsePromptFromStdin", () => {
+  it("returns the prompt field from valid JSON", async () => {
+    const { parsePromptFromStdin } = await import("../../src/commands/search.js");
+    const raw = JSON.stringify({ prompt: "what does handleSearch do?" });
+    expect(parsePromptFromStdin(raw)).toBe("what does handleSearch do?");
+  });
+
+  it("returns empty string for empty input", async () => {
+    const { parsePromptFromStdin } = await import("../../src/commands/search.js");
+    expect(parsePromptFromStdin("")).toBe("");
+  });
+
+  it("returns empty string for whitespace-only input", async () => {
+    const { parsePromptFromStdin } = await import("../../src/commands/search.js");
+    expect(parsePromptFromStdin("   \n  ")).toBe("");
+  });
+
+  it("returns empty string for invalid JSON", async () => {
+    const { parsePromptFromStdin } = await import("../../src/commands/search.js");
+    expect(parsePromptFromStdin("{not valid json")).toBe("");
+  });
+
+  it("returns empty string when JSON has no .prompt field", async () => {
+    const { parsePromptFromStdin } = await import("../../src/commands/search.js");
+    const raw = JSON.stringify({ message: "hello", session_id: "abc" });
+    expect(parsePromptFromStdin(raw)).toBe("");
+  });
+
+  it("returns empty string when prompt field is not a string", async () => {
+    const { parsePromptFromStdin } = await import("../../src/commands/search.js");
+    const raw = JSON.stringify({ prompt: 42 });
+    expect(parsePromptFromStdin(raw)).toBe("");
+  });
+
+  it("returns empty string for valid JSON that is not an object (array)", async () => {
+    const { parsePromptFromStdin } = await import("../../src/commands/search.js");
+    expect(parsePromptFromStdin("[1,2,3]")).toBe("");
+  });
+});
