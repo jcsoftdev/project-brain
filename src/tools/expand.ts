@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 
 interface ExpandArgs { project: string; chunk_id: string; }
-interface ToolResult { content: Array<{ type: "text"; text: string }>; isError?: boolean; }
+type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean; };
 
 export async function handleExpand(args: ExpandArgs, deps: ToolDeps): Promise<ToolResult> {
   const chunk = await deps.store.getChunkById(args.project, args.chunk_id);
@@ -22,12 +22,14 @@ export async function handleExpand(args: ExpandArgs, deps: ToolDeps): Promise<To
 }
 
 export function register(server: McpServer, deps: ToolDeps): void {
-  server.tool(
+  server.registerTool(
     "expand_context",
-    "Get the full body of a chunk_id returned by search_context. Use after search_context to read the exact code you selected instead of re-reading entire files.",
     {
-      project: z.string().describe("Project identifier"),
-      chunk_id: z.string().describe("chunk_id from search_context results"),
+      description: "Get the full body of a chunk_id returned by search_context. Use after search_context to read the exact code you selected instead of re-reading entire files.",
+      inputSchema: {
+        project: z.string().describe("Project identifier"),
+        chunk_id: z.string().describe("chunk_id from search_context results"),
+      },
     },
     async (args) => handleExpand(args, deps)
   );

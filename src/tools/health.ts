@@ -3,10 +3,10 @@ import { z } from "zod";
 import { EMBEDDING_MODEL, VERSION } from "../constants.js";
 import type { ToolDeps } from "../types.js";
 
-interface ToolResult {
+type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
-}
+};
 
 /** Handle check_health logic (exported for testing). */
 export async function handleHealth(
@@ -33,11 +33,13 @@ export async function handleHealth(
 
 /** Register check_health tool with MCP server. */
 export function register(server: McpServer, deps: ToolDeps): void {
-  server.tool(
+  server.registerTool(
     "check_health",
-    "Check embedding service + index status. Run when search_context returns empty/weak results to diagnose a down Ollama or stale/missing index.",
     {
-      project: z.string().describe("Project identifier"),
+      description: "Check embedding service + index status. Run when search_context returns empty/weak results to diagnose a down Ollama or stale/missing index.",
+      inputSchema: {
+        project: z.string().describe("Project identifier"),
+      },
     },
     async (args) => handleHealth(args, deps)
   );

@@ -2,10 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 
-interface ToolResult {
+type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
-}
+};
 
 /** Handle list_modules logic (exported for testing). */
 export async function handleListModules(
@@ -37,21 +37,25 @@ export async function handleGetModule(
 
 /** Register list_modules and get_module tools with MCP server. */
 export function register(server: McpServer, deps: ToolDeps): void {
-  server.tool(
+  server.registerTool(
     "list_modules",
-    "List this project's indexed modules. Use to orient before a targeted get_module or search_context.",
     {
-      project: z.string().describe("Project identifier"),
+      description: "List this project's indexed modules. Use to orient before a targeted get_module or search_context.",
+      inputSchema: {
+        project: z.string().describe("Project identifier"),
+      },
     },
     async (args) => handleListModules(args, deps)
   );
 
-  server.tool(
+  server.registerTool(
     "get_module",
-    "Retrieve all chunks for one known module. Use when you need a full module rather than a semantic slice.",
     {
-      project: z.string().describe("Project identifier"),
-      module: z.string().describe("Module name"),
+      description: "Retrieve all chunks for one known module. Use when you need a full module rather than a semantic slice.",
+      inputSchema: {
+        project: z.string().describe("Project identifier"),
+        module: z.string().describe("Module name"),
+      },
     },
     async (args) => handleGetModule(args, deps)
   );

@@ -12,10 +12,10 @@ interface SearchArgs {
   module?: string;
 }
 
-interface ToolResult {
+type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
-}
+};
 
 /** Handle search_context logic (exported for testing). */
 export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<ToolResult> {

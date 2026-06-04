@@ -9,10 +9,10 @@ interface IngestArgs {
   module: string;
 }
 
-interface ToolResult {
+type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
-}
+};
 
 /** Generate deterministic chunk ID from source + content hash. */
 function generateId(source: string, content: string): string {
@@ -74,14 +74,16 @@ export async function handleIngest(args: IngestArgs, deps: ToolDeps): Promise<To
 
 /** Register add_knowledge tool with MCP server. */
 export function register(server: McpServer, deps: ToolDeps): void {
-  server.tool(
+  server.registerTool(
     "add_knowledge",
-    "Persist a note, decision, or context chunk into this project's brain so future sessions retrieve it semantically.",
     {
-      project: z.string().describe("Project identifier"),
-      content: z.string().describe("Text content to store"),
-      source: z.string().describe("Origin file or identifier"),
-      module: z.string().describe("Logical module name"),
+      description: "Persist a note, decision, or context chunk into this project's brain so future sessions retrieve it semantically.",
+      inputSchema: {
+        project: z.string().describe("Project identifier"),
+        content: z.string().describe("Text content to store"),
+        source: z.string().describe("Origin file or identifier"),
+        module: z.string().describe("Logical module name"),
+      },
     },
     async (args) => handleIngest(args, deps)
   );
