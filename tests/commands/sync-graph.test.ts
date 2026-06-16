@@ -1,7 +1,8 @@
-import { test, expect, beforeEach, afterEach } from "bun:test";
+import { test, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { tmpdir } from "node:os";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { WasmParser } from "../../src/parser/wasm.js";
 import { VECTOR_DIM } from "../../src/constants.js";
 import type { EmbeddingClient, VectorStore, Chunk, SearchResult } from "../../src/types.js";
 
@@ -123,4 +124,75 @@ test("runSync removes graph entries for deleted files", async () => {
   db2.close();
 
   expect(rows2.map((r) => r.name)).not.toContain("mul");
+});
+
+test("unchanged file → parseFile not called on second sync", async () => {
+  writeFileSync(
+    join(tempDir, "d.ts"),
+    "export function div(a: number, b: number){ return a / b; }"
+  );
+
+  const { runSync } = await import("../../src/commands/sync.js");
+
+  const parseFileSpy = spyOn(WasmParser.prototype, "parseFile");
+
+  try {
+    // First sync — file is new, parseFile should be called
+    await runSync({
+      root: tempDir,
+      projectId: "test-graph-spy",
+      store: makeMemoryStore(),
+      embeddings: noopEmbeddings,
+    });
+
+    const firstCallCount = parseFileSpy.mock.calls.length;
+    expect(firstCallCount).toBeGreaterThan(0);
+
+    // Reset call count between syncs
+    parseFileSpy.mockClear();
+
+    // Second sync — same file, same content: hash-gate should prevent parseFile call
+    await runSync({
+      root: tempDir,
+      projectId: "test-graph-spy",
+      store: makeMemoryStore(),
+      embeddings: noopEmbeddings,
+    });
+
+    expect(parseFileSpy.mock.calls.length).toBe(0);
+  } finally {
+    parseFileSpy.mockRestore();
+  }
+});
+
+test("throw during run → parser.dispose and graphDb still cleaned up", async () => {
+  // Injection strategy: store.batchReplace throws — this propagates out of runSync
+  // reliably because it's awaited inside the try block after embed phase.
+  writeFileSync(
+    join(tempDir, "e.ts"),
+    "export function mod(a: number, b: number){ return a % b; }"
+  );
+
+  const { runSync } = await import("../../src/commands/sync.js");
+
+  const throwingStore = makeMemoryStore();
+  throwingStore.batchReplace = async () => { throw new Error("store.batchReplace injected failure"); };
+
+  const disposeSpy = spyOn(WasmParser.prototype, "dispose");
+
+  try {
+    await expect(
+      runSync({
+        root: tempDir,
+        projectId: "test-graph-throw",
+        store: throwingStore,
+        embeddings: noopEmbeddings,
+      })
+    ).rejects.toThrow("injected failure");
+
+    // finally block must have run → dispose was called despite the throw
+    expect(disposeSpy.mock.calls.length).toBeGreaterThan(0);
+  } finally {
+    disposeSpy.mockRestore();
+  }
 });

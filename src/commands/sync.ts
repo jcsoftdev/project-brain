@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { readFile, writeFile, readdir } from "node:fs/promises";
+import { readFile, writeFile, readdir, mkdir } from "node:fs/promises";
 import { computeHash } from "../indexer/hash.js";
 import { chunkContent } from "../indexer/parser.js";
 import { shouldIgnore, loadPatterns } from "../indexer/gitignore.js";
@@ -78,7 +78,6 @@ async function loadHashManifest(root: string): Promise<Manifest> {
 /** Persist the hash manifest. */
 async function saveHashManifest(root: string, manifest: Manifest): Promise<void> {
   const dir = join(root, CONFIG_DIR);
-  const { mkdir } = await import("node:fs/promises");
   await mkdir(dir, { recursive: true });
   const path = join(dir, HASH_MANIFEST);
   await writeFile(path, JSON.stringify(manifest, null, 2));
@@ -135,231 +134,234 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   const configDir = join(root, ".project-brain");
   const graphPath = join(configDir, GRAPH_DB_FILE);
   // Ensure .project-brain/ exists before opening SQLite (may not exist in fresh projects).
-  const { mkdir: mkdirGraph } = await import("node:fs/promises");
-  await mkdirGraph(configDir, { recursive: true });
+  await mkdir(configDir, { recursive: true });
   const graphDb = openGraphDb(graphPath);
   const graph = new GraphStore(graphDb);
   const parser = new WasmParser();
   await parser.init();
-  const warmedExts = new Set<string>();
 
-  // 1. Load hash manifest and gitignore patterns
-  const [hashManifest, gitignorePatterns] = await Promise.all([
-    loadHashManifest(root),
-    loadPatterns(root),
-  ]);
+  try {
+    const warmedExts = new Set<string>();
 
-  // 2. Collect files to process
-  onProgress?.({ phase: "scanning", current: 0, total: 0 });
-  let filePaths: string[];
-  if (options.changedFiles && options.changedFiles.length > 0) {
-    filePaths = options.changedFiles.map((f) =>
-      f.startsWith("/") ? f : join(root, f)
-    );
-  } else {
-    filePaths = await listAllFiles(root, root, gitignorePatterns);
-  }
-  onProgress?.({ phase: "scanning", current: filePaths.length, total: filePaths.length });
+    // 1. Load hash manifest and gitignore patterns
+    const [hashManifest, gitignorePatterns] = await Promise.all([
+      loadHashManifest(root),
+      loadPatterns(root),
+    ]);
 
-  // 3. Ensure table exists (pass model+dim so metadata is stored correctly)
-  const tableMeta = embeddings.model
-    ? { model: embeddings.model, dim: embeddings.dim }
-    : undefined;
-  await store.ensureTable(projectId, tableMeta);
-
-  let ingested = 0;
-  let skipped = 0;
-  const newManifest: Manifest = { ...hashManifest };
-
-  // Pipeline: read all files → embed in large batches → store per mini-wave.
-  // mtime fast-path: stat() is ~10x cheaper than file.text() + hash.
-  // EMBED_BATCH_SIZE=200: fewer HTTP round-trips to Ollama.
-  // SAVE_EVERY=10: batchReplace every 10 files → continuous progress.
-  const READ_CONCURRENCY = 20;
-  const EMBED_BATCH_SIZE = 64;
-  const SAVE_EVERY = 10;
-  const MAX_FILE_BYTES = 512_000;
-
-  type FileEntry = { relPath: string; hash: string; mtime: number; rawChunks: ReturnType<typeof chunkContent> };
-
-  let totalChanged = 0;
-  let readDone = 0;
-
-  // Phase A: stat first (mtime fast-path), read only if mtime changed
-  const pendingEntries: FileEntry[] = [];
-  const { stat } = await import("node:fs/promises");
-
-  for (let i = 0; i < filePaths.length; i += READ_CONCURRENCY) {
-    const batch = filePaths.slice(i, i + READ_CONCURRENCY);
-    const results = await Promise.all(
-      batch.map(async (filePath) => {
-        // Fast path: check mtime via stat (no content read)
-        let mtime = 0;
-        try {
-          const s = await stat(filePath);
-          if (s.size > MAX_FILE_BYTES) return null;
-          mtime = s.mtimeMs;
-        } catch { return null; }
-
-        const relPath = filePath.startsWith(root + "/")
-          ? filePath.slice(root.length + 1) : filePath;
-
-        const entry = hashManifest[relPath];
-        if (entry && entry.mtime === mtime) return "skipped" as const; // mtime unchanged → skip
-
-        // mtime changed → read content + verify hash
-        let content: string;
-        try { content = await Bun.file(filePath).text(); } catch { return null; }
-        const hash = computeHash(content);
-
-        if (entry && entry.hash === hash) {
-          // Content identical despite mtime change — update mtime only
-          newManifest[relPath] = { hash, mtime };
-          return "skipped" as const;
-        }
-
-        const parts = relPath.split("/");
-        const module = parts.length > 1 ? parts[0] : "root";
-
-        // Structural graph: parse + extract symbols (gated by same hash-skip above).
-        const ext = relPath.slice(relPath.lastIndexOf("."));
-        if (!warmedExts.has(ext)) {
-          await parser.warm(ext);
-          warmedExts.add(ext);
-        }
-        const pt = parser.parseFile(ext, content);
-        if (pt) {
-          try {
-            const syms = extract(pt.tree, pt.langId, content);
-            graph.replaceFile(relPath, pt.langId, hash, mtime, syms);
-          } finally {
-            pt.tree.delete();
-          }
-        }
-
-        return { relPath, hash, mtime, rawChunks: chunkContent(content, relPath, module) };
-      })
-    );
-
-    for (const r of results) {
-      if (r === null) continue;
-      if (r === "skipped") { skipped++; }
-      else { pendingEntries.push(r); totalChanged++; }
-    }
-    readDone += batch.length;
-    onProgress?.({ phase: "reading", current: readDone, total: filePaths.length });
-  }
-
-  // Phase B+C: embed in large batches, store every SAVE_EVERY files with progress
-  // Flatten all texts with back-references
-  const allTexts = pendingEntries.flatMap((e) => e.rawChunks.map((c) => c.content));
-  const allVectors: (number[] | null)[] = new Array(allTexts.length).fill(null);
-
-  // Embed in EMBED_BATCH_SIZE chunks with bounded concurrency (max 3 parallel requests)
-  // mapLimit preserves output order, so batch i's vectors correctly land at allVectors[i*EMBED_BATCH_SIZE..]
-  const EMBED_CONCURRENCY = 3;
-  const batches: Array<{ startIdx: number; texts: string[] }> = [];
-  for (let i = 0; i < allTexts.length; i += EMBED_BATCH_SIZE) {
-    batches.push({ startIdx: i, texts: allTexts.slice(i, i + EMBED_BATCH_SIZE) });
-  }
-  let embedDone = 0;
-  let embedFailed = 0;
-  onProgress?.({ phase: "embedding", current: 0, total: allTexts.length });
-  await mapLimit(batches, EMBED_CONCURRENCY, async ({ startIdx, texts }) => {
-    const vecs = await embeddings.embed(texts);
-    if (vecs) {
-      for (let j = 0; j < vecs.length; j++) allVectors[startIdx + j] = vecs[j];
-      embedDone = Math.min(embedDone + vecs.length, allTexts.length);
-      onProgress?.({ phase: "embedding", current: embedDone, total: allTexts.length });
+    // 2. Collect files to process
+    onProgress?.({ phase: "scanning", current: 0, total: 0 });
+    let filePaths: string[];
+    if (options.changedFiles && options.changedFiles.length > 0) {
+      filePaths = options.changedFiles.map((f) =>
+        f.startsWith("/") ? f : join(root, f)
+      );
     } else {
-      embedFailed += texts.length;
+      filePaths = await listAllFiles(root, root, gitignorePatterns);
     }
-  });
+    onProgress?.({ phase: "scanning", current: filePaths.length, total: filePaths.length });
 
-  // Store every SAVE_EVERY files → progress updates, few fragments
-  let chunkCursor = 0;
-  let storeBuf: { sources: string[]; chunks: Chunk[] } = { sources: [], chunks: [] };
+    // 3. Ensure table exists (pass model+dim so metadata is stored correctly)
+    const tableMeta = embeddings.model
+      ? { model: embeddings.model, dim: embeddings.dim }
+      : undefined;
+    await store.ensureTable(projectId, tableMeta);
 
-  async function flushStore() {
-    if (storeBuf.chunks.length === 0) return;
-    await store.batchReplace(projectId, storeBuf.sources, storeBuf.chunks);
-    storeBuf = { sources: [], chunks: [] };
-  }
+    let ingested = 0;
+    let skipped = 0;
+    const newManifest: Manifest = { ...hashManifest };
 
-  for (let ei = 0; ei < pendingEntries.length; ei++) {
-    const entry = pendingEntries[ei];
-    const entryChunks: Chunk[] = entry.rawChunks
-      .map((raw, ci) => ({ raw, vec: allVectors[chunkCursor + ci] }))
-      .filter(({ vec }) => vec !== null)
-      .map(({ raw, vec }) => ({
-        id: raw.id, vector: vec!, content: raw.content,
-        source: entry.relPath, module: raw.module,
-        content_hash: raw.content_hash, updated_at: raw.updated_at,
-        symbol_name: raw.symbol_name,
-        symbol_kind: raw.symbol_kind as import("../types.js").SymbolKind | undefined,
-        signature: raw.signature,
-        start_line: raw.start_line,
-        end_line: raw.end_line,
-      }));
-    chunkCursor += entry.rawChunks.length;
+    // Pipeline: read all files → embed in large batches → store per mini-wave.
+    // mtime fast-path: stat() is ~10x cheaper than file.text() + hash.
+    // EMBED_BATCH_SIZE=200: fewer HTTP round-trips to Ollama.
+    // SAVE_EVERY=10: batchReplace every 10 files → continuous progress.
+    const READ_CONCURRENCY = 20;
+    const EMBED_BATCH_SIZE = 64;
+    const SAVE_EVERY = 10;
+    const MAX_FILE_BYTES = 512_000;
 
-    if (entryChunks.length === 0) continue;
-    storeBuf.sources.push(entry.relPath);
-    storeBuf.chunks.push(...entryChunks);
-    newManifest[entry.relPath] = { hash: entry.hash, mtime: entry.mtime };
-    ingested++;
-    onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
+    type FileEntry = { relPath: string; hash: string; mtime: number; rawChunks: ReturnType<typeof chunkContent> };
 
-    // Flush every SAVE_EVERY files
-    if (storeBuf.sources.length >= SAVE_EVERY) await flushStore();
-  }
-  await flushStore(); // flush remainder
+    let totalChanged = 0;
+    let readDone = 0;
 
-  // Resolve cross-file call edges for every file that was parsed this run.
-  for (const entry of pendingEntries) {
-    graph.resolveEdgesForFile(entry.relPath);
-  }
+    // Phase A: stat first (mtime fast-path), read only if mtime changed
+    const pendingEntries: FileEntry[] = [];
+    const { stat } = await import("node:fs/promises");
 
-  // 5. Detect deleted files (in manifest but no longer on disk)
-  let deleted = 0;
-  const currentRels = new Set(
-    filePaths.map((f) =>
-      f.startsWith(root + "/") ? f.slice(root.length + 1) : f
-    )
-  );
-  for (const relPath of Object.keys(hashManifest)) {
-    if (!currentRels.has(relPath)) {
-      await store.deleteBySource(projectId, relPath);
-      graph.deleteFile(relPath);
-      delete newManifest[relPath];
-      deleted++;
+    for (let i = 0; i < filePaths.length; i += READ_CONCURRENCY) {
+      const batch = filePaths.slice(i, i + READ_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (filePath) => {
+          // Fast path: check mtime via stat (no content read)
+          let mtime = 0;
+          try {
+            const s = await stat(filePath);
+            if (s.size > MAX_FILE_BYTES) return null;
+            mtime = s.mtimeMs;
+          } catch { return null; }
+
+          const relPath = filePath.startsWith(root + "/")
+            ? filePath.slice(root.length + 1) : filePath;
+
+          const entry = hashManifest[relPath];
+          if (entry && entry.mtime === mtime) return "skipped" as const; // mtime unchanged → skip
+
+          // mtime changed → read content + verify hash
+          let content: string;
+          try { content = await Bun.file(filePath).text(); } catch { return null; }
+          const hash = computeHash(content);
+
+          if (entry && entry.hash === hash) {
+            // Content identical despite mtime change — update mtime only
+            newManifest[relPath] = { hash, mtime };
+            return "skipped" as const;
+          }
+
+          const parts = relPath.split("/");
+          const module = parts.length > 1 ? parts[0] : "root";
+
+          // Structural graph: parse + extract symbols (gated by same hash-skip above).
+          const ext = relPath.slice(relPath.lastIndexOf("."));
+          if (!warmedExts.has(ext)) {
+            await parser.warm(ext);
+            warmedExts.add(ext);
+          }
+          const pt = parser.parseFile(ext, content);
+          if (pt) {
+            try {
+              const syms = extract(pt.tree, pt.langId, content);
+              graph.replaceFile(relPath, pt.langId, hash, mtime, syms);
+            } finally {
+              pt.tree.delete();
+            }
+          }
+
+          return { relPath, hash, mtime, rawChunks: chunkContent(content, relPath, module) };
+        })
+      );
+
+      for (const r of results) {
+        if (r === null) continue;
+        if (r === "skipped") { skipped++; }
+        else { pendingEntries.push(r); totalChanged++; }
+      }
+      readDone += batch.length;
+      onProgress?.({ phase: "reading", current: readDone, total: filePaths.length });
     }
+
+    // Phase B+C: embed in large batches, store every SAVE_EVERY files with progress
+    // Flatten all texts with back-references
+    const allTexts = pendingEntries.flatMap((e) => e.rawChunks.map((c) => c.content));
+    const allVectors: (number[] | null)[] = new Array(allTexts.length).fill(null);
+
+    // Embed in EMBED_BATCH_SIZE chunks with bounded concurrency (max 3 parallel requests)
+    // mapLimit preserves output order, so batch i's vectors correctly land at allVectors[i*EMBED_BATCH_SIZE..]
+    const EMBED_CONCURRENCY = 3;
+    const batches: Array<{ startIdx: number; texts: string[] }> = [];
+    for (let i = 0; i < allTexts.length; i += EMBED_BATCH_SIZE) {
+      batches.push({ startIdx: i, texts: allTexts.slice(i, i + EMBED_BATCH_SIZE) });
+    }
+    let embedDone = 0;
+    let embedFailed = 0;
+    onProgress?.({ phase: "embedding", current: 0, total: allTexts.length });
+    await mapLimit(batches, EMBED_CONCURRENCY, async ({ startIdx, texts }) => {
+      const vecs = await embeddings.embed(texts);
+      if (vecs) {
+        for (let j = 0; j < vecs.length; j++) allVectors[startIdx + j] = vecs[j];
+        embedDone = Math.min(embedDone + vecs.length, allTexts.length);
+        onProgress?.({ phase: "embedding", current: embedDone, total: allTexts.length });
+      } else {
+        embedFailed += texts.length;
+      }
+    });
+
+    // Store every SAVE_EVERY files → progress updates, few fragments
+    let chunkCursor = 0;
+    let storeBuf: { sources: string[]; chunks: Chunk[] } = { sources: [], chunks: [] };
+
+    async function flushStore() {
+      if (storeBuf.chunks.length === 0) return;
+      await store.batchReplace(projectId, storeBuf.sources, storeBuf.chunks);
+      storeBuf = { sources: [], chunks: [] };
+    }
+
+    for (let ei = 0; ei < pendingEntries.length; ei++) {
+      const entry = pendingEntries[ei];
+      const entryChunks: Chunk[] = entry.rawChunks
+        .map((raw, ci) => ({ raw, vec: allVectors[chunkCursor + ci] }))
+        .filter(({ vec }) => vec !== null)
+        .map(({ raw, vec }) => ({
+          id: raw.id, vector: vec!, content: raw.content,
+          source: entry.relPath, module: raw.module,
+          content_hash: raw.content_hash, updated_at: raw.updated_at,
+          symbol_name: raw.symbol_name,
+          symbol_kind: raw.symbol_kind as import("../types.js").SymbolKind | undefined,
+          signature: raw.signature,
+          start_line: raw.start_line,
+          end_line: raw.end_line,
+        }));
+      chunkCursor += entry.rawChunks.length;
+
+      if (entryChunks.length === 0) continue;
+      storeBuf.sources.push(entry.relPath);
+      storeBuf.chunks.push(...entryChunks);
+      newManifest[entry.relPath] = { hash: entry.hash, mtime: entry.mtime };
+      ingested++;
+      onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
+
+      // Flush every SAVE_EVERY files
+      if (storeBuf.sources.length >= SAVE_EVERY) await flushStore();
+    }
+    await flushStore(); // flush remainder
+
+    // Resolve cross-file call edges for every file that was parsed this run.
+    for (const entry of pendingEntries) {
+      graph.resolveEdgesForFile(entry.relPath);
+    }
+
+    // 5. Detect deleted files (in manifest but no longer on disk)
+    let deleted = 0;
+    const currentRels = new Set(
+      filePaths.map((f) =>
+        f.startsWith(root + "/") ? f.slice(root.length + 1) : f
+      )
+    );
+    for (const relPath of Object.keys(hashManifest)) {
+      if (!currentRels.has(relPath)) {
+        await store.deleteBySource(projectId, relPath);
+        graph.deleteFile(relPath);
+        delete newManifest[relPath];
+        deleted++;
+      }
+    }
+
+    // 6. Build FTS + vector indexes so hybridSearch works
+    await store.buildIndexes(projectId);
+
+    // 7. Persist updated manifest
+    await saveHashManifest(root, newManifest);
+
+    // Detect total embed failure: had texts to embed but every vector is null
+    const totalEmbedFailure = allTexts.length > 0 && embedFailed === allTexts.length;
+    const error = totalEmbedFailure
+      ? `Embedding failed: 0/${allTexts.length} vectors produced (Ollama timeout or model unavailable). Nothing was stored.`
+      : undefined;
+
+    return {
+      ingested,
+      skipped,
+      deleted,
+      scanned: filePaths.length,
+      embedFailed,
+      error,
+    };
+  } finally {
+    // 8. Dispose structural graph resources (ephemeral — free WASM + close SQLite).
+    // Runs even if an error is thrown above to prevent WASM leaks and open WAL handles.
+    if (parser) { try { parser.dispose(); } catch {} }
+    if (graphDb) { try { graphDb.close(); } catch {} }
   }
-
-  // 6. Build FTS + vector indexes so hybridSearch works
-  await store.buildIndexes(projectId);
-
-  // 7. Persist updated manifest
-  await saveHashManifest(root, newManifest);
-
-  // 8. Dispose structural graph resources (ephemeral process — free WASM + close SQLite).
-  parser.dispose();
-  graphDb.close();
-
-  // Detect total embed failure: had texts to embed but every vector is null
-  const totalEmbedFailure = allTexts.length > 0 && embedFailed === allTexts.length;
-  const error = totalEmbedFailure
-    ? `Embedding failed: 0/${allTexts.length} vectors produced (Ollama timeout or model unavailable). Nothing was stored.`
-    : undefined;
-
-  return {
-    ingested,
-    skipped,
-    deleted,
-    scanned: filePaths.length,
-    embedFailed,
-    error,
-  };
 }
 
 export interface StalenessOptions {
