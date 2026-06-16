@@ -86,6 +86,11 @@ export const SNIPPET_MAX_LINES = 5;
 /** When true, fail fast on vector dim mismatches instead of silently degrading. */
 export const HARDNESS = process.env.PROJECT_BRAIN_HARDNESS === "1";
 
+export const MAX_PARSE_BYTES = 512 * 1024;      // skip files > 512KB (minified/generated)
+export const MAX_LINE_LENGTH = 5000;            // skip files with pathological lines
+export const PARSER_TEARDOWN_EVERY = 500;       // recreate WASM instance every N files to reclaim linear memory
+export const WASM_MAX_PAGES = 4096;             // 4096 * 64KB = 256MB hard cap on WASM linear memory
+
 /**
  * Server-level instructions injected into MCP clients so AI agents understand
  * when and how to use project-brain vs structural/AST tools.
