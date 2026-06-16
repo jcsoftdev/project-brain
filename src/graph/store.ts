@@ -40,4 +40,23 @@ export class GraphStore {
     });
     tx();
   }
+
+  resolveEdgesForFile(path: string): void {
+    // edges originating in this file → link to any symbol by name
+    this.db.query(`
+      UPDATE edges SET dst_symbol_id = (
+        SELECT s.id FROM symbols s WHERE s.name = edges.dst_name LIMIT 1
+      )
+      WHERE src_symbol_id IN (
+        SELECT s.id FROM symbols s JOIN files f ON s.file_id = f.id WHERE f.path = $p
+      )`).run({ $p: path });
+    // edges anywhere whose target name was (re)defined in this file → (re)link
+    this.db.query(`
+      UPDATE edges SET dst_symbol_id = (
+        SELECT s.id FROM symbols s WHERE s.name = edges.dst_name LIMIT 1
+      )
+      WHERE dst_name IN (
+        SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id WHERE f.path = $p
+      )`).run({ $p: path });
+  }
 }
