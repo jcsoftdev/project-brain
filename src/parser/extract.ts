@@ -60,10 +60,14 @@ function nameOf(node: any): string | null {
 }
 
 // Walk a subtree collecting call edges. No Query objects — plain node walk.
-function collectCalls(node: any, out: EdgeInput[]): void {
-  const stack: any[] = [node];
+// kinds: the language's DECL_KINDS map — children whose type is a key in kinds
+// are nested declarations that collect their own calls; skip descending into them.
+function collectCalls(symbolNode: any, kinds: Record<string, string>, out: EdgeInput[]): void {
+  const stack: any[] = [];
+  for (let i = 0; i < (symbolNode.namedChildCount ?? 0); i++) stack.push(symbolNode.namedChild(i));
   while (stack.length) {
     const n = stack.pop();
+    if (kinds[n.type]) continue; // nested declaration → it collects its own calls
     if (n.type === "call_expression" || n.type === "call") {
       // Callee is the first named child (TS/JS: identifier or member_expression)
       const callee = n.namedChild?.(0);
@@ -94,7 +98,7 @@ export function extract(tree: any, langId: string, _source: string): SymbolInput
       const name = nameOf(n);
       if (name) {
         const edges: EdgeInput[] = [];
-        collectCalls(n, edges);
+        collectCalls(n, kinds, edges);
         const sig = n.text.split("\n")[0].slice(0, 160);
         out.push({
           name,
