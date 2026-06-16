@@ -35,9 +35,10 @@
     "build": "bun build ./src/cli.ts --compile --outfile dist/project-brain"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "@lancedb/lancedb": "^0.30.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "ollama": "^0.6.3",
+    "web-tree-sitter": "^0.25.10",
     "zod": "^4.4.3"
   },
   "optionalDependencies": {
@@ -49,6 +50,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "tree-sitter-wasms": "^0.1.13",
     "typescript": "^5.5.4"
   }
 }
