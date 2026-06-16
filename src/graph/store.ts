@@ -7,11 +7,15 @@ export interface SymbolInput {
 }
 
 export class GraphStore {
-  constructor(private db: Database) {}
+  private delStmt: ReturnType<Database["query"]>;
+
+  constructor(private db: Database) {
+    this.delStmt = this.db.query("DELETE FROM files WHERE path = $path");
+  }
 
   deleteFile(path: string): void {
     // ON DELETE CASCADE removes symbols + edges
-    this.db.query("DELETE FROM files WHERE path = $path").run({ $path: path });
+    this.delStmt.run({ $path: path });
   }
 
   replaceFile(path: string, lang: string, hash: string, mtime: number, symbols: SymbolInput[]): void {
