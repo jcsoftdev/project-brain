@@ -88,12 +88,13 @@ export class GraphStore {
 
   impact(name: string, maxDepth = 6) {
     return this.db.query(
-      `WITH RECURSIVE up(id, depth) AS (
-         SELECT s.id, 0 FROM symbols s WHERE s.name = $n
+      `WITH RECURSIVE up(id, depth, path) AS (
+         SELECT s.id, 0, '/' || s.id || '/' FROM symbols s WHERE s.name = $n
          UNION
-         SELECT e.src_symbol_id, up.depth + 1
+         SELECT e.src_symbol_id, up.depth + 1, up.path || e.src_symbol_id || '/'
          FROM edges e JOIN up ON e.dst_symbol_id = up.id
          WHERE up.depth < $d
+           AND up.path NOT LIKE '%/' || e.src_symbol_id || '/%'
        )
        SELECT DISTINCT ${this.hitSql}
        FROM up JOIN symbols s ON s.id = up.id JOIN files f ON s.file_id=f.id

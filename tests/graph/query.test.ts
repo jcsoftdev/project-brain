@@ -27,6 +27,6 @@ test("impact terminates on a cycle", () => {
   store.replaceFile("x.ts", "ts", "h", 1, [{ name: "x", kind: "function", signature: "", start_line: 1, end_line: 1, edges: [{ dst_name: "y", edge_type: "call" }] }]);
   store.replaceFile("y.ts", "ts", "h", 1, [{ name: "y", kind: "function", signature: "", start_line: 1, end_line: 1, edges: [{ dst_name: "x", edge_type: "call" }] }]);
   store.resolveEdgesForFile("x.ts"); store.resolveEdgesForFile("y.ts");
-  expect(store.impact("x").map(s => s.name).sort()).toEqual(["x", "y"]); // UNION dedups, no infinite loop
+  expect(store.impact("x").map(s => s.name).sort()).toEqual(["y"]); // path guard prevents revisiting x
   db.close();
 });
