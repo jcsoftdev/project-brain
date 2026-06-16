@@ -1,7 +1,7 @@
 node_modules/
 dist/
 bin/project-brain-native
-.project-brain/
+.project-brain/graph.db*
 *.db
 .lancedb/
 bun.lock
