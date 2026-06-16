@@ -14,7 +14,12 @@ import { openGraphDb } from "../graph/db.js";
 const CONFIG_DIR = ".project-brain";
 const HASH_MANIFEST = "hashes.json";
 
-interface ManifestEntry { hash: string; mtime: number; }
+interface ManifestEntry {
+  hash: string;
+  mtime: number;
+  /** Per-chunk content hashes keyed by chunk id. Absent in old-format manifests. */
+  chunks?: Record<string, string>;
+}
 type Manifest = Record<string, ManifestEntry>;
 
 export interface SyncProgress {
@@ -250,34 +255,76 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       onProgress?.({ phase: "reading", current: readDone, total: filePaths.length });
     }
 
-    // Phase B+C: embed in large batches, store every SAVE_EVERY files with progress
-    // Flatten all texts with back-references
-    const allTexts = pendingEntries.flatMap((e) => e.rawChunks.map((c) => c.content));
-    const allVectors: (number[] | null)[] = new Array(allTexts.length).fill(null);
+    // Phase B: per-chunk hash diff — identify which chunks actually need re-embedding.
+    // For each changed file, compare each chunk's content_hash against the stored manifest.
+    // Chunks with an unchanged hash reuse the stored vector via store.getChunkById().
+    // Chunks with a new/changed hash are collected for batch embedding.
+    //
+    // Structure: changedChunkInfos[i] = { entryIdx, chunkIdx } maps embed-slot → file+chunk.
+    type ChunkInfo = { entryIdx: number; chunkIdx: number };
+    const textsToEmbed: string[] = [];
+    const changedChunkInfos: ChunkInfo[] = [];
 
-    // Embed in EMBED_BATCH_SIZE chunks with bounded concurrency (max 3 parallel requests)
-    // mapLimit preserves output order, so batch i's vectors correctly land at allVectors[i*EMBED_BATCH_SIZE..]
+    // reusedVectors[entryIdx][chunkIdx] = stored vector (or null if needs embedding)
+    const reusedVectors: Array<Array<number[] | null>> = pendingEntries.map((e) =>
+      new Array(e.rawChunks.length).fill(null)
+    );
+
+    for (let ei = 0; ei < pendingEntries.length; ei++) {
+      const entry = pendingEntries[ei];
+      const prevEntry = hashManifest[entry.relPath];
+      const prevChunkHashes: Record<string, string> = prevEntry?.chunks ?? {};
+      const hasChunkManifest = !!prevEntry?.chunks;
+
+      for (let ci = 0; ci < entry.rawChunks.length; ci++) {
+        const raw = entry.rawChunks[ci];
+        const prevHash = prevChunkHashes[raw.id];
+        const chunkChanged = !hasChunkManifest || prevHash !== raw.content_hash;
+
+        if (!chunkChanged) {
+          // Try to reuse the stored vector for this chunk
+          const stored = await store.getChunkById(projectId, raw.id);
+          if (stored) {
+            reusedVectors[ei][ci] = stored.vector;
+            continue; // skip embedding this chunk
+          }
+          // Stored vector not found (e.g., store was wiped) — re-embed as fallback
+        }
+
+        // Needs embedding
+        changedChunkInfos.push({ entryIdx: ei, chunkIdx: ci });
+        textsToEmbed.push(raw.content);
+      }
+    }
+
+    // Embed only the changed/new chunks in EMBED_BATCH_SIZE batches
+    const embeddedVectors: (number[] | null)[] = new Array(textsToEmbed.length).fill(null);
     const EMBED_CONCURRENCY = 3;
     const batches: Array<{ startIdx: number; texts: string[] }> = [];
-    for (let i = 0; i < allTexts.length; i += EMBED_BATCH_SIZE) {
-      batches.push({ startIdx: i, texts: allTexts.slice(i, i + EMBED_BATCH_SIZE) });
+    for (let i = 0; i < textsToEmbed.length; i += EMBED_BATCH_SIZE) {
+      batches.push({ startIdx: i, texts: textsToEmbed.slice(i, i + EMBED_BATCH_SIZE) });
     }
     let embedDone = 0;
     let embedFailed = 0;
-    onProgress?.({ phase: "embedding", current: 0, total: allTexts.length });
+    onProgress?.({ phase: "embedding", current: 0, total: textsToEmbed.length });
     await mapLimit(batches, EMBED_CONCURRENCY, async ({ startIdx, texts }) => {
       const vecs = await embeddings.embed(texts);
       if (vecs) {
-        for (let j = 0; j < vecs.length; j++) allVectors[startIdx + j] = vecs[j];
-        embedDone = Math.min(embedDone + vecs.length, allTexts.length);
-        onProgress?.({ phase: "embedding", current: embedDone, total: allTexts.length });
+        for (let j = 0; j < vecs.length; j++) embeddedVectors[startIdx + j] = vecs[j];
+        embedDone = Math.min(embedDone + vecs.length, textsToEmbed.length);
+        onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
       } else {
         embedFailed += texts.length;
       }
     });
 
-    // Store every SAVE_EVERY files → progress updates, few fragments
-    let chunkCursor = 0;
+    // Distribute embedded vectors back into reusedVectors
+    for (let i = 0; i < changedChunkInfos.length; i++) {
+      const { entryIdx, chunkIdx } = changedChunkInfos[i];
+      reusedVectors[entryIdx][chunkIdx] = embeddedVectors[i];
+    }
+
+    // Phase C: store every SAVE_EVERY files → progress updates, few fragments
     let storeBuf: { sources: string[]; chunks: Chunk[] } = { sources: [], chunks: [] };
 
     async function flushStore() {
@@ -289,7 +336,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     for (let ei = 0; ei < pendingEntries.length; ei++) {
       const entry = pendingEntries[ei];
       const entryChunks: Chunk[] = entry.rawChunks
-        .map((raw, ci) => ({ raw, vec: allVectors[chunkCursor + ci] }))
+        .map((raw, ci) => ({ raw, vec: reusedVectors[ei][ci] }))
         .filter(({ vec }) => vec !== null)
         .map(({ raw, vec }) => ({
           id: raw.id, vector: vec!, content: raw.content,
@@ -301,12 +348,17 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           start_line: raw.start_line,
           end_line: raw.end_line,
         }));
-      chunkCursor += entry.rawChunks.length;
 
       if (entryChunks.length === 0) continue;
       storeBuf.sources.push(entry.relPath);
       storeBuf.chunks.push(...entryChunks);
-      newManifest[entry.relPath] = { hash: entry.hash, mtime: entry.mtime };
+
+      // Build per-chunk hash map for the manifest
+      const chunkHashes: Record<string, string> = {};
+      for (const raw of entry.rawChunks) {
+        chunkHashes[raw.id] = raw.content_hash;
+      }
+      newManifest[entry.relPath] = { hash: entry.hash, mtime: entry.mtime, chunks: chunkHashes };
       ingested++;
       onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
 
@@ -343,9 +395,9 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     await saveHashManifest(root, newManifest);
 
     // Detect total embed failure: had texts to embed but every vector is null
-    const totalEmbedFailure = allTexts.length > 0 && embedFailed === allTexts.length;
+    const totalEmbedFailure = textsToEmbed.length > 0 && embedFailed === textsToEmbed.length;
     const error = totalEmbedFailure
-      ? `Embedding failed: 0/${allTexts.length} vectors produced (Ollama timeout or model unavailable). Nothing was stored.`
+      ? `Embedding failed: 0/${textsToEmbed.length} vectors produced (Ollama timeout or model unavailable). Nothing was stored.`
       : undefined;
 
     return {
