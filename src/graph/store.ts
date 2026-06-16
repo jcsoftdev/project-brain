@@ -5,9 +5,12 @@ export interface SymbolInput {
   name: string; kind: string; signature: string;
   start_line: number; end_line: number; edges: EdgeInput[];
 }
+export interface SymbolHit { name: string; kind: string; signature: string; path: string; start_line: number; end_line: number; }
 
 export class GraphStore {
   private delStmt: ReturnType<Database["query"]>;
+  private hitSql = `s.name AS name, s.kind AS kind, s.signature AS signature,
+                    f.path AS path, s.start_line AS start_line, s.end_line AS end_line`;
 
   constructor(private db: Database) {
     this.delStmt = this.db.query("DELETE FROM files WHERE path = $path");
@@ -58,5 +61,43 @@ export class GraphStore {
       WHERE dst_name IN (
         SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id WHERE f.path = $p
       )`).run({ $p: path });
+  }
+
+  findSymbol(name: string) {
+    return this.db.query(
+      `SELECT ${this.hitSql} FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name = $n`
+    ).all({ $n: name }) as SymbolHit[];
+  }
+
+  findCallers(name: string) {
+    return this.db.query(
+      `SELECT DISTINCT ${this.hitSql} FROM edges e
+       JOIN symbols s ON e.src_symbol_id = s.id JOIN files f ON s.file_id=f.id
+       WHERE e.dst_name = $n`
+    ).all({ $n: name }) as SymbolHit[];
+  }
+
+  findCallees(name: string) {
+    return this.db.query(
+      `SELECT DISTINCT ${this.hitSql} FROM edges e
+       JOIN symbols src ON e.src_symbol_id = src.id
+       JOIN symbols s ON s.name = e.dst_name JOIN files f ON s.file_id=f.id
+       WHERE src.name = $n`
+    ).all({ $n: name }) as SymbolHit[];
+  }
+
+  impact(name: string, maxDepth = 6) {
+    return this.db.query(
+      `WITH RECURSIVE up(id, depth) AS (
+         SELECT s.id, 0 FROM symbols s WHERE s.name = $n
+         UNION
+         SELECT e.src_symbol_id, up.depth + 1
+         FROM edges e JOIN up ON e.dst_symbol_id = up.id
+         WHERE up.depth < $d
+       )
+       SELECT DISTINCT ${this.hitSql}
+       FROM up JOIN symbols s ON s.id = up.id JOIN files f ON s.file_id=f.id
+       WHERE up.depth > 0`
+    ).all({ $n: name, $d: maxDepth }) as SymbolHit[];
   }
 }
