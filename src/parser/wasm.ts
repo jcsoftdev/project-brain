@@ -39,6 +39,7 @@ export class WasmParser {
     this.maybeTeardown();
     this.parser.setLanguage(grammar);
     const tree = this.parser.parse(source);
+    if (!tree) return null;
     this.sinceTeardown++;
     return { tree, langId: spec.id };
   }
@@ -59,6 +60,9 @@ export class WasmParser {
   dispose(): void {
     if (this.parser) this.parser.delete();
     this.parser = null;
+    for (const lang of this.grammars.values()) {
+      if (typeof lang?.delete === "function") lang.delete();
+    }
     this.grammars.clear();
   }
 }

@@ -89,7 +89,7 @@ export const HARDNESS = process.env.PROJECT_BRAIN_HARDNESS === "1";
 export const MAX_PARSE_BYTES = 512 * 1024;      // skip files > 512KB (minified/generated)
 export const MAX_LINE_LENGTH = 5000;            // skip files with pathological lines
 export const PARSER_TEARDOWN_EVERY = 500;       // recreate WASM instance every N files to reclaim linear memory
-export const WASM_MAX_PAGES = 4096;             // 4096 * 64KB = 256MB hard cap on WASM linear memory
+export const WASM_MAX_PAGES = 4096;             // advisory page count; real backstop is input gating (MAX_PARSE_BYTES) + adaptive teardown + optional OS RSS limit on the indexer process
 
 /**
  * Server-level instructions injected into MCP clients so AI agents understand
