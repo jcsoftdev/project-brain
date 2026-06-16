@@ -86,6 +86,9 @@ export const SNIPPET_MAX_LINES = 5;
 /** When true, fail fast on vector dim mismatches instead of silently degrading. */
 export const HARDNESS = process.env.PROJECT_BRAIN_HARDNESS === "1";
 
+/** Filename for the structural graph SQLite database (resolved under the .project-brain data dir). */
+export const GRAPH_DB_FILE = "graph.db";
+
 export const MAX_PARSE_BYTES = 512 * 1024;      // skip files > 512KB (minified/generated)
 export const MAX_LINE_LENGTH = 5000;            // skip files with pathological lines
 export const PARSER_TEARDOWN_EVERY = 500;       // recreate WASM instance every N files to reclaim linear memory

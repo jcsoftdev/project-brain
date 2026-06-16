@@ -3,9 +3,13 @@ import { readFile, writeFile, readdir } from "node:fs/promises";
 import { computeHash } from "../indexer/hash.js";
 import { chunkContent } from "../indexer/parser.js";
 import { shouldIgnore, loadPatterns } from "../indexer/gitignore.js";
-import { WATCHER_ALWAYS_IGNORE } from "../constants.js";
+import { WATCHER_ALWAYS_IGNORE, GRAPH_DB_FILE } from "../constants.js";
 import { mapLimit } from "../indexer/concurrency.js";
 import type { EmbeddingClient, VectorStore, Chunk } from "../types.js";
+import { WasmParser } from "../parser/wasm.js";
+import { extract } from "../parser/extract.js";
+import { GraphStore } from "../graph/store.js";
+import { openGraphDb } from "../graph/db.js";
 
 const CONFIG_DIR = ".project-brain";
 const HASH_MANIFEST = "hashes.json";
@@ -126,6 +130,19 @@ async function listAllFiles(
 export async function runSync(options: SyncOptions): Promise<SyncResult> {
   const { root, projectId, store, embeddings, onProgress } = options;
 
+  // Structural graph: one WasmParser + one GraphStore per run.
+  // Ephemeral: disposed at end of run to free WASM memory + close SQLite.
+  const configDir = join(root, ".project-brain");
+  const graphPath = join(configDir, GRAPH_DB_FILE);
+  // Ensure .project-brain/ exists before opening SQLite (may not exist in fresh projects).
+  const { mkdir: mkdirGraph } = await import("node:fs/promises");
+  await mkdirGraph(configDir, { recursive: true });
+  const graphDb = openGraphDb(graphPath);
+  const graph = new GraphStore(graphDb);
+  const parser = new WasmParser();
+  await parser.init();
+  const warmedExts = new Set<string>();
+
   // 1. Load hash manifest and gitignore patterns
   const [hashManifest, gitignorePatterns] = await Promise.all([
     loadHashManifest(root),
@@ -203,6 +220,23 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
         const parts = relPath.split("/");
         const module = parts.length > 1 ? parts[0] : "root";
+
+        // Structural graph: parse + extract symbols (gated by same hash-skip above).
+        const ext = relPath.slice(relPath.lastIndexOf("."));
+        if (!warmedExts.has(ext)) {
+          await parser.warm(ext);
+          warmedExts.add(ext);
+        }
+        const pt = parser.parseFile(ext, content);
+        if (pt) {
+          try {
+            const syms = extract(pt.tree, pt.langId, content);
+            graph.replaceFile(relPath, pt.langId, hash, mtime, syms);
+          } finally {
+            pt.tree.delete();
+          }
+        }
+
         return { relPath, hash, mtime, rawChunks: chunkContent(content, relPath, module) };
       })
     );
@@ -281,6 +315,11 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   }
   await flushStore(); // flush remainder
 
+  // Resolve cross-file call edges for every file that was parsed this run.
+  for (const entry of pendingEntries) {
+    graph.resolveEdgesForFile(entry.relPath);
+  }
+
   // 5. Detect deleted files (in manifest but no longer on disk)
   let deleted = 0;
   const currentRels = new Set(
@@ -291,6 +330,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   for (const relPath of Object.keys(hashManifest)) {
     if (!currentRels.has(relPath)) {
       await store.deleteBySource(projectId, relPath);
+      graph.deleteFile(relPath);
       delete newManifest[relPath];
       deleted++;
     }
@@ -301,6 +341,10 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
   // 7. Persist updated manifest
   await saveHashManifest(root, newManifest);
+
+  // 8. Dispose structural graph resources (ephemeral process — free WASM + close SQLite).
+  parser.dispose();
+  graphDb.close();
 
   // Detect total embed failure: had texts to embed but every vector is null
   const totalEmbedFailure = allTexts.length > 0 && embedFailed === allTexts.length;
