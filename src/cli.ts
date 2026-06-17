@@ -2,6 +2,18 @@
 
 const [command, ...args] = process.argv.slice(2);
 
+// Update notifier: instant (reads a cached result only, no network) and
+// fail-silent. Skipped for hidden/internal commands so the detached background
+// refresh never re-triggers itself. Opt out with BRAIN_NO_UPDATE_CHECK=1.
+if (command !== "__update-check" && command !== "__parse-selftest") {
+  try {
+    const { notifyIfUpdateAvailable } = await import("./notifier.js");
+    notifyIfUpdateAvailable();
+  } catch {
+    /* fail-silent — never let the notifier break a command */
+  }
+}
+
 function printHelp() {
   console.log(`project-brain — MCP server for codebase knowledge
 
@@ -113,6 +125,13 @@ switch (command) {
     // symbols. Used by .github/workflows/release.yml. See parse-selftest.ts.
     const { execute } = await import("./commands/parse-selftest.js");
     await execute(args);
+    break;
+  }
+  case "__update-check": {
+    // Hidden command run detached by the update notifier to refresh its cache
+    // (latest published version) for the next invocation. Fail-silent.
+    const { execute } = await import("./commands/update-check.js");
+    await execute();
     break;
   }
   case "--help":

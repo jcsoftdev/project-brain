@@ -28,7 +28,8 @@ After `init`, the following run **automatically** without any extra steps:
 
 ## Prerequisites
 
-- **Bun** ≥ 1.3.14 — required runtime ([install](https://bun.sh))
+- **Nothing extra to run it.** The registry install ships a self-contained, prebuilt binary per platform (the runtime is bundled in) — you do **not** need Bun or Node installed to use project-brain.
+- **Bun** ≥ 1.3.14 — only needed to build/run **from source** ([install](https://bun.sh)).
 - **Ollama** (optional, for semantic search) — download from [ollama.com](https://ollama.com). Pull `nomic-embed-text` for embeddings: `ollama pull nomic-embed-text`
 
 ## Install
