@@ -11,6 +11,7 @@ import { register as registerHealth } from "./tools/health.js";
 import { register as registerExpand } from "./tools/expand.js";
 import { register as registerFindSymbol } from "./tools/find-symbol.js";
 import { register as registerCallgraph } from "./tools/callgraph.js";
+import { register as registerImpact } from "./tools/impact.js";
 import { openGraphDb } from "./graph/db.js";
 import { GraphStore } from "./graph/store.js";
 import { join } from "node:path";
@@ -62,6 +63,7 @@ export async function createServer(options: ServerOptions = {}) {
   registerExpand(server, deps);
   registerFindSymbol(server, deps);
   registerCallgraph(server, deps);
+  registerImpact(server, deps);
 
   const toolNames = [
     "search_context",
@@ -74,6 +76,7 @@ export async function createServer(options: ServerOptions = {}) {
     "find_symbol",
     "find_callers",
     "find_callees",
+    "impact",
   ];
 
   return { server, store, embeddings, toolNames, instructions: SERVER_INSTRUCTIONS };

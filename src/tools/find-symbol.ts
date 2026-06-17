@@ -1,26 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
-import type { SymbolHit } from "../graph/store.js";
-
-type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
-
-/** Format a SymbolHit as a single line: path:start_line  kind name — signature */
-function formatHit(hit: SymbolHit): string {
-  return `${hit.path}:${hit.start_line}  ${hit.kind} ${hit.name} — ${hit.signature}`;
-}
+import { formatHits, graphUnavailable, type ToolResult } from "./format.js";
 
 /** Handle find_symbol logic (exported for testing). */
 export async function handleFindSymbol(
   args: { name: string },
   deps: ToolDeps
 ): Promise<ToolResult> {
-  if (!deps.graph) {
-    return {
-      content: [{ type: "text", text: JSON.stringify({ error: "graph store not available", code: "GRAPH_UNAVAILABLE" }) }],
-      isError: true,
-    };
-  }
+  if (!deps.graph) return graphUnavailable();
 
   const hits = deps.graph.findSymbol(args.name);
 
@@ -30,8 +18,7 @@ export async function handleFindSymbol(
     };
   }
 
-  const text = hits.map(formatHit).join("\n");
-  return { content: [{ type: "text", text }] };
+  return { content: [{ type: "text", text: formatHits(hits) }] };
 }
 
 /** Register find_symbol tool with MCP server. */
