@@ -66,6 +66,8 @@ export interface VectorStore {
   assertDim(project: string, queryDim: number): Promise<void>;
 }
 
+import type { GraphStore } from "./graph/store.js";
+
 /** Dependencies injected into MCP tool handlers. */
 export interface ToolDeps {
   store: VectorStore;
@@ -76,4 +78,6 @@ export interface ToolDeps {
    * When absent, handlers fall back to `embeddings` (backward-compatible).
    */
   embeddingsFor?: (project: string) => Promise<EmbeddingClient>;
+  /** Structural graph store for exact symbol lookups (find_symbol and related tools). */
+  graph?: GraphStore;
 }
