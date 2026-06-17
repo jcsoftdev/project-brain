@@ -1,8 +1,7 @@
 import { Database } from "bun:sqlite";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
-const SCHEMA = readFileSync(join(import.meta.dir, "schema.sql"), "utf8");
+// Embed the schema as text so it survives `bun build --compile`: readFileSync against
+// import.meta.dir would hit a non-existent /$bunfs path in the shipped binary (ENOENT).
+import SCHEMA from "./schema.sql" with { type: "text" };
 
 export function openGraphDb(path: string): Database {
   const db = new Database(path, { create: true });

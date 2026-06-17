@@ -156,8 +156,15 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   await mkdir(configDir, { recursive: true });
   const graphDb = openGraphDb(graphPath);
   const graph = new GraphStore(graphDb);
-  const parser = new WasmParser();
-  await parser.init();
+  // Structural extraction is best-effort: if the WASM parser cannot initialise
+  // (e.g. grammar assets missing in an exotic runtime), skip structural work
+  // rather than crashing the whole indexer. parseFile is guarded on `parser` below.
+  let parser: WasmParser | null = new WasmParser();
+  try {
+    await parser.init();
+  } catch {
+    parser = null;
+  }
 
   try {
     const warmedExts = new Set<string>();
@@ -241,12 +248,13 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           const module = parts.length > 1 ? parts[0] : "root";
 
           // Structural graph: parse + extract symbols (gated by same hash-skip above).
+          // Skipped entirely when the WASM parser failed to initialise.
           const ext = relPath.slice(relPath.lastIndexOf("."));
-          if (!warmedExts.has(ext)) {
+          if (parser && !warmedExts.has(ext)) {
             await parser.warm(ext);
             warmedExts.add(ext);
           }
-          const pt = parser.parseFile(ext, content);
+          const pt = parser?.parseFile(ext, content) ?? null;
           if (pt) {
             try {
               const syms = extract(pt.tree, pt.langId, content);

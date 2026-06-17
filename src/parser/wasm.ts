@@ -1,4 +1,9 @@
 import { Parser, Language } from "web-tree-sitter";
+// Core runtime wasm, embedded into the compiled binary via `{ type: "file" }`
+// (bun --compile bakes it in → /$bunfs path at runtime). Without locateFile pointing
+// here, Parser.init() reads from CWD and crashes in the shipped binary with
+// `ENOENT '/$bunfs/root/tree-sitter.wasm'`. See structural-layer/publish-blocker-wasm.
+import coreWasm from "web-tree-sitter/tree-sitter.wasm" with { type: "file" };
 import { langForExt } from "./languages";
 import { MAX_PARSE_BYTES, MAX_LINE_LENGTH, PARSER_TEARDOWN_EVERY } from "../constants";
 
@@ -15,7 +20,7 @@ export class WasmParser {
 
   async init(): Promise<void> {
     if (this.initialized) return;
-    await Parser.init();
+    await Parser.init({ locateFile: () => coreWasm } as any);
     this.parser = new Parser();
     this.initialized = true;
   }
