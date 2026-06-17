@@ -107,11 +107,22 @@ WHEN TO USE: conceptual, cross-file, or fuzzy questions — "how does X work", "
 
 WHEN NOT TO USE (prefer an AST/structural tool or grep): exact symbol definition, who-calls-this, call graph, rename/refactor impact. project-brain and structural tools are COMPLEMENTARY — structural answers "exact symbol X", project-brain answers "the area/concept that does Y".
 
+ROUTING (pick the right tool — do NOT default to search_context for structural questions):
+- "where is X defined" / exact symbol by name → find_symbol (NOT search_context).
+- "what calls X" / "who uses X" → find_callers.
+- "what does X call / depend on" → find_callees.
+- "what breaks if I change X" / blast radius → impact.
+- "how does Y work" / "what handles Z" / concept you can't name exactly → search_context.
+
 WORKFLOW (token-efficient): call search_context first → it returns ranked snippets, each with a chunk_id. Read the snippets; for only the ones you actually need, call expand_context(chunk_id) for the full body — do NOT re-read whole files.
 
 Tools by intent:
-- search_context — semantic/conceptual lookup; returns snippets + chunk_id. PRIMARY.
+- search_context — semantic/conceptual lookup; returns snippets + chunk_id. PRIMARY for fuzzy/cross-file questions.
 - expand_context — full body of a chunk_id from search_context.
+- find_symbol — exact symbol definition(s) by name: path, line range, kind, signature. Use instead of search_context when you know the name.
+- find_callers — every symbol that calls the named symbol (who depends on X).
+- find_callees — every symbol the named symbol calls (what X depends on).
+- impact — blast radius: all symbols transitively affected if the named symbol changes (reverse call graph, bounded by maxDepth).
 - list_modules / get_module — browse the indexed structure by module.
 - add_knowledge — persist a note/decision into the brain for future sessions.
 - delete_knowledge — remove chunks by source (deleted/renamed files).
