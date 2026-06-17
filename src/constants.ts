@@ -98,8 +98,67 @@ export const PARSER_TEARDOWN_EVERY = 500;       // recreate WASM instance every 
 export const WASM_MAX_PAGES = 4096;             // advisory page count; real backstop is input gating (MAX_PARSE_BYTES) + adaptive teardown + optional OS RSS limit on the indexer process
 
 /**
+ * SINGLE SOURCE OF TRUTH for the project-brain tool catalog + routing.
+ *
+ * Both the MCP `SERVER_INSTRUCTIONS` (sent to clients over the protocol) and the
+ * per-project CLAUDE.md rules (written by `init`) are rendered from these — so a
+ * new tool can never be advertised in one place and forgotten in the others.
+ * Keep this list in lockstep with the tools registered in src/server.ts.
+ */
+export interface ToolDoc {
+  name: string;
+  summary: string;
+}
+
+export const TOOL_CATALOG: ToolDoc[] = [
+  { name: "search_context", summary: "semantic/conceptual lookup; returns ranked snippets + chunk_id. PRIMARY for fuzzy/cross-file questions." },
+  { name: "expand_context", summary: "full body of a chunk_id from search_context (read this instead of re-reading whole files)." },
+  { name: "find_symbol", summary: "exact symbol definition(s) by name: path, line range, kind, signature. Use when you know the name." },
+  { name: "find_callers", summary: "every symbol that calls the named symbol (who depends on X)." },
+  { name: "find_callees", summary: "every symbol the named symbol calls (what X depends on)." },
+  { name: "impact", summary: "blast radius: all symbols transitively affected if the named symbol changes (reverse call graph)." },
+  { name: "list_modules", summary: "browse the indexed structure by module." },
+  { name: "get_module", summary: "retrieve all chunks for a module." },
+  { name: "add_knowledge", summary: "persist a note/decision into the brain for future sessions." },
+  { name: "delete_knowledge", summary: "remove chunks by source (deleted/renamed files)." },
+  { name: "check_health", summary: "embedding service + index status; run if results look empty or stale." },
+];
+
+/** Routing rules — (trigger, tool) pairs. Keep aligned with TOOL_CATALOG. */
+export const TOOL_ROUTING: ReadonlyArray<{ when: string; tool: string }> = [
+  { when: '"where is X defined" / exact symbol by name', tool: "find_symbol" },
+  { when: '"what calls X" / "who uses X"', tool: "find_callers" },
+  { when: '"what does X call / depend on"', tool: "find_callees" },
+  { when: '"what breaks if I change X" / blast radius', tool: "impact" },
+  { when: '"how does Y work" / a concept you cannot name exactly', tool: "search_context" },
+];
+
+/** Bullet list of every tool — used by SERVER_INSTRUCTIONS ("Tools by intent"). */
+export function renderToolList(): string {
+  return TOOL_CATALOG.map((t) => `- ${t.name} — ${t.summary}`).join("\n");
+}
+
+/** Markdown doc block (tools + routing + workflow) — used in the project CLAUDE.md. */
+export function renderToolDocs(): string {
+  const tools = TOOL_CATALOG.map((t) => `- \`${t.name}\` — ${t.summary}`).join("\n");
+  const routing = TOOL_ROUTING.map((r) => `- ${r.when} → \`${r.tool}\``).join("\n");
+  return `### Available Tools
+
+${tools}
+
+### Routing (pick the right tool — do NOT default to search_context for structural questions)
+
+${routing}
+
+### Workflow
+
+Call \`search_context\` first for fuzzy/conceptual questions → it returns ranked snippets with a \`chunk_id\`; call \`expand_context(chunk_id)\` for full bodies instead of re-reading whole files. For exact symbols, callers/callees, and blast radius use the structural tools above — they are faster and more precise than \`search_context\`.`;
+}
+
+/**
  * Server-level instructions injected into MCP clients so AI agents understand
- * when and how to use project-brain vs structural/AST tools.
+ * when and how to use project-brain vs structural/AST tools. Composed from the
+ * single TOOL_CATALOG/TOOL_ROUTING source above.
  */
 export const SERVER_INSTRUCTIONS = `project-brain — semantic memory of THIS project's code and docs. Retrieves by MEANING, not by string match.
 
@@ -108,22 +167,9 @@ WHEN TO USE: conceptual, cross-file, or fuzzy questions — "how does X work", "
 WHEN NOT TO USE (prefer an AST/structural tool or grep): exact symbol definition, who-calls-this, call graph, rename/refactor impact. project-brain and structural tools are COMPLEMENTARY — structural answers "exact symbol X", project-brain answers "the area/concept that does Y".
 
 ROUTING (pick the right tool — do NOT default to search_context for structural questions):
-- "where is X defined" / exact symbol by name → find_symbol (NOT search_context).
-- "what calls X" / "who uses X" → find_callers.
-- "what does X call / depend on" → find_callees.
-- "what breaks if I change X" / blast radius → impact.
-- "how does Y work" / "what handles Z" / concept you can't name exactly → search_context.
+${TOOL_ROUTING.map((r) => `- ${r.when} → ${r.tool}`).join("\n")}
 
 WORKFLOW (token-efficient): call search_context first → it returns ranked snippets, each with a chunk_id. Read the snippets; for only the ones you actually need, call expand_context(chunk_id) for the full body — do NOT re-read whole files.
 
 Tools by intent:
-- search_context — semantic/conceptual lookup; returns snippets + chunk_id. PRIMARY for fuzzy/cross-file questions.
-- expand_context — full body of a chunk_id from search_context.
-- find_symbol — exact symbol definition(s) by name: path, line range, kind, signature. Use instead of search_context when you know the name.
-- find_callers — every symbol that calls the named symbol (who depends on X).
-- find_callees — every symbol the named symbol calls (what X depends on).
-- impact — blast radius: all symbols transitively affected if the named symbol changes (reverse call graph, bounded by maxDepth).
-- list_modules / get_module — browse the indexed structure by module.
-- add_knowledge — persist a note/decision into the brain for future sessions.
-- delete_knowledge — remove chunks by source (deleted/renamed files).
-- check_health — embedding service + index status; run if results look empty or stale.`;
+${renderToolList()}`;

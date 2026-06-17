@@ -1,20 +1,21 @@
 import { join } from "node:path";
 import { writeSection } from "./section-marker.js";
+import { renderToolDocs } from "../constants.js";
 import type { StackInfo } from "../indexer/stack.js";
 
 const TEMPLATES_DIR = join(import.meta.dir, "../../templates");
 
+// {{tools}} is filled from the single TOOL_CATALOG source in constants.ts, so the
+// per-project tool list can never drift from the tools the server registers.
 const FALLBACK_TEMPLATE = `# Project: {{projectId}}
 
 This project is indexed with project-brain.
 
 ## project-brain MCP
 
-Use the project-brain MCP tools (search_context, add_knowledge, list_modules, get_module, delete_knowledge, check_health) for codebase knowledge retrieval.
+You have access to the \`project-brain\` MCP server for codebase knowledge retrieval.
 
-### Usage
-
-Use \`search_context\` for semantic/conceptual or cross-file questions (when you don't know the exact symbol); for exact symbol/caller lookups prefer a structural/AST tool or grep. After \`search_context\`, use \`expand_context(chunk_id)\` to read full bodies instead of re-reading whole files.
+{{tools}}
 
 ### Project Context
 
@@ -96,6 +97,7 @@ export async function writeProjectRules(
   const rendered = template
     .replace(/\{\{projectId\}\}/g, info.projectId)
     .replace(/\{\{stack\}\}/g, formatStack(info.stack))
+    .replace(/\{\{tools\}\}/g, renderToolDocs())
     .replace(/\{\{modules\}\}/g, modulesSection);
 
   const claudeMdPath = join(root, "CLAUDE.md");

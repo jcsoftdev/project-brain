@@ -118,6 +118,32 @@ describe("writeProjectRules", () => {
     expect(content).toContain("project-brain");
   });
 
+  it("generated rules advertise ALL tools incl. the structural layer (no stale list)", async () => {
+    const { writeProjectRules } = await import("../../src/rules/project.js");
+
+    await writeProjectRules(tempDir, {
+      projectId: "all-tools",
+      stack: { languages: [], frameworks: [], packageManager: null, manifest: null },
+    });
+
+    const content = await readFile(join(tempDir, "CLAUDE.md"), "utf-8");
+    for (const t of [
+      "search_context",
+      "expand_context",
+      "find_symbol",
+      "find_callers",
+      "find_callees",
+      "impact",
+      "list_modules",
+      "get_module",
+      "add_knowledge",
+      "delete_knowledge",
+      "check_health",
+    ]) {
+      expect(content).toContain(t);
+    }
+  });
+
   /**
    * Scenario 2.6 — CLAUDE.md contains module instructions [unit]
    */
