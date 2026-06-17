@@ -2,7 +2,7 @@
 
 Local-first MCP server that gives AI tools semantic memory of your codebase.
 
-project-brain indexes your project files into a local LanceDB vector store using Ollama embeddings. Once indexed, AI assistants connected via MCP can search your codebase semantically, track module documentation, and maintain knowledge that persists across sessions.
+project-brain indexes your project files into a local LanceDB vector store using Ollama embeddings, and builds a SQLite **structural graph** (symbols + call edges) with a WASM tree-sitter parser. Once indexed, AI assistants connected via MCP can search your codebase **semantically** (by meaning) AND **structurally** (exact symbols, callers/callees, change blast-radius), track module documentation, and maintain knowledge that persists across sessions.
 
 ## Quick Start
 
@@ -73,6 +73,38 @@ Once `project-brain setup` has registered the MCP server in your AI tool, you ca
 
 The slash commands are Claude Code skills installed globally at `~/.claude/skills/brain-*/SKILL.md`. They work in any session regardless of the current project.
 
+## MCP Tools
+
+Once connected over MCP, AI assistants get these tools. The server also injects routing instructions so the assistant picks the right one (semantic vs structural).
+
+### Semantic (meaning-based)
+
+| Tool | What it does |
+|---|---|
+| `search_context` | Semantic/conceptual lookup. Returns ranked snippets, each with a `chunk_id`. **Primary** for fuzzy/cross-file questions ("how does X work"). |
+| `expand_context` | Full body of a `chunk_id` from `search_context` — read this instead of re-reading whole files. |
+
+### Structural (AST graph — exact, no embeddings needed)
+
+| Tool | What it does |
+|---|---|
+| `find_symbol` | Exact symbol definition(s) by name: path, line range, kind, signature. Use when you know the name. |
+| `find_callers` | Every symbol that calls the named symbol (who depends on X). |
+| `find_callees` | Every symbol the named symbol calls (what X depends on). |
+| `impact` | Blast radius — all symbols transitively affected if the named symbol changes (reverse call graph, bounded by `maxDepth`). |
+
+### Modules & knowledge
+
+| Tool | What it does |
+|---|---|
+| `list_modules` | Browse the indexed structure by module. |
+| `get_module` | Retrieve all chunks for a module. |
+| `add_knowledge` | Persist a note/decision into the brain for future sessions. |
+| `delete_knowledge` | Remove chunks by source (deleted/renamed files). |
+| `check_health` | Embedding service + index status; run if results look empty or stale. |
+
+Routing: exact symbol → `find_symbol`; who-calls → `find_callers`; what-it-calls → `find_callees`; "what breaks if I change X" → `impact`; fuzzy/conceptual → `search_context` then `expand_context`. The canonical tool list lives in `src/constants.ts` (`TOOL_CATALOG`) and is rendered into both the MCP server instructions and the per-project `CLAUDE.md`.
+
 ## Commands
 
 ### `setup`
@@ -117,6 +149,15 @@ Check system health: Ollama availability, LanceDB status, and staleness of the i
 project-brain health
 ```
 
+### `search`
+
+Search the indexed context and print compact results. Primarily used internally: `init` installs a `UserPromptSubmit` hook (`project-brain search --stdin`) in `.claude/settings.json` that auto-injects relevant context on every prompt, so retrieval is deterministic rather than relying on the AI to call a tool.
+
+```bash
+project-brain search "how does auth work"
+echo "how does auth work" | project-brain search --stdin
+```
+
 ### `serve`
 
 Start the MCP server. Default mode uses stdio (for local AI tool connections).
@@ -139,8 +180,14 @@ BRAIN_HTTP_TOKEN=your-secret project-brain serve --http [--port 3000]
 |---|---|---|
 | `BRAIN_HTTP_PORT` | `3000` | Port for HTTP server mode |
 | `BRAIN_HTTP_TOKEN` | — | **Required** for `serve --http`. Bearer secret. |
-| `BRAIN_DATA_DIR` | `~/.project-brain/data` | LanceDB data directory |
+| `BRAIN_DATA_DIR` | `~/.project-brain/data` | LanceDB + structural graph data directory |
 | `BRAIN_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model name |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL |
+| `BRAIN_NO_UPDATE_CHECK` | — | Set to `1` to disable the update-available notice |
+
+## Update notifications
+
+The CLI checks (at most once a day, in the background) whether a newer `project-brain` is published on npm and prints a one-line notice when one is available. It is fail-silent, adds zero latency (the check runs in a detached process; the current command reads only a cached result), and is skipped in CI. Disable it with `BRAIN_NO_UPDATE_CHECK=1`.
 
 ## Module Documentation Workflow
 
