@@ -26,6 +26,9 @@ export const HEALTH_COOLDOWN_MS = 30_000;
 /** Watcher debounce delay per file (ms). */
 export const WATCHER_DEBOUNCE_MS = 300;
 
+/** Maximum number of paths per wave when splitting large batches (anti-storm). */
+export const WATCHER_MAX_BATCH = 200;
+
 /** Section markers for rule injection. */
 export const SECTION_MARKER_START = "<!-- project-brain:start -->";
 export const SECTION_MARKER_END = "<!-- project-brain:end -->";

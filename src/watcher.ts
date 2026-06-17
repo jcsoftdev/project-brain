@@ -1,6 +1,6 @@
 import { watch as fsWatch } from "node:fs";
 import { runSync } from "./commands/sync.js";
-import { WATCHER_DEBOUNCE_MS, WATCHER_ALWAYS_IGNORE } from "./constants.js";
+import { WATCHER_DEBOUNCE_MS, WATCHER_ALWAYS_IGNORE, WATCHER_MAX_BATCH } from "./constants.js";
 import type { EmbeddingClient, VectorStore } from "./types.js";
 
 /** A started filesystem watch handle. */
@@ -55,10 +55,10 @@ export function debounceSync(
   delayMs: number
 ): (path: string) => void {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const pending: string[] = [];
+  const pending = new Set<string>();
 
   return (path: string) => {
-    pending.push(path);
+    pending.add(path);
 
     if (timer !== null) {
       clearTimeout(timer);
@@ -66,10 +66,22 @@ export function debounceSync(
 
     timer = setTimeout(() => {
       timer = null;
-      const batch = [...pending];
-      pending.length = 0;
-      // Fire and forget — errors are surfaced via console.warn
-      callback(batch).catch((err) => {
+      // Dedupe via Set; snapshot and clear before async work
+      const unique = [...pending];
+      pending.clear();
+
+      // Split into bounded waves of ≤ WATCHER_MAX_BATCH and deliver sequentially
+      const waves: string[][] = [];
+      for (let i = 0; i < unique.length; i += WATCHER_MAX_BATCH) {
+        waves.push(unique.slice(i, i + WATCHER_MAX_BATCH));
+      }
+
+      // Fire and forget the sequential chain — errors surfaced via console.warn
+      (async () => {
+        for (const wave of waves) {
+          await callback(wave);
+        }
+      })().catch((err) => {
         console.warn("[watcher] sync error:", err);
       });
     }, delayMs);
