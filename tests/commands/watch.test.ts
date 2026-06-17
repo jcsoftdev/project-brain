@@ -162,6 +162,39 @@ describe("FileWatcher", () => {
       expect(await store.countChunks("proj")).toBeGreaterThan(0);
       await watcher.stop();
     });
+
+    it("stop() awaits an in-flight sync before resolving (FIX A drain)", async () => {
+      const { FileWatcher } = await import("../../src/watcher.js");
+      const store = makeMemoryStore();
+
+      await writeFile(join(tempDir, "drain.md"), "# Drain\n\nContent here.\n");
+
+      let emit: ((filename: string) => void) | null = null;
+      const fakeWatch = (_root: string, onEvent: (f: string) => void) => {
+        emit = onEvent;
+        return { close() {} };
+      };
+
+      const watcher = new FileWatcher({
+        root: tempDir,
+        projectId: "drainproj",
+        store,
+        embeddings: mockEmbeddings,
+        debounceMs: 10,
+        watchFn: fakeWatch,
+      });
+      watcher.start();
+
+      // Trigger a change, then wait only past the debounce so the sync is
+      // in-flight (not yet finished) when we call stop().
+      emit!("drain.md");
+      await new Promise((r) => setTimeout(r, 15));
+
+      // stop() MUST drain the in-flight sync. After it resolves, the sync's
+      // writes must already be visible — no use-after-close window.
+      await watcher.stop();
+      expect(await store.countChunks("drainproj")).toBeGreaterThan(0);
+    });
   });
 
   describe("T-8.2: debounceSync pure logic", () => {

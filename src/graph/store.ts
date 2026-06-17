@@ -16,6 +16,11 @@ export class GraphStore {
     this.delStmt = this.db.query("DELETE FROM files WHERE path = $path");
   }
 
+  /** Close the underlying SQLite connection. Callers that own the connection use this on shutdown. */
+  close(): void {
+    this.db.close();
+  }
+
   deleteFile(path: string): void {
     // ON DELETE CASCADE removes symbols + edges
     this.delStmt.run({ $path: path });
@@ -61,6 +66,27 @@ export class GraphStore {
       WHERE dst_name IN (
         SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id WHERE f.path = $p
       )`).run({ $p: path });
+  }
+
+  /**
+   * Repair edge → symbol links after deletions/renames.
+   *
+   * SQLite reuses rowids, so a deleted symbol's id can be reassigned to an
+   * unrelated symbol. Edges that still carry the stale dst_symbol_id would then
+   * make `impact` traverse the wrong (or deleted) symbol. This:
+   *   1. NULLs every dst_symbol_id that no longer points at a live symbol, then
+   *   2. re-links by name where a matching symbol still exists.
+   */
+  pruneDanglingEdges(): void {
+    this.db.query(`
+      UPDATE edges SET dst_symbol_id = NULL
+      WHERE dst_symbol_id IS NOT NULL
+        AND dst_symbol_id NOT IN (SELECT id FROM symbols)`).run();
+    this.db.query(`
+      UPDATE edges SET dst_symbol_id = (
+        SELECT s.id FROM symbols s WHERE s.name = edges.dst_name LIMIT 1
+      )
+      WHERE dst_symbol_id IS NULL`).run();
   }
 
   findSymbol(name: string) {

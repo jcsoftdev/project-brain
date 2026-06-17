@@ -126,6 +126,82 @@ test("runSync removes graph entries for deleted files", async () => {
   expect(rows2.map((r) => r.name)).not.toContain("mul");
 });
 
+test("incremental sync (changedFiles) does NOT delete other indexed files", async () => {
+  // Regression: the deletion-detection loop must NOT run on the incremental path.
+  // changedFiles holds only the edited file, so an unguarded loop would treat
+  // every OTHER indexed file as deleted and wipe it from store + graph + manifest
+  // on every watcher save (catastrophic data loss).
+  writeFileSync(join(tempDir, "one.ts"), "export function one(){ return 1; }");
+  writeFileSync(join(tempDir, "two.ts"), "export function two(){ return 2; }");
+
+  const { runSync } = await import("../../src/commands/sync.js");
+  const { openGraphDb } = await import("../../src/graph/db.js");
+
+  const store = makeMemoryStore();
+  const deletedSources: string[] = [];
+  const origDelete = store.deleteBySource;
+  store.deleteBySource = async (project, source) => {
+    deletedSources.push(source);
+    return origDelete(project, source);
+  };
+
+  // Full index of both files.
+  await runSync({ root: tempDir, projectId: "test-incr", store, embeddings: noopEmbeddings });
+
+  // Edit + incremental sync of ONLY one.ts.
+  writeFileSync(join(tempDir, "one.ts"), "export function one(){ return 11; }");
+  const result = await runSync({
+    root: tempDir,
+    projectId: "test-incr",
+    store,
+    embeddings: noopEmbeddings,
+    changedFiles: ["one.ts"],
+  });
+
+  // two.ts must survive in the graph and must NOT have been deleted from the store.
+  const db = openGraphDb(join(tempDir, ".project-brain", "graph.db"));
+  const names = (db.query("SELECT name FROM symbols").all() as { name: string }[]).map((r) => r.name);
+  db.close();
+
+  expect(names).toContain("two");
+  expect(names).toContain("one");
+  expect(result.deleted).toBe(0);
+  expect(deletedSources).not.toContain("two.ts");
+});
+
+test("--changed-only (empty changedFiles) still reconciles real deletions", async () => {
+  // `--changed-only` passes changedFiles:[] which the collection step treats as a
+  // FULL hash-gated walk, so deletion detection MUST still run (only the watcher's
+  // NON-empty incremental list skips it). Guards must agree on empty-array semantics.
+  writeFileSync(join(tempDir, "keep.ts"), "export function keep(){ return 1; }");
+  const goPath = join(tempDir, "gone.ts");
+  writeFileSync(goPath, "export function gone(){ return 2; }");
+
+  const { runSync } = await import("../../src/commands/sync.js");
+  const { openGraphDb } = await import("../../src/graph/db.js");
+  const store = makeMemoryStore();
+
+  await runSync({ root: tempDir, projectId: "test-changedonly", store, embeddings: noopEmbeddings });
+
+  // Delete gone.ts, then run in --changed-only mode (empty array).
+  rmSync(goPath);
+  const result = await runSync({
+    root: tempDir,
+    projectId: "test-changedonly",
+    store,
+    embeddings: noopEmbeddings,
+    changedFiles: [],
+  });
+
+  const db = openGraphDb(join(tempDir, ".project-brain", "graph.db"));
+  const names = (db.query("SELECT name FROM symbols").all() as { name: string }[]).map((r) => r.name);
+  db.close();
+
+  expect(result.deleted).toBe(1);
+  expect(names).toContain("keep");
+  expect(names).not.toContain("gone");
+});
+
 test("unchanged file → parseFile not called on second sync", async () => {
   writeFileSync(
     join(tempDir, "d.ts"),
@@ -163,6 +239,76 @@ test("unchanged file → parseFile not called on second sync", async () => {
   } finally {
     parseFileSpy.mockRestore();
   }
+});
+
+test("a structural-extraction failure on one file does not abort indexing of siblings", async () => {
+  // Two good TS files. We force WasmParser.warm to throw the FIRST time it runs
+  // (simulating a grammar/parse failure for that ext). The per-file structural
+  // try/catch must swallow it so BOTH files still get chunked + ingested.
+  writeFileSync(join(tempDir, "bad.ts"), "export function bad(a: number){ return a; }");
+  writeFileSync(join(tempDir, "good.ts"), "export function good(a: number){ return a; }");
+
+  const { runSync } = await import("../../src/commands/sync.js");
+
+  let threw = false;
+  const warmSpy = spyOn(WasmParser.prototype, "warm").mockImplementation(async function (
+    this: WasmParser
+  ) {
+    if (!threw) {
+      threw = true;
+      throw new Error("forced warm failure");
+    }
+    // subsequent calls: behave as a no-op (parseFile returns null without ready grammar)
+  });
+
+  try {
+    const result = await runSync({
+      root: tempDir,
+      projectId: "test-graph-resilient",
+      store: makeMemoryStore(),
+      embeddings: noopEmbeddings,
+    });
+
+    // The throw must NOT have aborted the run: both files were ingested for embedding.
+    expect(warmSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(result.ingested).toBe(2);
+    expect(result.error).toBeUndefined();
+  } finally {
+    warmSpy.mockRestore();
+  }
+});
+
+test("injected graph is used and NOT closed by runSync (caller owns lifecycle)", async () => {
+  writeFileSync(
+    join(tempDir, "f.ts"),
+    "export function pow(a: number, b: number){ return a ** b; }"
+  );
+
+  const { runSync } = await import("../../src/commands/sync.js");
+  const { openGraphDb } = await import("../../src/graph/db.js");
+  const { GraphStore } = await import("../../src/graph/store.js");
+
+  // Caller-owned shared connection.
+  const db = openGraphDb(join(tempDir, ".project-brain", "graph.db"));
+  const graph = new GraphStore(db);
+
+  await runSync({
+    root: tempDir,
+    projectId: "test-graph-injected",
+    store: makeMemoryStore(),
+    embeddings: noopEmbeddings,
+    graph,
+  });
+
+  // The SAME connection must still be open AFTER runSync returns and must
+  // contain the parsed symbols (runSync wrote to the injected graph).
+  const rows = graph.findSymbol("pow");
+  expect(rows.length).toBeGreaterThan(0);
+
+  // Querying would throw if runSync had closed the connection.
+  expect(() => db.query("SELECT 1").get()).not.toThrow();
+
+  graph.close(); // caller closes
 });
 
 test("throw during run → parser.dispose and graphDb still cleaned up", async () => {

@@ -33,7 +33,16 @@ export class WasmParser {
 
   private async ensureGrammar(langId: string, wasmPath: string): Promise<any> {
     let p = this.grammars.get(langId);
-    if (!p) { p = Language.load(wasmPath); this.grammars.set(langId, p); }
+    if (!p) {
+      // Evict on rejection so a transient/failed Language.load does NOT poison
+      // the cache permanently. A second attempt can retry; until then parseFile
+      // simply returns null for this language (grammar not ready).
+      p = Language.load(wasmPath).catch((err) => {
+        this.grammars.delete(langId);
+        throw err;
+      });
+      this.grammars.set(langId, p);
+    }
     return p;
   }
 
@@ -54,9 +63,15 @@ export class WasmParser {
 
   async warm(ext: string): Promise<void> {
     const spec = langForExt(ext);
-    if (spec) {
+    if (!spec) return;
+    // Never throw: a failed grammar load leaves the language unsupported
+    // (parseFile returns null when not in `ready`) but keeps the parser usable
+    // for other languages. The rejected promise is evicted in ensureGrammar.
+    try {
       const grammar = await this.ensureGrammar(spec.id, spec.wasmPath);
       this.ready.set(spec.id, grammar);
+    } catch (err) {
+      console.warn(`[parser] grammar load failed for ${spec.id}:`, err instanceof Error ? err.message : err);
     }
   }
 

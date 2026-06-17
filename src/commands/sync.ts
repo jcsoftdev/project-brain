@@ -41,6 +41,13 @@ export interface SyncOptions {
   changedFiles?: string[];
   /** Progress callback fired at each phase checkpoint. */
   onProgress?: (p: SyncProgress) => void;
+  /**
+   * Injected structural graph. When provided, runSync USES this shared
+   * connection and does NOT open or close one (the caller owns its lifecycle —
+   * e.g. the long-lived MCP server). When omitted, runSync opens an ephemeral
+   * graph at .project-brain/graph.db and closes it before returning.
+   */
+  graph?: GraphStore;
 }
 
 export interface SyncResult {
@@ -149,13 +156,15 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   const { root, projectId, store, embeddings, onProgress } = options;
 
   // Structural graph: one WasmParser + one GraphStore per run.
-  // Ephemeral: disposed at end of run to free WASM memory + close SQLite.
+  // When the caller injects a graph (e.g. the long-lived MCP server's shared
+  // connection) we USE it and do NOT open/close one — the caller owns its
+  // lifecycle. Otherwise we open an ephemeral graph and close it in finally.
   const configDir = join(root, ".project-brain");
-  const graphPath = join(configDir, GRAPH_DB_FILE);
+  const ownsGraph = !options.graph;
   // Ensure .project-brain/ exists before opening SQLite (may not exist in fresh projects).
   await mkdir(configDir, { recursive: true });
-  const graphDb = openGraphDb(graphPath);
-  const graph = new GraphStore(graphDb);
+  const graph =
+    options.graph ?? new GraphStore(openGraphDb(join(configDir, GRAPH_DB_FILE)));
   // Structural extraction is best-effort: if the WASM parser cannot initialise
   // (e.g. grammar assets missing in an exotic runtime), skip structural work
   // rather than crashing the whole indexer. parseFile is guarded on `parser` below.
@@ -227,8 +236,11 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
             mtime = s.mtimeMs;
           } catch { return null; }
 
-          const relPath = filePath.startsWith(root + "/")
-            ? filePath.slice(root.length + 1) : filePath;
+          // Normalize backslashes (Windows watcher delivers `\` paths) so graph
+          // files.path + manifest keys match the forward-slash keys used by the
+          // full-walk path (listAllFiles). Otherwise dedupe breaks on Windows.
+          const relPath = (filePath.startsWith(root + "/")
+            ? filePath.slice(root.length + 1) : filePath).replace(/\\/g, "/");
 
           const entry = hashManifest[relPath];
           if (entry && entry.mtime === mtime) return "skipped" as const; // mtime unchanged → skip
@@ -249,19 +261,29 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
           // Structural graph: parse + extract symbols (gated by same hash-skip above).
           // Skipped entirely when the WASM parser failed to initialise.
-          const ext = relPath.slice(relPath.lastIndexOf("."));
-          if (parser && !warmedExts.has(ext)) {
-            await parser.warm(ext);
-            warmedExts.add(ext);
-          }
-          const pt = parser?.parseFile(ext, content) ?? null;
-          if (pt) {
-            try {
-              const syms = extract(pt.tree, pt.langId, content);
-              graph.replaceFile(relPath, pt.langId, hash, mtime, syms);
-            } finally {
-              pt.tree.delete();
+          // Dot-less filenames (e.g. "Makefile") have no extension → "".
+          const dotIdx = relPath.lastIndexOf(".");
+          const ext = dotIdx < 0 ? "" : relPath.slice(dotIdx);
+          // Best-effort: a single malformed/unsupported file must NOT abort the
+          // whole sync (which would also kill embedding of every other file).
+          // Any throw from warm/parse/extract is logged and structural work for
+          // this file is skipped; embedding still proceeds below.
+          try {
+            if (parser && !warmedExts.has(ext)) {
+              await parser.warm(ext);
+              warmedExts.add(ext);
             }
+            const pt = parser?.parseFile(ext, content) ?? null;
+            if (pt) {
+              try {
+                const syms = extract(pt.tree, pt.langId, content);
+                graph.replaceFile(relPath, pt.langId, hash, mtime, syms);
+              } finally {
+                pt.tree.delete();
+              }
+            }
+          } catch (err) {
+            console.warn(`[sync] structural extraction skipped for ${relPath}:`, err instanceof Error ? err.message : err);
           }
 
           return { relPath, hash, mtime, rawChunks: chunkContent(content, relPath, module) };
@@ -394,20 +416,48 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       graph.resolveEdgesForFile(entry.relPath);
     }
 
-    // 5. Detect deleted files (in manifest but no longer on disk)
+    // 5. Detect deleted files (in manifest but no longer on disk).
+    //    ONLY the authoritative full walk can do this: on the incremental
+    //    (changedFiles) path `filePaths` holds just the changed files, so every
+    //    OTHER indexed file would miss `currentRels` and be wiped from the store,
+    //    graph, and manifest on every watcher save. Incremental syncs therefore
+    //    never delete; real deletions are reconciled on the next full sync.
+    // Mirror the file-collection predicate (line ~190): an empty changedFiles
+    // array means "full walk, hash-gated" (the `--changed-only` CLI flag), which
+    // CAN authoritatively detect deletions. Only a NON-EMPTY changedFiles list
+    // (the watcher's incremental path) must skip deletion — otherwise every
+    // unprocessed file would be wiped. Keep both guards' empty-array semantics in
+    // lockstep.
     let deleted = 0;
-    const currentRels = new Set(
-      filePaths.map((f) =>
-        f.startsWith(root + "/") ? f.slice(root.length + 1) : f
-      )
-    );
-    for (const relPath of Object.keys(hashManifest)) {
-      if (!currentRels.has(relPath)) {
-        await store.deleteBySource(projectId, relPath);
-        graph.deleteFile(relPath);
-        delete newManifest[relPath];
-        deleted++;
+    if (!options.changedFiles || options.changedFiles.length === 0) {
+      // Normalize backslashes so these keys match the forward-slash manifest keys
+      // (set during the read phase). Without this, on Windows EVERY manifest entry
+      // misses currentRels and gets spuriously deleted.
+      const currentRels = new Set(
+        filePaths.map((f) =>
+          (f.startsWith(root + "/") ? f.slice(root.length + 1) : f).replace(/\\/g, "/")
+        )
+      );
+      for (const relPath of Object.keys(hashManifest)) {
+        if (!currentRels.has(relPath)) {
+          await store.deleteBySource(projectId, relPath);
+          graph.deleteFile(relPath);
+          delete newManifest[relPath];
+          deleted++;
+        }
       }
+    }
+
+    // Repair stale edge links after structural mutation. SQLite reuses rowids,
+    // so a removed symbol's id can be reassigned — edges in OTHER files keeping
+    // the stale dst_symbol_id would make `impact`/`findCallers` traverse the
+    // wrong symbol. This happens on REPLACE too, not just delete: editing a file
+    // to rename/remove a symbol cascade-deletes its old rows, but edges in
+    // unchanged files (not in pendingEntries) are never revisited by
+    // resolveEdgesForFile. So prune whenever anything was replaced or deleted.
+    // Pure no-op syncs (nothing changed) skip the two full-table scans.
+    if (deleted > 0 || pendingEntries.length > 0) {
+      graph.pruneDanglingEdges();
     }
 
     // 6. Build FTS + vector indexes so hybridSearch works
@@ -431,10 +481,11 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       error,
     };
   } finally {
-    // 8. Dispose structural graph resources (ephemeral — free WASM + close SQLite).
-    // Runs even if an error is thrown above to prevent WASM leaks and open WAL handles.
+    // 8. Dispose structural graph resources. The WASM parser is always
+    // ephemeral. The graph is closed ONLY when runSync opened it — an injected
+    // graph belongs to the caller (the MCP server) and must stay open.
     if (parser) { try { parser.dispose(); } catch {} }
-    if (graphDb) { try { graphDb.close(); } catch {} }
+    if (ownsGraph) { try { graph.close(); } catch {} }
   }
 }
 
@@ -477,9 +528,9 @@ export async function checkStaleness(options: StalenessOptions): Promise<Stalene
       continue;
     }
 
-    const relPath = filePath.startsWith(root + "/")
+    const relPath = (filePath.startsWith(root + "/")
       ? filePath.slice(root.length + 1)
-      : filePath;
+      : filePath).replace(/\\/g, "/");
     const hash = computeHash(content);
 
     const entry = hashManifest[relPath];

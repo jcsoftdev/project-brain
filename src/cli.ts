@@ -61,13 +61,14 @@ switch (command) {
       const dbPath = process.env.BRAIN_DATA_DIR || undefined;
       const embedModel = process.env.BRAIN_EMBED_MODEL || undefined;
       const cwd = process.cwd();
-      const { server, store, embeddings } = await createServer({ dbPath, embedModel });
+      const { server, store, embeddings, graph } = await createServer({ dbPath, embedModel, projectRoot: cwd });
 
-      // Attempt to start file watcher if project config exists
-      const watcher = await maybeStartWatcher(cwd, { store, embeddings });
+      // Attempt to start file watcher if project config exists.
+      // Pass the server's shared graph so the watcher writes the SAME graph.db.
+      const watcher = await maybeStartWatcher(cwd, { store, embeddings, graph });
 
-      // Graceful shutdown
-      const shutdown = createShutdownHandler(watcher);
+      // Graceful shutdown — also close the shared graph connection.
+      const shutdown = createShutdownHandler(watcher, undefined, graph);
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
 
@@ -103,6 +104,14 @@ switch (command) {
   }
   case "search": {
     const { execute } = await import("./commands/search.js");
+    await execute(args);
+    break;
+  }
+  case "__parse-selftest": {
+    // Hidden build-smoke hook (not in --help). Ollama-free: proves the
+    // cross-compiled binary loaded the embedded WASM grammar + produced
+    // symbols. Used by .github/workflows/release.yml. See parse-selftest.ts.
+    const { execute } = await import("./commands/parse-selftest.js");
     await execute(args);
     break;
   }

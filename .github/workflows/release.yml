@@ -86,6 +86,44 @@ jobs:
       - name: Build binary
         run: bun build ./src/cli.ts --compile --target=${{ matrix.bun_target }} --outfile dist/project-brain-${{ matrix.target }}
 
+      - name: Smoke test native binary
+        shell: bash
+        # Runs the JUST-BUILT native binary (matrix.os matches matrix.target, so
+        # it executes natively) through the hidden `__parse-selftest` hook. That
+        # hook initialises the embedded tree-sitter core + a grammar (baked into
+        # the `bun build --compile` artifact), parses one .ts file, and prints
+        # `STRUCT_OK <count>` — WITHOUT Ollama, the vector store, or SQLite.
+        #
+        # POSITIVE assertion is the primary gate: graceful degradation means a
+        # broken embedded WASM asset no longer crashes `init` (it silently yields
+        # zero symbols), so a negative-marker grep alone can pass vacuously. By
+        # requiring STRUCT_OK with a count >= 1 we prove the structural layer is
+        # actually alive in this platform binary. The narrowed negative grep
+        # ($bunfs / RuntimeError) stays as defense-in-depth.
+        run: |
+          set -u
+          BIN="dist/project-brain-${{ matrix.target }}${{ matrix.ext }}"
+          chmod +x "$BIN" || true
+          SMOKE="$(mktemp -d)"
+          printf 'export function smoke(a, b){ return a + b; }\n' > "$SMOKE/a.ts"
+          set +e
+          OUT="$("$BIN" __parse-selftest "$SMOKE/a.ts" 2>&1)"
+          STATUS=$?
+          set -e
+          echo "exit=$STATUS"
+          echo "$OUT"
+          # Defense-in-depth: an embedded-asset regression marker is a hard fail.
+          if echo "$OUT" | grep -E 'RuntimeError|\$bunfs' >/dev/null; then
+            echo "::error::native binary smoke hit an embedded-asset regression (RuntimeError/\$bunfs)"
+            exit 1
+          fi
+          # PRIMARY gate: structural layer must have produced symbols.
+          if ! echo "$OUT" | grep -Eq 'STRUCT_OK [1-9][0-9]*'; then
+            echo "::error::native binary smoke did NOT emit STRUCT_OK with a nonzero symbol count — structural layer is dead in this binary"
+            exit 1
+          fi
+          rm -rf "$SMOKE"
+
       - name: Upload binary to release
         uses: softprops/action-gh-release@v3
         with:

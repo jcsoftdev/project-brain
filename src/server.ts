@@ -24,6 +24,12 @@ interface ServerOptions {
   embedModel?: string;
   /** Injectable embeddings client — when provided, skips the startup probe entirely. */
   embeddings?: EmbeddingClient;
+  /**
+   * Project root whose .project-brain/graph.db holds the structural graph.
+   * Defaults to process.cwd(). The graph MUST live at the project-local path
+   * so the served structural tools read the SAME db that runSync writes.
+   */
+  projectRoot?: string;
 }
 
 /** Create and configure the MCP server with all tools registered. */
@@ -49,7 +55,12 @@ export async function createServer(options: ServerOptions = {}) {
   });
 
   mkdirSync(dbPath, { recursive: true });
-  const graphPath = join(dbPath, GRAPH_DB_FILE);
+  // Structural graph lives at the PROJECT-LOCAL path (not the global data dir)
+  // so the served tools query the same graph.db that runSync/the watcher write.
+  const projectRoot = options.projectRoot || process.cwd();
+  const graphDir = join(projectRoot, ".project-brain");
+  mkdirSync(graphDir, { recursive: true });
+  const graphPath = join(graphDir, GRAPH_DB_FILE);
   const graph = new GraphStore(openGraphDb(graphPath));
 
   const deps: ToolDeps = { store, embeddings, embeddingsFor, graph };
@@ -79,5 +90,5 @@ export async function createServer(options: ServerOptions = {}) {
     "impact",
   ];
 
-  return { server, store, embeddings, toolNames, instructions: SERVER_INSTRUCTIONS };
+  return { server, store, embeddings, graph, toolNames, instructions: SERVER_INSTRUCTIONS };
 }

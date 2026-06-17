@@ -1,10 +1,13 @@
 import { join } from "node:path";
 import { FileWatcher } from "./watcher.js";
 import type { EmbeddingClient, VectorStore } from "./types.js";
+import type { GraphStore } from "./graph/store.js";
 
 interface ServerDeps {
   store: VectorStore;
   embeddings: EmbeddingClient;
+  /** Shared structural graph owned by the server; forwarded to runSync. */
+  graph?: GraphStore;
 }
 
 interface ProjectConfig {
@@ -56,6 +59,7 @@ export async function maybeStartWatcher(
     projectId: config.projectId,
     store: deps.store,
     embeddings: deps.embeddings,
+    graph: deps.graph,
   });
 
   watcher.start();
@@ -67,17 +71,25 @@ interface Stoppable {
   stop(): Promise<void>;
 }
 
+/** Minimal closeable handle — the shared graph connection the server owns. */
+interface Closeable {
+  close(): void;
+}
+
 /**
- * Builds a graceful-shutdown handler: stops the watcher (if any) then exits.
+ * Builds a graceful-shutdown handler: stops the watcher (if any), closes the
+ * shared graph connection (if any), then exits.
  * Extracted from cli.ts so the shutdown path is unit-testable — `exit` is
  * injectable to avoid killing the test process.
  */
 export function createShutdownHandler(
   watcher: Stoppable | null,
-  exit: (code: number) => void = (code) => process.exit(code)
+  exit: (code: number) => void = (code) => process.exit(code),
+  graph: Closeable | null = null
 ): () => Promise<void> {
   return async () => {
     if (watcher) await watcher.stop();
+    if (graph) { try { graph.close(); } catch {} }
     exit(0);
   };
 }

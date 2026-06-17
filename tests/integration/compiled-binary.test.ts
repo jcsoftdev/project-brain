@@ -19,6 +19,7 @@ const REPO = resolve(import.meta.dir, "../..");
 let work: string;
 let binPath: string;
 let compiled = false;
+let buildStderr = "";
 
 const HARNESS = `
 import { runSync } from "${REPO}/src/commands/sync.js";
@@ -55,7 +56,12 @@ beforeAll(() => {
     { cwd: REPO, encoding: "utf8" }
   );
   compiled = build.status === 0;
-  if (!compiled) console.warn("[compiled-binary] bun build failed — skipped:\n" + build.stderr);
+  if (!compiled) {
+    // The test env always has bun, so a build failure is a real regression —
+    // surface it loudly instead of silently passing (the exact blind spot that
+    // shipped the original broken binary).
+    buildStderr = build.stderr ?? "";
+  }
 });
 
 afterAll(() => {
@@ -63,7 +69,9 @@ afterAll(() => {
 });
 
 test("compiled binary embeds WASM grammars + SQLite schema and extracts structure outside node_modules", () => {
-  if (!compiled) return; // environment could not compile; do not fail the suite
+  // The test env always has bun — a build failure is a real regression, not an
+  // excuse to skip. Fail loudly with the build stderr so the gap is visible.
+  expect(compiled, `bun build --compile failed:\n${buildStderr}`).toBe(true);
   // Run from a scratch dir with NO node_modules and NO schema.sql on disk.
   const scratch = mkdtempSync(join(tmpdir(), "pb-scratch-"));
   const run = spawnSync(binPath, [], { cwd: scratch, encoding: "utf8" });

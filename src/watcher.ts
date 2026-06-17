@@ -2,6 +2,7 @@ import { watch as fsWatch } from "node:fs";
 import { runSync } from "./commands/sync.js";
 import { WATCHER_DEBOUNCE_MS, WATCHER_ALWAYS_IGNORE, WATCHER_MAX_BATCH } from "./constants.js";
 import type { EmbeddingClient, VectorStore } from "./types.js";
+import type { GraphStore } from "./graph/store.js";
 
 /** A started filesystem watch handle. */
 export interface WatchHandle {
@@ -41,11 +42,41 @@ export interface WatcherOptions {
   debounceMs?: number;
   /** Filesystem watch factory. Defaults to node:fs recursive watch. */
   watchFn?: WatchFn;
+  /**
+   * Shared structural graph (owned by the MCP server). Forwarded to runSync so
+   * the watcher writes the SAME graph.db the server reads, instead of opening a
+   * second connection on the same WAL.
+   */
+  graph?: GraphStore;
+}
+
+/**
+ * A debounced trigger function with lifecycle controls used by stop() to
+ * quiesce all writers before the shared graph is closed.
+ */
+export interface DebouncedSync {
+  /** Schedule a sync for the given path (batched within the quiet period). */
+  (path: string): void;
+  /**
+   * Cancel a pending (not-yet-fired) debounce timer so NO new sync starts.
+   * Does NOT affect an already-running sync — await drain() for that.
+   */
+  cancel(): void;
+  /**
+   * Resolve once any in-flight sync chain has completed. Resolves immediately
+   * when nothing is running. Used by FileWatcher.stop() to guarantee writers
+   * have quiesced before the caller closes the shared graph (use-after-close).
+   */
+  drain(): Promise<void>;
 }
 
 /**
  * Pure helper: creates a debounced function that batches rapid calls
  * and invokes the callback once per quiet period with the accumulated paths.
+ *
+ * The returned function exposes cancel()/drain() so an owner (FileWatcher) can
+ * stop the pending timer and await any in-flight sync before tearing down the
+ * shared graph connection.
  *
  * @param callback - Function receiving all paths accumulated during the quiet period.
  * @param delayMs  - Quiet-period duration in milliseconds.
@@ -53,11 +84,19 @@ export interface WatcherOptions {
 export function debounceSync(
   callback: (paths: string[]) => Promise<void>,
   delayMs: number
-): (path: string) => void {
+): DebouncedSync {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const pending = new Set<string>();
+  // Serialized chain of sync runs. Each debounce wave APPENDS to the tail rather
+  // than starting concurrently, so two runSync calls never write the shared graph
+  // at once, and drain() can await the WHOLE chain — not just the latest run.
+  // (A single-slot "inFlight" lost the reference to an earlier still-running sync
+  // when a new wave started, letting drain()/graph.close() race a live writer.)
+  let chain: Promise<void> = Promise.resolve();
+  // Count of queued-or-running runs; the chain is fully idle only at 0.
+  let running = 0;
 
-  return (path: string) => {
+  const trigger = (path: string) => {
     pending.add(path);
 
     if (timer !== null) {
@@ -76,16 +115,42 @@ export function debounceSync(
         waves.push(unique.slice(i, i + WATCHER_MAX_BATCH));
       }
 
-      // Fire and forget the sequential chain — errors surfaced via console.warn
-      (async () => {
-        for (const wave of waves) {
-          await callback(wave);
-        }
-      })().catch((err) => {
-        console.warn("[watcher] sync error:", err);
-      });
+      // Append to the serialized chain (errors surfaced via console.warn). The
+      // chain never rejects (catch swallows), so drain()'s await cannot throw.
+      running++;
+      chain = chain
+        .then(async () => {
+          for (const wave of waves) {
+            await callback(wave);
+          }
+        })
+        .catch((err) => {
+          console.warn("[watcher] sync error:", err);
+        })
+        .finally(() => {
+          running--;
+        });
     }, delayMs);
   };
+
+  (trigger as DebouncedSync).cancel = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    pending.clear();
+  };
+
+  (trigger as DebouncedSync).drain = async () => {
+    // Await the tail until the chain is fully idle. A run appended while we were
+    // awaiting (e.g. a timer that fired just before cancel()) reassigns `chain`,
+    // so loop until no run remains queued or in-flight.
+    while (running > 0) {
+      await chain;
+    }
+  };
+
+  return trigger as DebouncedSync;
 }
 
 /**
@@ -93,9 +158,9 @@ export function debounceSync(
  * incremental sync automatically.
  */
 export class FileWatcher {
-  private readonly options: Required<WatcherOptions>;
+  private readonly options: Required<Omit<WatcherOptions, "graph">> & Pick<WatcherOptions, "graph">;
   private fsWatcher: WatchHandle | null = null;
-  private readonly debounced: (path: string) => void;
+  private readonly debounced: DebouncedSync;
 
   constructor(options: WatcherOptions) {
     this.options = {
@@ -137,12 +202,28 @@ export class FileWatcher {
     }
   }
 
-  /** Stop the watcher. Safe to call before start(). */
+  /**
+   * Stop the watcher. Safe to call before start().
+   *
+   * Ordering matters to avoid a use-after-close on the shared graph (the
+   * server closes graph right after stop() resolves):
+   *   1. Cancel the pending debounce timer so NO new sync starts.
+   *   2. Close the fs watch handle so NO new events arrive.
+   *   3. Await any in-flight sync so all writers have quiesced.
+   */
   async stop(): Promise<void> {
+    // 1. Stop any not-yet-fired debounce from starting a new sync.
+    this.debounced.cancel();
+
+    // 2. Detach from the filesystem (no more events → no more debounced calls).
     if (this.fsWatcher !== null) {
       this.fsWatcher.close();
       this.fsWatcher = null;
     }
+
+    // 3. Drain the in-flight sync so its graph writes finish BEFORE we return
+    //    (and before the caller closes the shared graph connection).
+    await this.debounced.drain();
   }
 
   private async handleChanges(changedFiles: string[]): Promise<void> {
@@ -153,6 +234,7 @@ export class FileWatcher {
         store: this.options.store,
         embeddings: this.options.embeddings,
         changedFiles,
+        graph: this.options.graph,
       });
     } catch (err) {
       console.warn("[watcher] sync failed:", err);
