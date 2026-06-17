@@ -107,6 +107,20 @@ async function listAllFiles(
     const fullPath = join(dir, entry.name);
     const relPath = fullPath.slice(root.length + 1).replace(/\\/g, "/");
 
+    // Security (S2): skip symlinks explicitly before any other check.
+    //
+    // On all POSIX platforms (and Bun), Dirent.isFile() / Dirent.isDirectory()
+    // describe the *symlink itself*, not the target — so a symlink already
+    // falls through both branches below without this guard. We add the
+    // explicit check so the safety is intentional, documented, and not an
+    // accidental side-effect of the isFile/isDirectory branches.
+    //
+    // Reason we skip rather than resolving realpath: a symlink whose target
+    // lies outside the project root could pull arbitrary files into the index
+    // (credentials, system files, other projects). Skipping is always safe;
+    // any file that should be indexed is a real file, not a symlink.
+    if (entry.isSymbolicLink()) continue;
+
     // Apply always-ignore rules
     const alwaysIgnored = WATCHER_ALWAYS_IGNORE.some(
       (pattern) => relPath.startsWith(pattern) || relPath.includes("/" + pattern.replace(/\/$/, ""))
