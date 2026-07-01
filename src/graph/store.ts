@@ -9,11 +9,19 @@ export interface SymbolHit { name: string; kind: string; signature: string; path
 
 export class GraphStore {
   private delStmt: ReturnType<Database["query"]>;
+  private insSymStmt: ReturnType<Database["query"]>;
+  private insEdgeStmt: ReturnType<Database["query"]>;
   private hitSql = `s.name AS name, s.kind AS kind, s.signature AS signature,
                     f.path AS path, s.start_line AS start_line, s.end_line AS end_line`;
 
   constructor(private db: Database) {
     this.delStmt = this.db.query("DELETE FROM files WHERE path = $path");
+    this.insSymStmt = this.db.query(
+      "INSERT INTO symbols (file_id,name,kind,signature,start_line,end_line) VALUES ($f,$n,$k,$s,$a,$b) RETURNING id"
+    );
+    this.insEdgeStmt = this.db.query(
+      "INSERT INTO edges (src_symbol_id,dst_name,dst_symbol_id,edge_type) VALUES ($s,$d,NULL,$t)"
+    );
   }
 
   /** Close the underlying SQLite connection. Callers that own the connection use this on shutdown. */
@@ -33,17 +41,11 @@ export class GraphStore {
         "INSERT INTO files (path, lang, hash, mtime) VALUES ($p,$l,$h,$m) RETURNING id"
       ).get({ $p: path, $l: lang, $h: hash, $m: mtime }) as { id: number }).id;
 
-      const insSym = this.db.query(
-        "INSERT INTO symbols (file_id,name,kind,signature,start_line,end_line) VALUES ($f,$n,$k,$s,$a,$b) RETURNING id"
-      );
-      const insEdge = this.db.query(
-        "INSERT INTO edges (src_symbol_id,dst_name,dst_symbol_id,edge_type) VALUES ($s,$d,NULL,$t)"
-      );
       for (const sym of symbols) {
-        const symId = (insSym.get({
+        const symId = (this.insSymStmt.get({
           $f: fileId, $n: sym.name, $k: sym.kind, $s: sym.signature, $a: sym.start_line, $b: sym.end_line,
         }) as { id: number }).id;
-        for (const e of sym.edges) insEdge.run({ $s: symId, $d: e.dst_name, $t: e.edge_type });
+        for (const e of sym.edges) this.insEdgeStmt.run({ $s: symId, $d: e.dst_name, $t: e.edge_type });
       }
     });
     tx();

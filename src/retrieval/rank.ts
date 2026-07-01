@@ -19,17 +19,24 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 export function mmr(results: SearchResult[], k: number, lambda: number): SearchResult[] {
   const pool = [...results];
   const sets = new Map(pool.map((r) => [r.id, tokenSet(r.content)]));
+  // Running max similarity of each remaining candidate against the picked set so
+  // far — updated incrementally against only the newest pick, instead of
+  // recomputing against every prior pick on every round.
+  const maxSim = new Map(pool.map((r) => [r.id, 0]));
   const picked: SearchResult[] = [];
   while (picked.length < k && pool.length > 0) {
     let best = -Infinity, bestIdx = 0;
     for (let i = 0; i < pool.length; i++) {
       const cand = pool[i];
-      let maxSim = 0;
-      for (const p of picked) maxSim = Math.max(maxSim, jaccard(sets.get(cand.id)!, sets.get(p.id)!));
-      const mmrScore = lambda * cand.score - (1 - lambda) * maxSim;
+      const mmrScore = lambda * cand.score - (1 - lambda) * maxSim.get(cand.id)!;
       if (mmrScore > best) { best = mmrScore; bestIdx = i; }
     }
-    picked.push(pool.splice(bestIdx, 1)[0]);
+    const chosen = pool.splice(bestIdx, 1)[0];
+    picked.push(chosen);
+    for (const cand of pool) {
+      const sim = jaccard(sets.get(cand.id)!, sets.get(chosen.id)!);
+      if (sim > maxSim.get(cand.id)!) maxSim.set(cand.id, sim);
+    }
   }
   return picked;
 }

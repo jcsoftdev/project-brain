@@ -131,10 +131,11 @@ export class LanceDbStore implements VectorStore {
     if (!table) {
       throw new Error(`Table for project '${project}' does not exist. Call ensureTable first.`);
     }
-    // Delete all sources in parallel (each delete is one SQL call)
-    await Promise.all(
-      sources.map((src) => table.delete(`source = '${src.replace(/'/g, "''")}'`))
-    );
+    // Delete all sources in ONE call instead of N round-trips.
+    if (sources.length > 0) {
+      const list = sources.map((s) => `'${s.replace(/'/g, "''")}'`).join(", ");
+      await table.delete(`source IN (${list})`);
+    }
     // ONE add() for all chunks → ONE fragment (vs N fragments with per-file upsert)
     await table.add(chunks.map((c) => ({
       id: c.id, vector: c.vector, content: c.content,

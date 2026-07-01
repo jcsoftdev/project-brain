@@ -14,19 +14,16 @@ type ToolResult = {
   isError?: boolean;
 };
 
-/** Generate deterministic chunk ID from source + content hash. */
-function generateId(source: string, content: string): string {
-  const hasher = new Bun.CryptoHasher("sha256");
-  hasher.update(content);
-  const hash = hasher.digest("hex");
-  return `${source}::${hash.slice(0, 8)}`;
-}
-
 /** Generate content hash. */
 function contentHash(content: string): string {
   const hasher = new Bun.CryptoHasher("sha256");
   hasher.update(content);
   return hasher.digest("hex");
+}
+
+/** Generate deterministic chunk ID from source + content hash. */
+function generateId(source: string, hash: string): string {
+  return `${source}::${hash.slice(0, 8)}`;
 }
 
 /** Handle add_knowledge logic (exported for testing). */
@@ -49,14 +46,15 @@ export async function handleIngest(args: IngestArgs, deps: ToolDeps): Promise<To
     };
   }
 
-  const id = generateId(source, content);
+  const hash = contentHash(content);
+  const id = generateId(source, hash);
   const chunk: Chunk = {
     id,
     vector: vectors[0],
     content,
     source,
     module,
-    content_hash: contentHash(content),
+    content_hash: hash,
     updated_at: Date.now(),
   };
 
