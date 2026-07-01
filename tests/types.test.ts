@@ -93,6 +93,27 @@ describe("Chunk symbol metadata", () => {
   });
 });
 
+describe("VectorStore.getChunksByIds", () => {
+  it("VectorStore.getChunksByIds is optional — a minimal store without it still type-checks", () => {
+    const minimal: VectorStore = {
+      ensureTable: async () => {},
+      upsert: async () => {},
+      batchReplace: async () => {},
+      search: async () => [],
+      deleteBySource: async () => {},
+      listModules: async () => [],
+      getModuleChunks: async () => [],
+      countChunks: async () => 0,
+      optimize: async () => {},
+      buildIndexes: async () => {},
+      hybridSearch: async () => [],
+      getChunkById: async () => null,
+      assertDim: async () => {},
+    };
+    expect(minimal.getChunksByIds).toBeUndefined();
+  });
+});
+
 describe("constants", () => {
   it("exports all required constants", () => {
     expect(VECTOR_DIM).toBe(768);

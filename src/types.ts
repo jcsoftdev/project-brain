@@ -62,6 +62,13 @@ export interface VectorStore {
   hybridSearch(project: string, vector: number[], text: string, topK: number): Promise<SearchResult[]>;
   /** Fetch a single chunk by its id. Returns null if not found. */
   getChunkById(project: string, id: string): Promise<Chunk | null>;
+  /**
+   * Batch fetch chunks by id — one round-trip instead of N. OPTIONAL: stores
+   * that don't implement it (e.g. minimal test mocks) are unaffected; callers
+   * fall back to per-id `getChunkById`. Missing ids are simply absent from the
+   * returned map.
+   */
+  getChunksByIds?(project: string, ids: string[]): Promise<Map<string, Chunk>>;
   /** Throw if the stored table dim doesn't match queryDim. No-op when no metadata exists yet. */
   assertDim(project: string, queryDim: number): Promise<void>;
 }
