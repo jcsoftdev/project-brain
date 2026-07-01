@@ -323,4 +323,36 @@ export class LanceDbStore implements VectorStore {
       };
     } catch { return null; }
   }
+
+  async getChunksByIds(project: string, ids: string[]): Promise<Map<string, import("../types.js").Chunk>> {
+    const result = new Map<string, import("../types.js").Chunk>();
+    if (ids.length === 0) return result;
+    const table = await this.getTable(project);
+    if (!table) return result;
+    try {
+      const list = ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(", ");
+      const rows = await table.query().where(`id IN (${list})`).toArray();
+      for (const r of rows) {
+        result.set(r.id as string, {
+          id: r.id as string,
+          vector: Array.from(r.vector as number[]),
+          content: r.content as string,
+          source: r.source as string,
+          module: r.module as string,
+          content_hash: r.content_hash as string,
+          updated_at: r.updated_at as number,
+          symbol_name: r.symbol_name as string | undefined,
+          symbol_kind: r.symbol_kind as string | undefined,
+          signature: r.signature as string | undefined,
+          start_line: r.start_line as number | undefined,
+          end_line: r.end_line as number | undefined,
+        });
+      }
+    } catch {
+      // Table exists but query failed (e.g. malformed IN-list) — return
+      // whatever was already collected rather than throwing; callers treat
+      // missing ids as "needs re-embedding", which is always safe.
+    }
+    return result;
+  }
 }

@@ -214,3 +214,42 @@ describe("LanceDbStore — deleteBySource, listModules, getModuleChunks", () => 
     expect(results).toEqual([]);
   });
 });
+
+describe("LanceDbStore — getChunksByIds", () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "brain-test-"));
+    store = new LanceDbStore(tmpDir);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns a map of the requested chunks in ONE call, missing ids simply absent", async () => {
+    await store.ensureTable("demo");
+    await store.upsert("demo", [
+      makeChunk({ id: "a::0", content: "alpha" }),
+      makeChunk({ id: "b::0", content: "beta" }),
+      makeChunk({ id: "c::0", content: "gamma" }),
+    ]);
+
+    const result = await store.getChunksByIds("demo", ["a::0", "c::0", "ghost::0"]);
+
+    expect(result.size).toBe(2);
+    expect(result.get("a::0")?.content).toBe("alpha");
+    expect(result.get("c::0")?.content).toBe("gamma");
+    expect(result.has("b::0")).toBe(false);
+    expect(result.has("ghost::0")).toBe(false);
+  });
+
+  it("returns an empty map for an empty id list without querying the table", async () => {
+    await store.ensureTable("demo");
+    const result = await store.getChunksByIds("demo", []);
+    expect(result.size).toBe(0);
+  });
+
+  it("returns an empty map for a non-existent project", async () => {
+    const result = await store.getChunksByIds("ghost-project", ["a::0"]);
+    expect(result.size).toBe(0);
+  });
+});
