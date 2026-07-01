@@ -314,6 +314,13 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       new Array(e.rawChunks.length).fill(null)
     );
 
+    // Collect unchanged-chunk ids first — one batched lookup (getChunksByIds)
+    // instead of N sequential round-trips, the dominant cost on a normal
+    // incremental sync where most chunks are unchanged. Falls back to the
+    // per-id loop when the injected store doesn't implement the batch method.
+    type UnchangedInfo = { entryIdx: number; chunkIdx: number; id: string };
+    const unchangedInfos: UnchangedInfo[] = [];
+
     for (let ei = 0; ei < pendingEntries.length; ei++) {
       const entry = pendingEntries[ei];
       const prevEntry = hashManifest[entry.relPath];
@@ -326,18 +333,31 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
         const chunkChanged = !hasChunkManifest || prevHash !== raw.content_hash;
 
         if (!chunkChanged) {
-          // Try to reuse the stored vector for this chunk
-          const stored = await store.getChunkById(projectId, raw.id);
-          if (stored) {
-            reusedVectors[ei][ci] = stored.vector;
-            continue; // skip embedding this chunk
-          }
-          // Stored vector not found (e.g., store was wiped) — re-embed as fallback
+          unchangedInfos.push({ entryIdx: ei, chunkIdx: ci, id: raw.id });
+        } else {
+          changedChunkInfos.push({ entryIdx: ei, chunkIdx: ci });
+          textsToEmbed.push(raw.content);
         }
+      }
+    }
 
-        // Needs embedding
-        changedChunkInfos.push({ entryIdx: ei, chunkIdx: ci });
-        textsToEmbed.push(raw.content);
+    if (unchangedInfos.length > 0) {
+      const storedById = store.getChunksByIds
+        ? await store.getChunksByIds(projectId, unchangedInfos.map((u) => u.id))
+        : null;
+
+      for (const { entryIdx, chunkIdx, id } of unchangedInfos) {
+        const stored = storedById
+          ? storedById.get(id)
+          : await store.getChunkById(projectId, id); // fallback: store has no batch method
+
+        if (stored) {
+          reusedVectors[entryIdx][chunkIdx] = stored.vector;
+        } else {
+          // Stored vector not found (e.g., store was wiped) — re-embed as fallback
+          changedChunkInfos.push({ entryIdx, chunkIdx });
+          textsToEmbed.push(pendingEntries[entryIdx].rawChunks[chunkIdx].content);
+        }
       }
     }
 

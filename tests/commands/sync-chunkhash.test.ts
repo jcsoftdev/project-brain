@@ -52,6 +52,27 @@ function makeMemoryStore(): VectorStore & { data: Map<string, Chunk[]> } {
   };
 }
 
+/** Same as makeMemoryStore but also implements getChunksByIds with a call counter. */
+function makeMemoryStoreWithBatchLookup(): VectorStore & { data: Map<string, Chunk[]>; batchCalls: number } {
+  const base = makeMemoryStore();
+  let batchCalls = 0;
+  return {
+    ...base,
+    batchCalls: 0,
+    get batchCalls() { return batchCalls; },
+    getChunksByIds: async (project, ids) => {
+      batchCalls++;
+      const result = new Map<string, Chunk>();
+      const chunks = base.data.get(project) ?? [];
+      for (const id of ids) {
+        const found = chunks.find((c) => c.id === id);
+        if (found) result.set(id, found);
+      }
+      return result;
+    },
+  } as VectorStore & { data: Map<string, Chunk[]>; batchCalls: number };
+}
+
 /** Spy embedder: tracks every call and which texts were embedded. */
 function makeSpyEmbedder() {
   const calls: string[][] = [];
@@ -212,5 +233,34 @@ describe("T-8: per-chunk embedding hash", () => {
     // was saved, but now the manifest is up-to-date, nothing changed → 0 embeds
     await runSync({ root: tempDir, projectId: "proj", store, embeddings: client });
     expect(calls.length).toBe(callsAfterFallback);
+  });
+
+  it("T-8.5: re-sync with N unchanged chunks calls getChunksByIds exactly ONCE, not N times", async () => {
+    const store = makeMemoryStoreWithBatchLookup();
+    const { client } = makeSpyEmbedder();
+
+    // 4 headings → 4 chunks. Only "Four" changes on the second sync, so the
+    // FILE hash changes (file re-enters Phase B) while One/Two/Three keep
+    // matching chunk hashes → 3 unchanged chunks to look up in one batch.
+    //
+    // Note: rewriting a file with byte-identical content does NOT reach
+    // Phase B at all — Phase A's file-level hash dedup (sync.ts ~line 253)
+    // marks it "skipped" (mtime-only update) before Phase B ever runs, so
+    // that scenario can't exercise getChunksByIds.
+    const initial = "# One\n\nFirst.\n\n# Two\n\nSecond.\n\n# Three\n\nThird.\n\n# Four\n\nFourth.";
+    await writeFile(join(tempDir, "four.md"), initial);
+
+    const { runSync } = await import("../../src/commands/sync.js");
+
+    await runSync({ root: tempDir, projectId: "proj", store, embeddings: client });
+
+    const modified = "# One\n\nFirst.\n\n# Two\n\nSecond.\n\n# Three\n\nThird.\n\n# Four\n\nFourth CHANGED.";
+    await writeFile(join(tempDir, "four.md"), modified);
+
+    await runSync({ root: tempDir, projectId: "proj", store, embeddings: client });
+
+    // Exactly one batched call for however many unchanged chunks there were —
+    // NOT one call per chunk (would be 3) and not zero (unbatched fallback path).
+    expect(store.batchCalls).toBe(1);
   });
 });
