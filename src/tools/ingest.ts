@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Chunk, ToolDeps } from "../types.js";
+import { toolAnnotations } from "../constants.js";
 
 interface IngestArgs {
   project: string;
@@ -82,6 +83,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
         source: z.string().describe("Origin file or identifier"),
         module: z.string().describe("Logical module name"),
       },
+      annotations: toolAnnotations("add_knowledge"),
     },
     async (args) => handleIngest(args, deps)
   );

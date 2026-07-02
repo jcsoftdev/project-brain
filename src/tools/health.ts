@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { EMBEDDING_MODEL, VERSION } from "../constants.js";
+import { EMBEDDING_MODEL, VERSION, toolAnnotations } from "../constants.js";
 import type { ToolDeps } from "../types.js";
 
 type ToolResult = {
@@ -40,6 +40,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         project: z.string().describe("Project identifier"),
       },
+      annotations: toolAnnotations("check_health"),
     },
     async (args) => handleHealth(args, deps)
   );

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 import { applyThreshold, mmr } from "../retrieval/rank.js";
 import { fillBudget } from "../retrieval/budget.js";
-import { SCORE_THRESHOLD, MMR_LAMBDA, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES, HARDNESS } from "../constants.js";
+import { SCORE_THRESHOLD, MMR_LAMBDA, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES, HARDNESS, toolAnnotations } from "../constants.js";
 
 interface SearchArgs {
   project: string;
@@ -64,6 +64,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
         limit: z.number().optional().describe("Max results (default 10)"),
         module: z.string().optional().describe("Filter by module name"),
       },
+      annotations: toolAnnotations("search_context"),
     },
     async (args) => handleSearch(args, deps)
   );

@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 import { formatHits, graphUnavailable, type ToolResult } from "./format.js";
+import { toolAnnotations } from "../constants.js";
 
 /** Handle find_callers logic (exported for testing). */
 export async function handleFindCallers(
@@ -51,6 +52,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         name: z.string().describe("Exact symbol name to find callers of (case-sensitive)"),
       },
+      annotations: toolAnnotations("find_callers"),
     },
     async (args) => handleFindCallers(args, deps)
   );
@@ -65,6 +67,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         name: z.string().describe("Exact symbol name to find callees of (case-sensitive)"),
       },
+      annotations: toolAnnotations("find_callees"),
     },
     async (args) => handleFindCallees(args, deps)
   );

@@ -105,24 +105,39 @@ export const WASM_MAX_PAGES = 4096;             // advisory page count; real bac
  * new tool can never be advertised in one place and forgotten in the others.
  * Keep this list in lockstep with the tools registered in src/server.ts.
  */
+export interface ToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
 export interface ToolDoc {
   name: string;
   summary: string;
+  annotations?: ToolAnnotations;
 }
 
+const RO = { readOnlyHint: true, openWorldHint: false } as const;
+
 export const TOOL_CATALOG: ToolDoc[] = [
-  { name: "search_context", summary: "semantic/conceptual lookup; returns ranked snippets + chunk_id. PRIMARY for fuzzy/cross-file questions." },
-  { name: "expand_context", summary: "full body of a chunk_id from search_context (read this instead of re-reading whole files)." },
-  { name: "find_symbol", summary: "exact symbol definition(s) by name: path, line range, kind, signature. Use when you know the name." },
-  { name: "find_callers", summary: "every symbol that calls the named symbol (who depends on X)." },
-  { name: "find_callees", summary: "every symbol the named symbol calls (what X depends on)." },
-  { name: "impact", summary: "blast radius: all symbols transitively affected if the named symbol changes (reverse call graph)." },
-  { name: "list_modules", summary: "browse the indexed structure by module." },
-  { name: "get_module", summary: "retrieve all chunks for a module." },
-  { name: "add_knowledge", summary: "persist a note/decision into the brain for future sessions." },
-  { name: "delete_knowledge", summary: "remove chunks by source (deleted/renamed files)." },
-  { name: "check_health", summary: "embedding service + index status; run if results look empty or stale." },
+  { name: "search_context", summary: "semantic/conceptual lookup; returns ranked snippets + chunk_id. PRIMARY for fuzzy/cross-file questions.", annotations: RO },
+  { name: "expand_context", summary: "full body of a chunk_id from search_context (read this instead of re-reading whole files).", annotations: RO },
+  { name: "find_symbol", summary: "exact symbol definition(s) by name: path, line range, kind, signature. Use when you know the name.", annotations: RO },
+  { name: "find_callers", summary: "every symbol that calls the named symbol (who depends on X).", annotations: RO },
+  { name: "find_callees", summary: "every symbol the named symbol calls (what X depends on).", annotations: RO },
+  { name: "impact", summary: "blast radius: all symbols transitively affected if the named symbol changes (reverse call graph).", annotations: RO },
+  { name: "list_modules", summary: "browse the indexed structure by module.", annotations: RO },
+  { name: "get_module", summary: "retrieve all chunks for a module.", annotations: RO },
+  { name: "add_knowledge", summary: "persist a note/decision into the brain for future sessions.", annotations: { idempotentHint: true, openWorldHint: false } },
+  { name: "delete_knowledge", summary: "remove chunks by source (deleted/renamed files).", annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: false } },
+  { name: "check_health", summary: "embedding service + index status; run if results look empty or stale.", annotations: RO },
 ];
+
+/** Look up a tool's annotations from the catalog (single source of truth). */
+export function toolAnnotations(name: string): ToolAnnotations | undefined {
+  return TOOL_CATALOG.find((t) => t.name === name)?.annotations;
+}
 
 /** Routing rules — (trigger, tool) pairs. Keep aligned with TOOL_CATALOG. */
 export const TOOL_ROUTING: ReadonlyArray<{ when: string; tool: string }> = [

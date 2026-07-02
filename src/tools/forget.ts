@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
+import { toolAnnotations } from "../constants.js";
 
 type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -33,6 +34,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
         project: z.string().describe("Project identifier"),
         source: z.string().describe("Source file or identifier to delete"),
       },
+      annotations: toolAnnotations("delete_knowledge"),
     },
     async (args) => handleForget(args, deps)
   );

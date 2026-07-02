@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 import { formatHits, graphUnavailable, type ToolResult } from "./format.js";
+import { toolAnnotations } from "../constants.js";
 
 /** Handle find_symbol logic (exported for testing). */
 export async function handleFindSymbol(
@@ -33,6 +34,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         name: z.string().describe("Exact symbol name to look up (case-sensitive)"),
       },
+      annotations: toolAnnotations("find_symbol"),
     },
     async (args) => handleFindSymbol(args, deps)
   );

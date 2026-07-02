@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 import { formatHits, graphUnavailable, type ToolResult } from "./format.js";
+import { toolAnnotations } from "../constants.js";
 
 const DEFAULT_MAX_DEPTH = 6;
 
@@ -45,6 +46,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
           .optional()
           .describe("Maximum traversal depth (default 6, max 20)"),
       },
+      annotations: toolAnnotations("impact"),
     },
     async (args) => handleImpact(args, deps)
   );

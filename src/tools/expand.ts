@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
+import { toolAnnotations } from "../constants.js";
 
 interface ExpandArgs { project: string; chunk_id: string; }
 type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean; };
@@ -30,6 +31,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
         project: z.string().describe("Project identifier"),
         chunk_id: z.string().describe("chunk_id from search_context results"),
       },
+      annotations: toolAnnotations("expand_context"),
     },
     async (args) => handleExpand(args, deps)
   );
