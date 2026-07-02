@@ -15,6 +15,7 @@ import { register as registerCallgraph } from "./tools/callgraph.js";
 import { register as registerImpact } from "./tools/impact.js";
 import { register as registerTracePath } from "./tools/trace-path.js";
 import { register as registerProjects } from "./tools/projects.js";
+import { register as registerAdr } from "./tools/adr.js";
 import { openGraphDb } from "./graph/db.js";
 import { GraphStore } from "./graph/store.js";
 import { join } from "node:path";
@@ -98,6 +99,7 @@ export async function createServer(options: ServerOptions = {}) {
   registerImpact(server, deps);
   registerTracePath(server, deps);
   registerProjects(server, deps);
+  registerAdr(server, deps);
 
   const toolNames = [
     "search_context",
@@ -115,6 +117,7 @@ export async function createServer(options: ServerOptions = {}) {
     "trace_path",
     "list_projects",
     "delete_project",
+    "manage_adr",
   ];
 
   return { server, store, embeddings, graph, toolNames, instructions: SERVER_INSTRUCTIONS };
