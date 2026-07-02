@@ -85,6 +85,14 @@ export async function execute(args: string[]): Promise<void> {
   const result = await runReindex({ root, projectId, store, embeddings, onProgress });
 
   clear();
+
+  if (result.error) {
+    // Total embed failure: do not report "Reindex complete." as success
+    // (mirrors sync.ts's execute()).
+    console.error(`\nError: ${result.error}`);
+    process.exit(1);
+  }
+
   console.log(`  Scanned:  ${result.scanned} files`);
   console.log(`  Ingested: ${result.ingested} files`);
   console.log("\nReindex complete.");

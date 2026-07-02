@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
-import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { VECTOR_DIM } from "../../src/constants.js";
 import type { EmbeddingClient, VectorStore, Chunk, SearchResult } from "../../src/types.js";
@@ -121,6 +121,48 @@ describe("reindex command", () => {
       // Reindex always re-ingests — no skipping
       expect(result.skipped).toBe(0);
       expect(result.ingested).toBeGreaterThan(0);
+    });
+  });
+
+  // ---- BUG FIX: reindex must surface total embed failure ----
+
+  describe("T-7.5 (reindex): total embed failure is not swallowed as success", () => {
+    it("runReindex propagates result.error when every embed call fails (mirrors sync's T-7.4)", async () => {
+      const store = makeMemoryStore();
+      await writeFile(join(tempDir, "file.md"), "Some content to embed.");
+
+      const nullEmbeddings: EmbeddingClient = {
+        embed: async (_texts) => null,
+        isAvailable: async () => true,
+      };
+
+      const { runReindex } = await import("../../src/commands/reindex.js");
+      const result = await runReindex({
+        root: tempDir,
+        projectId: "test-proj",
+        store,
+        embeddings: nullEmbeddings,
+      });
+
+      // Manifest was cleared and nothing was actually stored — this must be
+      // distinguishable from a genuine "nothing to index" success.
+      expect(result.ingested).toBe(0);
+      expect(result.error).toBeDefined();
+      expect(result.error).toContain("Embedding failed");
+    });
+
+    it("execute() checks result.error and exits 1 before printing success (source-level wiring check)", async () => {
+      // execute() calls process.exit(1) on failure, which is not safely
+      // exercisable in-process (it would kill the test runner). We assert the
+      // wiring exists in source instead — same altitude as cli.test.ts's
+      // "each known command uses dynamic import" checks — combined with the
+      // behavioral test above proving runReindex actually carries the error.
+      const src = await readFile(
+        join(import.meta.dir, "../../src/commands/reindex.ts"),
+        "utf-8"
+      );
+      expect(src).toContain("result.error");
+      expect(src).toContain("process.exit(1)");
     });
   });
 });
