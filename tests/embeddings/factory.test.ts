@@ -144,6 +144,22 @@ describe("createEmbeddingClient factory", () => {
     expect(client.model).toBe("nomic-embed-text");
   });
 
+  it("falls back to registry dim (1024) for qwen3-embedding when detectDim fails, not the hardcoded 768", async () => {
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+
+    // detectDim fails (e.g. fresh pull, Ollama still warming up) — embed resolves to null.
+    const failingEmbed = async (_texts: string[]): Promise<number[][] | null> => null;
+
+    const client = await createEmbeddingClient("qwen3-embedding", {
+      isModelAvailable: alwaysAvailable,
+      host: "http://127.0.0.1:11434",
+      embed: failingEmbed,
+    });
+
+    // Must fall back to the registry's documented dim (1024), never the hardcoded 768 (nomic's dim).
+    expect(client.dim).toBe(1024);
+  });
+
   it("accepts a raw ollama model name (not a registry key) as modelKey", async () => {
     const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
 

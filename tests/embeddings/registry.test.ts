@@ -41,4 +41,8 @@ describe("model registry", () => {
     expect(resolveModel("nomic-text").model).toBe("nomic-embed-text");
     expect(resolveModel("qwen3-embedding").model).toBe("qwen3-embedding:0.6b");
   });
+
+  it("qwen3-embedding registry entry has dim 1024 (documented model dimension)", () => {
+    expect(resolveModel("qwen3-embedding").dim).toBe(1024);
+  });
 });
