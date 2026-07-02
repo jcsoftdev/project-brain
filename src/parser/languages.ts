@@ -24,6 +24,10 @@ import jsWasm from "tree-sitter-wasms/out/tree-sitter-javascript.wasm" with { ty
 import pyWasm from "tree-sitter-wasms/out/tree-sitter-python.wasm" with { type: "file" };
 import goWasm from "tree-sitter-wasms/out/tree-sitter-go.wasm" with { type: "file" };
 import rsWasm from "tree-sitter-wasms/out/tree-sitter-rust.wasm" with { type: "file" };
+import javaWasm from "tree-sitter-wasms/out/tree-sitter-java.wasm" with { type: "file" };
+import cWasm from "tree-sitter-wasms/out/tree-sitter-c.wasm" with { type: "file" };
+import cppWasm from "tree-sitter-wasms/out/tree-sitter-cpp.wasm" with { type: "file" };
+import csWasm from "tree-sitter-wasms/out/tree-sitter-c_sharp.wasm" with { type: "file" };
 
 export interface LanguageSpec {
   id: string;
@@ -38,6 +42,13 @@ export const LANGUAGES: Record<string, LanguageSpec> = {
   ".py": { id: "python", wasmPath: pyWasm },
   ".go": { id: "go", wasmPath: goWasm },
   ".rs": { id: "rust", wasmPath: rsWasm },
+  ".java": { id: "java", wasmPath: javaWasm },
+  ".c": { id: "c", wasmPath: cWasm },
+  ".h": { id: "c", wasmPath: cWasm },
+  ".cpp": { id: "cpp", wasmPath: cppWasm },
+  ".cc": { id: "cpp", wasmPath: cppWasm },
+  ".hpp": { id: "cpp", wasmPath: cppWasm },
+  ".cs": { id: "c_sharp", wasmPath: csWasm },
 };
 
 export function langForExt(ext: string): LanguageSpec | undefined {

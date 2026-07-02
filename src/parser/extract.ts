@@ -35,16 +35,64 @@ const DECL_KINDS: Record<string, Record<string, string>> = {
     impl_item: "impl",
     trait_item: "trait",
   },
+  java: {
+    class_declaration: "class",
+    interface_declaration: "interface",
+    method_declaration: "method",
+    enum_declaration: "enum",
+  },
+  c: {
+    function_definition: "function",
+    struct_specifier: "struct",
+  },
+  cpp: {
+    function_definition: "function",
+    class_specifier: "class",
+    struct_specifier: "struct",
+  },
+  c_sharp: {
+    class_declaration: "class",
+    interface_declaration: "interface",
+    method_declaration: "method",
+    struct_declaration: "struct",
+  },
 };
+
+/** Per-language call-site node types. Default covers TS/JS/Python/Go/Rust (current behavior). */
+export const CALL_NODE_TYPES: Record<string, string[]> = {
+  default: ["call_expression", "call"],
+  java: ["method_invocation", "object_creation_expression"],
+  c: ["call_expression"],
+  cpp: ["call_expression"],
+  c_sharp: ["invocation_expression", "object_creation_expression"],
+};
+
+// C/C++ function_definition (and struct/pointer declarators) have no "name" field —
+// the identifier is nested inside a "declarator" field chain, e.g.
+// function_definition.declarator (function_declarator) .declarator (identifier).
+// Walk the chain until we hit an identifier/field_identifier leaf.
+function declaratorName(node: any): string | null {
+  let cur = node.childForFieldName?.("declarator");
+  while (cur) {
+    if (cur.type === "identifier" || cur.type === "field_identifier") return cur.text ?? null;
+    const next = cur.childForFieldName?.("declarator");
+    if (!next) return null;
+    cur = next;
+  }
+  return null;
+}
 
 // Extract the symbol name from a declaration node.
 // For TS/JS: the first named child of type "identifier" or "property_identifier".
 // We try childForFieldName("name") first (works in some grammars like Python/Go/Rust),
-// then fall back to scanning named children for an identifier node.
+// then the C/C++ "declarator" chain, then fall back to scanning named children.
 function nameOf(node: any): string | null {
   // Try field-based access (Python, Go, Rust grammars use "name" field)
   const byField = node.childForFieldName?.("name");
   if (byField) return byField.text ?? null;
+  // C/C++ function_definition: name lives inside a nested "declarator" chain
+  const byDeclarator = declaratorName(node);
+  if (byDeclarator) return byDeclarator;
   // Fall back: first named child that is an identifier-like node
   for (let i = 0; i < (node.namedChildCount ?? 0); i++) {
     const child = node.namedChild(i);
@@ -62,15 +110,22 @@ function nameOf(node: any): string | null {
 // Walk a subtree collecting call edges. No Query objects — plain node walk.
 // kinds: the language's DECL_KINDS map — children whose type is a key in kinds
 // are nested declarations that collect their own calls; skip descending into them.
-function collectCalls(symbolNode: any, kinds: Record<string, string>, out: EdgeInput[]): void {
+function collectCalls(
+  symbolNode: any,
+  kinds: Record<string, string>,
+  out: EdgeInput[],
+  callTypes: string[],
+): void {
   const stack: any[] = [];
   for (let i = 0; i < (symbolNode.namedChildCount ?? 0); i++) stack.push(symbolNode.namedChild(i));
   while (stack.length) {
     const n = stack.pop();
     if (kinds[n.type]) continue; // nested declaration → it collects its own calls
-    if (n.type === "call_expression" || n.type === "call") {
-      // Callee is the first named child (TS/JS: identifier or member_expression)
-      const callee = n.namedChild?.(0);
+    if (callTypes.includes(n.type)) {
+      // Prefer the grammar's "name" field first (e.g. Java's method_invocation.name),
+      // then fall back to the first named child (TS/JS: identifier or member_expression).
+      const byField = n.childForFieldName?.("name");
+      const callee = byField ?? n.namedChild?.(0);
       if (callee) {
         if (callee.type === "identifier") {
           out.push({ dst_name: callee.text, edge_type: "call" });
@@ -89,6 +144,7 @@ function collectCalls(symbolNode: any, kinds: Record<string, string>, out: EdgeI
 // Uses plain node iteration — no Query/cursor objects, nothing to leak.
 export function extract(tree: any, langId: string, _source: string): SymbolInput[] {
   const kinds = DECL_KINDS[langId] ?? DECL_KINDS.typescript;
+  const callTypes = CALL_NODE_TYPES[langId] ?? CALL_NODE_TYPES.default;
   const out: SymbolInput[] = [];
   const stack: any[] = [tree.rootNode];
   while (stack.length) {
@@ -98,7 +154,7 @@ export function extract(tree: any, langId: string, _source: string): SymbolInput
       const name = nameOf(n);
       if (name) {
         const edges: EdgeInput[] = [];
-        collectCalls(n, kinds, edges);
+        collectCalls(n, kinds, edges, callTypes);
         const sig = n.text.split("\n")[0].slice(0, 160);
         out.push({
           name,
