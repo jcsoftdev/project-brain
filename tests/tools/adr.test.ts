@@ -43,4 +43,15 @@ describe("manage_adr", () => {
     const r = await handleAdr({ project: "p", action: "create", title: "X" } as any, deps);
     expect(r.isError).toBe(true);
   });
+
+  it("create with empty slug (no alphanumeric chars) errors and stores nothing", async () => {
+    const { deps, stored } = mkDeps();
+    const r = await handleAdr({
+      project: "p", action: "create", title: "🎉🎉🎉",
+      context: "c", decision: "d", consequences: "q", status: "proposed",
+    }, deps);
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).code).toBe("ADR_INVALID_TITLE");
+    expect(stored.length).toBe(0);
+  });
 });

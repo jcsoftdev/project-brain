@@ -41,6 +41,9 @@ export async function handleAdr(args: AdrArgs, deps: ToolDeps): Promise<ToolResu
     return jsonResult({ error: "create requires title, context, decision, consequences", code: "ADR_MISSING_FIELDS" }, true);
   }
   const slug = slugify(title);
+  if (!slug) {
+    return jsonResult({ error: "title must contain at least one alphanumeric character", code: "ADR_INVALID_TITLE" }, true);
+  }
   const content = render({ title, context, decision, consequences, status: args.status ?? "proposed", supersedes: args.supersedes });
   const ingest = await handleIngest({ project: args.project, content, source: `adr/${slug}`, module: "adr" }, deps);
   if (ingest.isError) return ingest;
