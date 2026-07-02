@@ -43,11 +43,8 @@ switch (command) {
   case "serve": {
     if (args.includes("--http")) {
       // HTTP transport with bearer-token authentication
-      const port = Number(
-        args[args.indexOf("--port") + 1] ??
-        process.env.BRAIN_HTTP_PORT ??
-        3000
-      );
+      const { parsePort } = await import("./cli-args.js");
+      const port = parsePort(args);
       const token = process.env.BRAIN_HTTP_TOKEN ?? "";
       if (!token.trim()) {
         console.error("serve --http requires BRAIN_HTTP_TOKEN to be set");
