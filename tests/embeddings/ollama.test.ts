@@ -94,6 +94,23 @@ describe("OllamaEmbeddingClient — embed()", () => {
     const result = await client.embed(["hello"]);
     expect(result).toBeNull();
   });
+
+  it("returns null when embeddings array is shorter than input texts (partial server failure)", async () => {
+    const host = startMockServer((_req) => {
+      // Server returns HTTP 200 but only 2 embeddings for 3 requested texts —
+      // simulates a silent partial failure that must NOT be treated as success.
+      return new Response(
+        JSON.stringify({
+          embeddings: [new Array(VECTOR_DIM).fill(0.1), new Array(VECTOR_DIM).fill(0.2)],
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    });
+
+    const client = new OllamaEmbeddingClient(host);
+    const result = await client.embed(["a", "b", "c"]);
+    expect(result).toBeNull();
+  });
 });
 
 describe("OllamaEmbeddingClient — isAvailable()", () => {

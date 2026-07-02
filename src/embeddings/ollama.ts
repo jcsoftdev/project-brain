@@ -48,6 +48,15 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
       }
 
       const data = (await response.json()) as { embeddings: number[][] };
+      if (!Array.isArray(data.embeddings) || data.embeddings.length !== texts.length) {
+        console.warn(
+          `[project-brain] embed response length mismatch: expected ${texts.length}, received ${
+            Array.isArray(data.embeddings) ? data.embeddings.length : "non-array"
+          }`
+        );
+        this.lastFailure = Date.now();
+        return null;
+      }
       // Reset circuit breaker on success
       this.lastFailure = null;
       return data.embeddings;
