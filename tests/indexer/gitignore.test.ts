@@ -113,5 +113,57 @@ describe("gitignore filter", () => {
       const patterns = await loadPatterns(tempDir);
       expect(patterns).toEqual([]);
     });
+
+    it("orders parent patterns before child patterns so deeper negation wins deterministically", async () => {
+      const { mkdir } = await import("node:fs/promises");
+      // Sibling directories with varying .gitignore sizes to perturb
+      // filesystem I/O completion order for the Promise.all fan-out.
+      for (const name of ["subA", "subB", "subC", "subD", "subE"]) {
+        await mkdir(join(tempDir, name));
+      }
+      await Bun.write(join(tempDir, ".gitignore"), "*.log\n");
+      // Large filler content so this sibling's read is slower than others.
+      await Bun.write(
+        join(tempDir, "subA", ".gitignore"),
+        "# filler\n".repeat(5000) + "!keep.log\n"
+      );
+      await Bun.write(join(tempDir, "subB", ".gitignore"), "*.tmp\n");
+      await Bun.write(join(tempDir, "subC", ".gitignore"), "*.bak\n");
+      await Bun.write(join(tempDir, "subD", ".gitignore"), "*.old\n");
+      await Bun.write(join(tempDir, "subE", ".gitignore"), "*.cache\n");
+
+      const patterns = await loadPatterns(tempDir);
+      expect(shouldIgnore("subA/keep.log", patterns)).toBe(false);
+      expect(shouldIgnore("subA/other.log", patterns)).toBe(true);
+
+      // Parent's own pattern must precede any child directory's pattern.
+      const rootIdx = patterns.indexOf("*.log");
+      const childIdx = patterns.indexOf("!subA/keep.log");
+      expect(rootIdx).toBeGreaterThanOrEqual(0);
+      expect(childIdx).toBeGreaterThanOrEqual(0);
+      expect(rootIdx).toBeLessThan(childIdx);
+    });
+
+    it("produces identical pattern order across repeated concurrent runs", async () => {
+      const { mkdir } = await import("node:fs/promises");
+      for (const name of ["subA", "subB", "subC", "subD", "subE"]) {
+        await mkdir(join(tempDir, name));
+      }
+      await Bun.write(join(tempDir, ".gitignore"), "*.log\n");
+      await Bun.write(
+        join(tempDir, "subA", ".gitignore"),
+        "# filler\n".repeat(5000) + "!keep.log\n"
+      );
+      await Bun.write(join(tempDir, "subB", ".gitignore"), "*.tmp\n");
+      await Bun.write(join(tempDir, "subC", ".gitignore"), "*.bak\n");
+      await Bun.write(join(tempDir, "subD", ".gitignore"), "*.old\n");
+      await Bun.write(join(tempDir, "subE", ".gitignore"), "*.cache\n");
+
+      const [runA, runB] = await Promise.all([
+        loadPatterns(tempDir),
+        loadPatterns(tempDir),
+      ]);
+      expect(runA).toEqual(runB);
+    });
   });
 });

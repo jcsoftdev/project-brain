@@ -70,27 +70,36 @@ async function loadPatternsFromDir(dir: string, root: string): Promise<string[]>
  */
 export async function loadPatterns(root: string): Promise<string[]> {
   const { readdir } = await import("node:fs/promises");
-  const all: string[] = [];
 
-  async function walk(dir: string): Promise<void> {
-    all.push(...(await loadPatternsFromDir(dir, root)));
+  // Returns this directory's own patterns followed by all descendant
+  // patterns, in deterministic parent-before-children, entries-order
+  // order. Child subtrees are walked concurrently for speed, but their
+  // results are concatenated in entries order AFTER all awaits resolve —
+  // never via side-effect pushes as promises settle (that made array
+  // order depend on filesystem I/O timing).
+  async function walk(dir: string): Promise<string[]> {
+    const own = await loadPatternsFromDir(dir, root);
+
     let entries: Awaited<ReturnType<typeof readdir>>;
     try {
       entries = await readdir(dir, { withFileTypes: true });
     } catch {
-      return;
+      return own;
     }
-    await Promise.all(
-      entries
-        .filter((e) => e.isDirectory() && !ALWAYS_IGNORE.some(
+
+    const childDirs = entries.filter(
+      (e) =>
+        e.isDirectory() &&
+        !ALWAYS_IGNORE.some(
           (ig) => e.name + "/" === ig || e.name === ig.replace(/\/$/, "")
-        ))
-        .map((e) => walk(join(dir, e.name)))
+        )
     );
+    const childResults = await Promise.all(childDirs.map((e) => walk(join(dir, e.name))));
+
+    return own.concat(...childResults);
   }
 
-  await walk(root);
-  return all;
+  return walk(root);
 }
 
 /** Simple glob pattern matching for gitignore-style patterns. */
