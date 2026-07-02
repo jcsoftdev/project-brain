@@ -209,7 +209,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // sequential in-process `parser` (constructed above, unconditionally).
     // Pool size must be a positive integer — Math.max(1, ...) guards against a
     // 1-2 core host producing 0/negative (which would hang the pool forever).
-    pool = filePaths.length >= POOL_MIN_FILES ? new ParserPool(
+    pool = ownsGraph && filePaths.length >= POOL_MIN_FILES ? new ParserPool(
       Math.max(1, (await import("node:os")).cpus().length - 2)
     ) : null;
 

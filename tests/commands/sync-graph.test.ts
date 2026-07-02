@@ -345,6 +345,58 @@ test("large syncs route structural extraction through a ParserPool and produce t
   graph.close();
 });
 
+test("watcher-style sync (injected graph) at/above POOL_MIN_FILES never spawns a worker pool — sequential path still produces a correct graph", async () => {
+  const { POOL_MIN_FILES } = await import("../../src/parser/pool.js");
+
+  // Simulates the long-lived MCP server's watcher path: a debounced batch of
+  // >= POOL_MIN_FILES changed files (e.g. `git checkout` across branches, a
+  // bulk find-replace, a big generated-file drop) coalesced by the watcher,
+  // with the server's own shared graph connection injected via
+  // `options.graph` — exactly the `ownsGraph === false` scenario from
+  // docs/superpowers/specs/2026-06-16-structural-layer-design.md §3.3: the
+  // worker pool must be CLI-process-only, never resident in the long-lived
+  // `serve` process.
+  const fileCount = POOL_MIN_FILES + 3;
+  for (let i = 0; i < fileCount; i++) {
+    writeFileSync(
+      join(tempDir, `watch${i}.ts`),
+      `export function watchFn${i}() { return ${i}; }`
+    );
+  }
+
+  const { runSync } = await import("../../src/commands/sync.js");
+  const { openGraphDb } = await import("../../src/graph/db.js");
+  const { GraphStore } = await import("../../src/graph/store.js");
+
+  const graph = new GraphStore(openGraphDb(":memory:"));
+  const result = await runSync({
+    root: tempDir,
+    projectId: "test-watcher-pool-gate",
+    store: makeMemoryStore(),
+    embeddings: noopEmbeddings,
+    graph, // injected → ownsGraph === false → pool must NOT be constructed
+  });
+
+  expect(result.ingested).toBe(fileCount);
+  for (let i = 0; i < fileCount; i++) {
+    expect(graph.findSymbol(`watchFn${i}`).length).toBe(1);
+  }
+
+  // HONEST SCOPE NOTE — what this test proves vs. does NOT prove:
+  // PROVES: when a caller injects its own `graph` connection (the watcher/
+  // serve shape) at a file count >= POOL_MIN_FILES, the sync still completes
+  // and produces a fully correct, fully populated graph — i.e. the sequential
+  // (non-pool) structural extraction path is correct at this scale.
+  // DOES NOT PROVE: that ParserPool was literally never constructed. There is
+  // no spy/instrumentation hook on ParserPool (adding one to
+  // src/parser/pool.ts or src/parser/worker.ts is out of scope for this fix),
+  // so this test cannot independently observe pool construction. That
+  // guarantee comes from the `ownsGraph && filePaths.length >= POOL_MIN_FILES`
+  // gate on the pool assignment in src/commands/sync.ts itself, not from an
+  // assertion here.
+  graph.close();
+});
+
 test("throw during run → parser.dispose and graphDb still cleaned up", async () => {
   // Injection strategy: store.batchReplace throws — this propagates out of runSync
   // reliably because it's awaited inside the try block after embed phase.
