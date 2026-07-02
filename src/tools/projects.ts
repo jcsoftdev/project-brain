@@ -41,7 +41,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
   server.registerTool(
     "list_projects",
     {
-      description: "List every indexed project with its chunk count and embedding meta (model/dim). Use to orient before delete_project or to audit what's indexed.",
+      description: "List every indexed project with its chunk count and embedding meta (model/dim). Use to orient before delete_project or to audit what's indexed. Project identifiers are returned in sanitized form (e.g. project-brain → project_brain); pass them back verbatim to other tools.",
       inputSchema: {},
       outputSchema: {
         projects: z.array(z.object({
