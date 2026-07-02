@@ -147,4 +147,41 @@ export class GraphStore {
        WHERE up.depth > 0`
     ).all({ $n: name, $d: maxDepth }) as SymbolHit[];
   }
+
+  /**
+   * Shortest caller→callee path between two symbol names (BFS via recursive
+   * CTE, same cycle guard as impact). Returns ordered SymbolHits including
+   * both endpoints; [] when unreachable within maxDepth. Same-name ambiguity:
+   * every definition of `from` seeds the walk; the shortest path wins.
+   */
+  tracePath(from: string, to: string, maxDepth = 8): SymbolHit[] {
+    if (from === to) {
+      const self = this.findSymbol(from);
+      return self.length ? [self[0]] : [];
+    }
+    const row = this.db.query(
+      `WITH RECURSIVE walk(id, depth, path) AS (
+         SELECT s.id, 0, '/' || s.id || '/' FROM symbols s WHERE s.name = $from
+         UNION
+         SELECT e.dst_symbol_id, walk.depth + 1, walk.path || e.dst_symbol_id || '/'
+         FROM edges e JOIN walk ON e.src_symbol_id = walk.id
+         WHERE e.dst_symbol_id IS NOT NULL
+           AND walk.depth < $d
+           AND walk.path NOT LIKE '%/' || e.dst_symbol_id || '/%'
+       )
+       SELECT walk.path AS path FROM walk
+       JOIN symbols s ON s.id = walk.id
+       WHERE s.name = $to
+       ORDER BY walk.depth LIMIT 1`
+    ).get({ $from: from, $to: to, $d: maxDepth }) as { path: string } | null;
+    if (!row) return [];
+    const ids = row.path.split("/").filter(Boolean).map(Number);
+    // Hydrate in path order (one query, reorder in JS — ids are few).
+    const placeholders = ids.map(() => "?").join(",");
+    const hits = this.db.query(
+      `SELECT s.id AS id, ${this.hitSql} FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.id IN (${placeholders})`
+    ).all(...ids) as (SymbolHit & { id: number })[];
+    const byId = new Map(hits.map((h) => [h.id, h]));
+    return ids.map((id) => byId.get(id)!).filter(Boolean).map(({ id: _id, ...hit }) => hit as SymbolHit);
+  }
 }

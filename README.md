@@ -98,6 +98,7 @@ Once connected over MCP, AI assistants get these tools. The server also injects 
 | `find_callers` | Every symbol that calls the named symbol (who depends on X). |
 | `find_callees` | Every symbol the named symbol calls (what X depends on). |
 | `impact` | Blast radius — all symbols transitively affected if the named symbol changes (reverse call graph, bounded by `maxDepth`). |
+| `trace_path` | Shortest call path between two symbols (how does A reach B) — ordered caller→callee chain. |
 
 ### Modules & knowledge
 
@@ -109,7 +110,7 @@ Once connected over MCP, AI assistants get these tools. The server also injects 
 | `delete_knowledge` | Remove chunks by source (deleted/renamed files). |
 | `check_health` | Embedding service + index status; run if results look empty or stale. |
 
-Routing: exact symbol → `find_symbol`; who-calls → `find_callers`; what-it-calls → `find_callees`; "what breaks if I change X" → `impact`; fuzzy/conceptual → `search_context` then `expand_context`; exact string/identifier you can type verbatim → `search_code`. The canonical tool list lives in `src/constants.ts` (`TOOL_CATALOG`) and is rendered into both the MCP server instructions and the per-project `CLAUDE.md`.
+Routing: exact symbol → `find_symbol`; who-calls → `find_callers`; what-it-calls → `find_callees`; "what breaks if I change X" → `impact`; "how does A end up calling B" → `trace_path`; fuzzy/conceptual → `search_context` then `expand_context`; exact string/identifier you can type verbatim → `search_code`. The canonical tool list lives in `src/constants.ts` (`TOOL_CATALOG`) and is rendered into both the MCP server instructions and the per-project `CLAUDE.md`.
 
 ## Recipes — get the most out of it
 
@@ -126,7 +127,7 @@ You talk to your **AI assistant** in natural language; it picks the right tool. 
 
 Tips to maximize value:
 
-- **Structural and lexical tools work without Ollama.** `find_symbol` / `find_callers` / `find_callees` / `impact` query the local SQLite graph, and `search_code` queries the local FTS index — all work even with embeddings unavailable. Only semantic `search_context` needs Ollama.
+- **Structural and lexical tools work without Ollama.** `find_symbol` / `find_callers` / `find_callees` / `impact` / `trace_path` query the local SQLite graph, and `search_code` queries the local FTS index — all work even with embeddings unavailable. Only semantic `search_context` needs Ollama.
 - **Keep the index fresh automatically.** The git hook re-syncs on commit and the file watcher re-indexes on save while `serve` runs — no manual step. Run `project-brain sync` after big external changes.
 - **Prefer `expand_context` over re-reading files.** `search_context` returns a `chunk_id`; expanding it is cheaper than the assistant reading the whole file.
 - **Lead with the exact name when you have it.** "find_symbol X" / "who calls X" is faster and more precise than a semantic search.

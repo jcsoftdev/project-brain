@@ -128,6 +128,7 @@ export const TOOL_CATALOG: ToolDoc[] = [
   { name: "find_callers", summary: "every symbol that calls the named symbol (who depends on X).", annotations: RO },
   { name: "find_callees", summary: "every symbol the named symbol calls (what X depends on).", annotations: RO },
   { name: "impact", summary: "blast radius: all symbols transitively affected if the named symbol changes (reverse call graph).", annotations: RO },
+  { name: "trace_path", summary: "shortest call path between two symbols (how does A reach B) — ordered caller→callee chain.", annotations: RO },
   { name: "list_modules", summary: "browse the indexed structure by module.", annotations: RO },
   { name: "get_module", summary: "retrieve all chunks for a module.", annotations: RO },
   { name: "add_knowledge", summary: "persist a note/decision into the brain for future sessions.", annotations: { idempotentHint: true, openWorldHint: false } },
@@ -146,6 +147,7 @@ export const TOOL_ROUTING: ReadonlyArray<{ when: string; tool: string }> = [
   { when: '"what calls X" / "who uses X"', tool: "find_callers" },
   { when: '"what does X call / depend on"', tool: "find_callees" },
   { when: '"what breaks if I change X" / blast radius', tool: "impact" },
+  { when: "'how does A end up calling B'", tool: "trace_path" },
   { when: '"how does Y work" / a concept you cannot name exactly', tool: "search_context" },
   { when: "an exact string/identifier you can type verbatim", tool: "search_code" },
 ];

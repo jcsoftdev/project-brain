@@ -14,6 +14,7 @@ const ALL_TOOLS = [
   "find_callers",
   "find_callees",
   "impact",
+  "trace_path",
   "list_modules",
   "get_module",
   "add_knowledge",
