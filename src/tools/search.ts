@@ -15,7 +15,8 @@ interface SearchArgs {
 
 /** Handle search_context logic (exported for testing). */
 export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<ToolResult> {
-  const { project, query, limit = 10 } = args;
+  const { project, query } = args;
+  const limit = Math.min(Math.max(args.limit ?? 10, 1), 50);
 
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(project) : deps.embeddings;
 
@@ -47,7 +48,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         project: z.string().describe("Project identifier"),
         query: z.string().describe("Search query text"),
-        limit: z.number().optional().describe("Max results (default 10)"),
+        limit: z.number().int().min(1).max(50).optional().describe("Max results (default 10)"),
         module: z.string().optional().describe("Filter by module name"),
       },
       outputSchema: {

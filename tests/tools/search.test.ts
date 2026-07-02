@@ -83,6 +83,54 @@ describe("search_context tool", () => {
     // limit=1, so topK = Math.max(1*3, 20) = 20
     expect(searchSpy.calledWith).toBe(20);
   });
+
+  it("clamps limit 0 to the minimum (1) instead of mmr silently returning empty results", async () => {
+    const store = makeMockStore();
+    store.hybridSearch = async () => mockResults;
+
+    const result = await handleSearch(
+      { project: "demo", query: "test", limit: 0 },
+      { store, embeddings: makeMockEmbeddings() }
+    );
+
+    // Pre-fix: mmr(kept, 0, lambda) returns [] because `picked.length < k`
+    // is `0 < 0` = false on the very first iteration — limit 0 silently
+    // produced empty results instead of being rejected/clamped.
+    const data = JSON.parse(result.content[0].text);
+    expect(result.isError).toBeFalsy();
+    expect(data.results.length).toBeGreaterThan(0);
+  });
+
+  it("clamps a negative limit to the minimum (1) instead of unpredictable mmr behavior", async () => {
+    const store = makeMockStore();
+    store.hybridSearch = async () => mockResults;
+
+    const result = await handleSearch(
+      { project: "demo", query: "test", limit: -5 },
+      { store, embeddings: makeMockEmbeddings() }
+    );
+
+    const data = JSON.parse(result.content[0].text);
+    expect(result.isError).toBeFalsy();
+    expect(data.results.length).toBeGreaterThan(0);
+  });
+
+  it("clamps a limit above 50 down to 50", async () => {
+    const store = makeMockStore();
+    const searchSpy = { topK: null as any };
+    store.hybridSearch = async (_project, _vector, _text, topK) => {
+      searchSpy.topK = topK;
+      return mockResults;
+    };
+
+    await handleSearch(
+      { project: "demo", query: "test", limit: 500 },
+      { store, embeddings: makeMockEmbeddings() }
+    );
+
+    // clamped to 50 -> topK = Math.max(50*3, 20) = 150
+    expect(searchSpy.topK).toBe(150);
+  });
 });
 
 describe("handleSearch — embeddingsFor per-project resolver", () => {
