@@ -82,6 +82,7 @@ Once connected over MCP, AI assistants get these tools. The server also injects 
 | Tool | What it does |
 |---|---|
 | `search_context` | Semantic/conceptual lookup. Returns ranked snippets, each with a `chunk_id`. **Primary** for fuzzy/cross-file questions ("how does X work"). |
+| `search_code` | Exact/keyword full-text search (BM25) over indexed code — identifiers, error strings, exact phrases. No embeddings needed, works offline. Not regex. |
 | `expand_context` | Full body of a `chunk_id` from `search_context` — read this instead of re-reading whole files. |
 
 ### Structural (AST graph — exact, no embeddings needed)
@@ -103,7 +104,7 @@ Once connected over MCP, AI assistants get these tools. The server also injects 
 | `delete_knowledge` | Remove chunks by source (deleted/renamed files). |
 | `check_health` | Embedding service + index status; run if results look empty or stale. |
 
-Routing: exact symbol → `find_symbol`; who-calls → `find_callers`; what-it-calls → `find_callees`; "what breaks if I change X" → `impact`; fuzzy/conceptual → `search_context` then `expand_context`. The canonical tool list lives in `src/constants.ts` (`TOOL_CATALOG`) and is rendered into both the MCP server instructions and the per-project `CLAUDE.md`.
+Routing: exact symbol → `find_symbol`; who-calls → `find_callers`; what-it-calls → `find_callees`; "what breaks if I change X" → `impact`; fuzzy/conceptual → `search_context` then `expand_context`; exact string/identifier you can type verbatim → `search_code`. The canonical tool list lives in `src/constants.ts` (`TOOL_CATALOG`) and is rendered into both the MCP server instructions and the per-project `CLAUDE.md`.
 
 ## Recipes — get the most out of it
 

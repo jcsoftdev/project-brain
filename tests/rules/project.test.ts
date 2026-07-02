@@ -129,6 +129,7 @@ describe("writeProjectRules", () => {
     const content = await readFile(join(tempDir, "CLAUDE.md"), "utf-8");
     for (const t of [
       "search_context",
+      "search_code",
       "expand_context",
       "find_symbol",
       "find_callers",

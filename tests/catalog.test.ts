@@ -8,6 +8,7 @@ import {
 
 const ALL_TOOLS = [
   "search_context",
+  "search_code",
   "expand_context",
   "find_symbol",
   "find_callers",

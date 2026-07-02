@@ -71,6 +71,12 @@ export interface VectorStore {
   getChunksByIds?(project: string, ids: string[]): Promise<Map<string, Chunk>>;
   /** Throw if the stored table dim doesn't match queryDim. No-op when no metadata exists yet. */
   assertDim(project: string, queryDim: number): Promise<void>;
+  /**
+   * FTS-only keyword search (BM25, no vector/embeddings involved). OPTIONAL:
+   * stores that don't implement it (e.g. minimal test mocks) are unaffected;
+   * callers must check for its presence before calling.
+   */
+  ftsSearch?(project: string, query: string, topK: number): Promise<SearchResult[]>;
 }
 
 import type { GraphStore } from "./graph/store.js";

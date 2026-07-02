@@ -4,6 +4,7 @@ import { createEmbeddingClient } from "./embeddings/factory.js";
 import { makeEmbeddingResolver } from "./embeddings/resolver.js";
 import { DB_PATH, OLLAMA_HOST, VERSION, SERVER_INSTRUCTIONS, GRAPH_DB_FILE } from "./constants.js";
 import { register as registerSearch } from "./tools/search.js";
+import { register as registerSearchCode } from "./tools/search-code.js";
 import { register as registerIngest } from "./tools/ingest.js";
 import { register as registerModules } from "./tools/modules.js";
 import { register as registerForget } from "./tools/forget.js";
@@ -84,6 +85,7 @@ export async function createServer(options: ServerOptions = {}) {
 
   // Register all tools
   registerSearch(server, deps);
+  registerSearchCode(server, deps);
   registerIngest(server, deps);
   registerModules(server, deps);
   registerForget(server, deps);
@@ -95,6 +97,7 @@ export async function createServer(options: ServerOptions = {}) {
 
   const toolNames = [
     "search_context",
+    "search_code",
     "add_knowledge",
     "list_modules",
     "get_module",

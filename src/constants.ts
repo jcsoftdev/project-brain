@@ -122,6 +122,7 @@ const RO = { readOnlyHint: true, openWorldHint: false } as const;
 
 export const TOOL_CATALOG: ToolDoc[] = [
   { name: "search_context", summary: "semantic/conceptual lookup; returns ranked snippets + chunk_id. PRIMARY for fuzzy/cross-file questions.", annotations: RO },
+  { name: "search_code", summary: "exact/keyword full-text search (BM25) over indexed code — identifiers, error strings, exact phrases. No embeddings needed. Not regex.", annotations: RO },
   { name: "expand_context", summary: "full body of a chunk_id from search_context (read this instead of re-reading whole files).", annotations: RO },
   { name: "find_symbol", summary: "exact symbol definition(s) by name: path, line range, kind, signature. Use when you know the name.", annotations: RO },
   { name: "find_callers", summary: "every symbol that calls the named symbol (who depends on X).", annotations: RO },
@@ -146,6 +147,7 @@ export const TOOL_ROUTING: ReadonlyArray<{ when: string; tool: string }> = [
   { when: '"what does X call / depend on"', tool: "find_callees" },
   { when: '"what breaks if I change X" / blast radius', tool: "impact" },
   { when: '"how does Y work" / a concept you cannot name exactly', tool: "search_context" },
+  { when: "an exact string/identifier you can type verbatim", tool: "search_code" },
 ];
 
 /** Bullet list of every tool — used by SERVER_INSTRUCTIONS ("Tools by intent"). */

@@ -293,6 +293,30 @@ export class LanceDbStore implements VectorStore {
     }
   }
 
+  /** FTS-only keyword search (BM25) — no vector/embeddings involved. Falls back to [] on missing FTS index or empty/missing table. */
+  async ftsSearch(project: string, query: string, topK: number): Promise<SearchResult[]> {
+    const table = await this.getTable(project);
+    if (!table) return [];
+    try {
+      if ((await table.countRows()) === 0) return [];
+      const rows = await table.query().fullTextSearch(query).limit(topK).toArray();
+      return rows.map((r) => ({
+        id: r.id as string,
+        content: r.content as string,
+        source: r.source as string,
+        module: r.module as string,
+        score: (r._score as number) ?? 1,
+        symbol_name: r.symbol_name as string | undefined,
+        symbol_kind: r.symbol_kind as string | undefined,
+        signature: r.signature as string | undefined,
+        start_line: r.start_line as number | undefined,
+        end_line: r.end_line as number | undefined,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
   async assertDim(project: string, queryDim: number): Promise<void> {
     const meta = await readTableMeta(this.dbPath, project);
     if (meta && meta.dim !== queryDim) {
