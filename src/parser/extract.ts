@@ -56,6 +56,25 @@ const DECL_KINDS: Record<string, Record<string, string>> = {
     method_declaration: "method",
     struct_declaration: "struct",
   },
+  ruby: {
+    method: "method",
+    class: "class",
+    module: "type",
+  },
+  php: {
+    function_definition: "function",
+    method_declaration: "method",
+    class_declaration: "class",
+  },
+  swift: {
+    function_declaration: "function",
+    class_declaration: "class",
+    protocol_declaration: "interface",
+  },
+  kotlin: {
+    function_declaration: "function",
+    class_declaration: "class",
+  },
 };
 
 /** Per-language call-site node types. Default covers TS/JS/Python/Go/Rust (current behavior). */
@@ -65,6 +84,10 @@ export const CALL_NODE_TYPES: Record<string, string[]> = {
   c: ["call_expression"],
   cpp: ["call_expression"],
   c_sharp: ["invocation_expression", "object_creation_expression"],
+  ruby: ["call"],
+  php: ["function_call_expression", "member_call_expression", "scoped_call_expression"],
+  swift: ["call_expression"],
+  kotlin: ["call_expression"],
 };
 
 // C/C++ function_definition (and struct/pointer declarators) have no "name" field —
@@ -94,12 +117,15 @@ function nameOf(node: any): string | null {
   const byDeclarator = declaratorName(node);
   if (byDeclarator) return byDeclarator;
   // Fall back: first named child that is an identifier-like node
+  // (Kotlin has no "name" field on function_declaration/class_declaration —
+  // its identifier leaves are typed "simple_identifier"/"type_identifier".)
   for (let i = 0; i < (node.namedChildCount ?? 0); i++) {
     const child = node.namedChild(i);
     if (
       child.type === "identifier" ||
       child.type === "property_identifier" ||
-      child.type === "type_identifier"
+      child.type === "type_identifier" ||
+      child.type === "simple_identifier"
     ) {
       return child.text ?? null;
     }
@@ -127,7 +153,12 @@ function collectCalls(
       const byField = n.childForFieldName?.("name");
       const callee = byField ?? n.namedChild?.(0);
       if (callee) {
-        if (callee.type === "identifier") {
+        // "identifier" covers TS/JS/Python/Go/Rust/C/C++; "name" is PHP's leaf type
+        // for both function_call_expression (via namedChild(0)) and
+        // member_call_expression (via the "name" field); "simple_identifier" is
+        // Kotlin's leaf type (call_expression has no "name" field, falls to
+        // namedChild(0)).
+        if (callee.type === "identifier" || callee.type === "name" || callee.type === "simple_identifier") {
           out.push({ dst_name: callee.text, edge_type: "call" });
         } else if (callee.type === "member_expression") {
           // e.g. obj.method() — use last identifier component

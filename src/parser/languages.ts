@@ -28,6 +28,10 @@ import javaWasm from "tree-sitter-wasms/out/tree-sitter-java.wasm" with { type: 
 import cWasm from "tree-sitter-wasms/out/tree-sitter-c.wasm" with { type: "file" };
 import cppWasm from "tree-sitter-wasms/out/tree-sitter-cpp.wasm" with { type: "file" };
 import csWasm from "tree-sitter-wasms/out/tree-sitter-c_sharp.wasm" with { type: "file" };
+import rubyWasm from "tree-sitter-wasms/out/tree-sitter-ruby.wasm" with { type: "file" };
+import phpWasm from "tree-sitter-wasms/out/tree-sitter-php.wasm" with { type: "file" };
+import swiftWasm from "tree-sitter-wasms/out/tree-sitter-swift.wasm" with { type: "file" };
+import kotlinWasm from "tree-sitter-wasms/out/tree-sitter-kotlin.wasm" with { type: "file" };
 
 export interface LanguageSpec {
   id: string;
@@ -49,6 +53,11 @@ export const LANGUAGES: Record<string, LanguageSpec> = {
   ".cc": { id: "cpp", wasmPath: cppWasm },
   ".hpp": { id: "cpp", wasmPath: cppWasm },
   ".cs": { id: "c_sharp", wasmPath: csWasm },
+  ".rb": { id: "ruby", wasmPath: rubyWasm },
+  ".php": { id: "php", wasmPath: phpWasm },
+  ".swift": { id: "swift", wasmPath: swiftWasm },
+  ".kt": { id: "kotlin", wasmPath: kotlinWasm },
+  ".kts": { id: "kotlin", wasmPath: kotlinWasm },
 };
 
 export function langForExt(ext: string): LanguageSpec | undefined {
