@@ -55,14 +55,17 @@ it("php: function + method + call edge", async () => {
   );
   expect(syms.map((s) => s.name)).toEqual(expect.arrayContaining(["A", "run", "helper", "top"]));
   expect(syms.find((s) => s.name === "top")!.edges.map((e) => e.dst_name)).toContain("other");
+  expect(syms.find((s) => s.name === "run")!.edges.map((e) => e.dst_name)).toContain("helper");
 });
 
-it("swift: function + class", async () => {
+it("swift: function + class + call edge", async () => {
   const syms = await symbolsOf(".swift", `class A { func run() { helper() } }\nfunc helper() {}`);
   expect(syms.map((s) => s.name)).toEqual(expect.arrayContaining(["A", "run", "helper"]));
+  expect(syms.find((s) => s.name === "run")!.edges.map((e) => e.dst_name)).toContain("helper");
 });
 
 it("kotlin: function + class + call edge", async () => {
   const syms = await symbolsOf(".kt", `class A { fun run() { helper() } }\nfun helper() {}`);
   expect(syms.map((s) => s.name)).toEqual(expect.arrayContaining(["A", "run", "helper"]));
+  expect(syms.find((s) => s.name === "run")!.edges.map((e) => e.dst_name)).toContain("helper");
 });
