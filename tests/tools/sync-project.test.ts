@@ -34,4 +34,31 @@ describe("sync_project", () => {
     await handleSyncProject({ project: "p" }, deps, extra, fakeRunSync as any);
     expect(notifications.length).toBe(0);
   });
+
+  it("passes deps.graph (identity) and changedFiles: [] into runSync (memory-safety passthrough)", async () => {
+    let receivedOpts: any = null;
+    const extra = { sendNotification: async () => {} } as any;
+    const fakeRunSync = async (opts: any) => {
+      receivedOpts = opts;
+      return { ingested: 0, skipped: 0, deleted: 0, scanned: 0, embedFailed: 0 };
+    };
+    const deps = { projectRoot: "/tmp/x", store: {}, embeddings: {}, graph: {}, embeddingsFor: async () => ({}) } as any;
+    await handleSyncProject({ project: "p" }, deps, extra, fakeRunSync as any);
+    expect(receivedOpts.graph).toBe(deps.graph);
+    expect(receivedOpts.changedFiles).toEqual([]);
+  });
+
+  it("does not crash when sendNotification rejects (client disconnect mid-sync)", async () => {
+    const extra = {
+      _meta: { progressToken: "tok-1" },
+      sendNotification: async () => { throw new Error("client disconnected"); },
+    } as any;
+    const fakeRunSync = async (opts: any) => {
+      opts.onProgress?.({ phase: "embedding", current: 3, total: 10 });
+      return { ingested: 2, skipped: 1, deleted: 0, scanned: 3, embedFailed: 0 };
+    };
+    const deps = { projectRoot: "/tmp/x", store: {}, embeddings: {}, graph: {}, embeddingsFor: async () => ({}) } as any;
+    const r = await handleSyncProject({ project: "p" }, deps, extra, fakeRunSync as any);
+    expect((r.structuredContent as any).ingested).toBe(2);
+  });
 });

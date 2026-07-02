@@ -35,7 +35,7 @@ export async function handleSyncProject(
         void extra.sendNotification!({
           method: "notifications/progress",
           params: { progressToken: token, progress: p.current, total: p.total, message: p.phase },
-        });
+        }).catch(() => {});
       }
     : undefined;
 
