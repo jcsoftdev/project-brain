@@ -167,7 +167,15 @@ export class LanceDbStore implements VectorStore {
         module: r.module as string,
         score: 1 / (1 + (r._distance as number)),
       }));
-    } catch {
+    } catch (err) {
+      // A genuine failure (dim mismatch, connection error, corrupted
+      // fragment) must not be silently indistinguishable from "no matches" —
+      // log so a broken index isn't invisible, then degrade to [] (search()
+      // is called from hot paths that expect a result array, not a throw).
+      console.warn(
+        `[project-brain] search failed for '${project}':`,
+        err instanceof Error ? err.message : err
+      );
       return [];
     }
   }
