@@ -29,6 +29,11 @@ export class GraphStore {
     this.db.close();
   }
 
+  /** Total number of indexed symbols across all files. */
+  countSymbols(): number {
+    return (this.db.query("SELECT COUNT(*) AS n FROM symbols").get() as { n: number }).n;
+  }
+
   deleteFile(path: string): void {
     // ON DELETE CASCADE removes symbols + edges
     this.delStmt.run({ $path: path });

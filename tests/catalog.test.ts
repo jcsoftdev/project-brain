@@ -23,6 +23,7 @@ const ALL_TOOLS = [
   "list_projects",
   "delete_project",
   "manage_adr",
+  "get_architecture",
 ];
 
 describe("tool catalog is the single source of truth", () => {

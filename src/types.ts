@@ -113,4 +113,11 @@ export interface ToolDeps {
    * (and in older/injected test deps) — absent means proceed without asking.
    */
   confirmDestructive?: (message: string) => Promise<boolean>;
+  /**
+   * Filesystem root of the served project — the same value server.ts already
+   * computes for the graph.db path (`options.projectRoot || process.cwd()`).
+   * Absent in older/injected test deps; consumers that need it (get_architecture,
+   * sync_project) return a PROJECT_ROOT_UNAVAILABLE error result when missing.
+   */
+  projectRoot?: string;
 }

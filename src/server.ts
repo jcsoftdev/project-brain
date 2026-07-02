@@ -16,6 +16,7 @@ import { register as registerImpact } from "./tools/impact.js";
 import { register as registerTracePath } from "./tools/trace-path.js";
 import { register as registerProjects } from "./tools/projects.js";
 import { register as registerAdr } from "./tools/adr.js";
+import { register as registerArchitecture } from "./tools/architecture.js";
 import { openGraphDb } from "./graph/db.js";
 import { GraphStore } from "./graph/store.js";
 import { join } from "node:path";
@@ -84,7 +85,7 @@ export async function createServer(options: ServerOptions = {}) {
     return res.action === "accept" && res.content?.confirm === true;
   };
 
-  const deps: ToolDeps = { store, embeddings, embeddingsFor, graph, confirmDestructive };
+  const deps: ToolDeps = { store, embeddings, embeddingsFor, graph, confirmDestructive, projectRoot };
 
   // Register all tools
   registerSearch(server, deps);
@@ -100,6 +101,7 @@ export async function createServer(options: ServerOptions = {}) {
   registerTracePath(server, deps);
   registerProjects(server, deps);
   registerAdr(server, deps);
+  registerArchitecture(server, deps);
 
   const toolNames = [
     "search_context",
@@ -118,6 +120,7 @@ export async function createServer(options: ServerOptions = {}) {
     "list_projects",
     "delete_project",
     "manage_adr",
+    "get_architecture",
   ];
 
   return { server, store, embeddings, graph, toolNames, instructions: SERVER_INSTRUCTIONS };

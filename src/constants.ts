@@ -137,6 +137,7 @@ export const TOOL_CATALOG: ToolDoc[] = [
   { name: "list_projects", summary: "list every indexed project with chunk counts and embedding meta.", annotations: RO },
   { name: "delete_project", summary: "delete an entire indexed project's vector index + metadata (never touches its .project-brain/ directory).", annotations: { destructiveHint: true, idempotentHint: true, openWorldHint: false } },
   { name: "manage_adr", summary: "create or list Architecture Decision Records. Append-only: supersede by creating a new ADR with supersedes:<slug>.", annotations: { idempotentHint: true, openWorldHint: false } },
+  { name: "get_architecture", summary: "one-call project summary: detected tech stack, indexed modules, chunk count, and symbol count. Use to orient before drilling into search_context or the structural tools.", annotations: RO },
 ];
 
 /** Look up a tool's annotations from the catalog (single source of truth). */
