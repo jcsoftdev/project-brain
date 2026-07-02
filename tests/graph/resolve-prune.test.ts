@@ -107,3 +107,32 @@ test("pruneDanglingEdges fixes a stale edge after RENAME-as-replace (no file del
 
   db.close();
 });
+
+test("pruneDanglingEdges re-links to a same-file symbol in preference to an arbitrary match", () => {
+  const db = openGraphDb(":memory:");
+  const store = new GraphStore(db);
+
+  // fileB has an unrelated `handler`, inserted first (lowest rowid).
+  store.replaceFile("fileB.ts", "typescript", "h", 1, [
+    { name: "handler", kind: "function", signature: "", start_line: 1, end_line: 1, edges: [] },
+  ]);
+  // fileA has its own `handler` and a `caller` that calls it locally.
+  store.replaceFile("fileA.ts", "typescript", "h", 1, [
+    { name: "handler", kind: "function", signature: "", start_line: 1, end_line: 1, edges: [] },
+    { name: "caller", kind: "function", signature: "", start_line: 3, end_line: 5, edges: [{ dst_name: "handler", edge_type: "call" }] },
+  ]);
+
+  // Force the edge into a dangling state (dst_symbol_id NULL) the way prune
+  // encounters it in practice, then let pruneDanglingEdges re-link it.
+  db.query("UPDATE edges SET dst_symbol_id = NULL WHERE dst_name = 'handler'").run();
+  store.pruneDanglingEdges();
+
+  const fileAHandlerId = (db.query(
+    "SELECT s.id FROM symbols s JOIN files f ON s.file_id=f.id WHERE f.path='fileA.ts' AND s.name='handler'"
+  ).get() as { id: number }).id;
+
+  const edge = db.query("SELECT dst_symbol_id FROM edges WHERE dst_name='handler'").get() as { dst_symbol_id: number | null };
+  expect(edge.dst_symbol_id).toBe(fileAHandlerId);
+
+  db.close();
+});

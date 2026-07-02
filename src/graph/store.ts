@@ -99,8 +99,12 @@ export class GraphStore {
       WHERE dst_symbol_id IS NOT NULL
         AND dst_symbol_id NOT IN (SELECT id FROM symbols)`).run();
     this.db.query(`
-      UPDATE edges SET dst_symbol_id = (
-        SELECT s.id FROM symbols s WHERE s.name = edges.dst_name LIMIT 1
+      UPDATE edges SET dst_symbol_id = COALESCE(
+        (SELECT s.id FROM symbols s
+           WHERE s.name = edges.dst_name
+             AND s.file_id = (SELECT file_id FROM symbols WHERE id = edges.src_symbol_id)
+           LIMIT 1),
+        (SELECT s.id FROM symbols s WHERE s.name = edges.dst_name LIMIT 1)
       )
       WHERE dst_symbol_id IS NULL`).run();
   }
