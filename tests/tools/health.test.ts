@@ -61,4 +61,40 @@ describe("check_health tool", () => {
     );
     expect(result.isError).toBeFalsy();
   });
+
+  it("uses embeddingsFor(project) when provided — reports the resolved client's model + availability", async () => {
+    const sentinel: EmbeddingClient = {
+      model: "sentinel-model",
+      embed: async () => [[0.9]],
+      isAvailable: async () => false,
+    };
+
+    const result = await handleHealth(
+      { project: "myproj" },
+      {
+        store: makeMockStore(7),
+        embeddings: makeMockEmbeddings(true), // default — should NOT be used
+        embeddingsFor: async (project) => {
+          expect(project).toBe("myproj");
+          return sentinel;
+        },
+      }
+    );
+
+    const data = JSON.parse(result.content[0].text);
+    expect(data.model).toBe("sentinel-model");
+    expect(data.embeddings).toBe("unavailable");
+    expect(data.chunks).toBe(7);
+  });
+
+  it("falls back to deps.embeddings + global EMBEDDING_MODEL when embeddingsFor is absent (back-compat)", async () => {
+    const result = await handleHealth(
+      { project: "demo" },
+      { store: makeMockStore(1), embeddings: makeMockEmbeddings(true) }
+      // embeddingsFor absent
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.model).toBe("nomic-embed-text");
+    expect(data.embeddings).toBe("available");
+  });
 });

@@ -9,15 +9,17 @@ export async function handleHealth(
   args: { project: string },
   deps: ToolDeps
 ): Promise<ToolResult> {
+  const emb = deps.embeddingsFor ? await deps.embeddingsFor(args.project) : deps.embeddings;
+
   const [embeddingsAvailable, chunks] = await Promise.all([
-    deps.embeddings.isAvailable(),
+    emb.isAvailable(),
     deps.store.countChunks(args.project),
   ]);
 
   const report = {
     store: "connected",
     embeddings: embeddingsAvailable ? "available" : "unavailable",
-    model: EMBEDDING_MODEL,
+    model: emb.model ?? EMBEDDING_MODEL,
     chunks,
     version: VERSION,
   };
