@@ -52,18 +52,32 @@ export class GraphStore {
   }
 
   resolveEdgesForFile(path: string): void {
-    // edges originating in this file → link to any symbol by name
+    // edges originating in this file → prefer a same-file symbol match first
+    // (a local call is far more likely to target a same-file definition than
+    // an arbitrary cross-repo namesake); fall back to the prior
+    // arbitrary-match behavior when no same-file candidate exists. This is
+    // the "scope-aware refinement" 2026-06-16-structural-layer-design.md §10
+    // explicitly deferred as future work.
     this.db.query(`
-      UPDATE edges SET dst_symbol_id = (
-        SELECT s.id FROM symbols s WHERE s.name = edges.dst_name LIMIT 1
+      UPDATE edges SET dst_symbol_id = COALESCE(
+        (SELECT s.id FROM symbols s
+           WHERE s.name = edges.dst_name
+             AND s.file_id = (SELECT file_id FROM symbols WHERE id = edges.src_symbol_id)
+           LIMIT 1),
+        (SELECT s.id FROM symbols s WHERE s.name = edges.dst_name LIMIT 1)
       )
       WHERE src_symbol_id IN (
         SELECT s.id FROM symbols s JOIN files f ON s.file_id = f.id WHERE f.path = $p
       )`).run({ $p: path });
-    // edges anywhere whose target name was (re)defined in this file → (re)link
+    // edges anywhere whose target name was (re)defined in this file → (re)link,
+    // same same-file-first preference.
     this.db.query(`
-      UPDATE edges SET dst_symbol_id = (
-        SELECT s.id FROM symbols s WHERE s.name = edges.dst_name LIMIT 1
+      UPDATE edges SET dst_symbol_id = COALESCE(
+        (SELECT s.id FROM symbols s
+           WHERE s.name = edges.dst_name
+             AND s.file_id = (SELECT file_id FROM symbols WHERE id = edges.src_symbol_id)
+           LIMIT 1),
+        (SELECT s.id FROM symbols s WHERE s.name = edges.dst_name LIMIT 1)
       )
       WHERE dst_name IN (
         SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id WHERE f.path = $p
