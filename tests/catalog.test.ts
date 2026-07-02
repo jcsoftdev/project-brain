@@ -20,6 +20,8 @@ const ALL_TOOLS = [
   "add_knowledge",
   "delete_knowledge",
   "check_health",
+  "list_projects",
+  "delete_project",
 ];
 
 describe("tool catalog is the single source of truth", () => {

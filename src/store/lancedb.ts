@@ -379,4 +379,30 @@ export class LanceDbStore implements VectorStore {
     }
     return result;
   }
+
+  async listProjects(): Promise<Array<{ project: string; chunks: number; model?: string; dim?: number }>> {
+    const db = await this.getDb();
+    const names = await db.tableNames();
+    const out: Array<{ project: string; chunks: number; model?: string; dim?: number }> = [];
+    for (const name of names) {
+      if (!name.endsWith(TABLE_SUFFIX)) continue;
+      const project = name.slice(0, -TABLE_SUFFIX.length);
+      const chunks = await this.countChunks(project);
+      const meta = await readTableMeta(this.dbPath, project);
+      out.push({ project, chunks, ...(meta ? { model: meta.model, dim: meta.dim } : {}) });
+    }
+    return out;
+  }
+
+  /** Drop a project's vector table + meta file ONLY — never touches any project-local `.project-brain/` directory. */
+  async deleteProject(project: string): Promise<boolean> {
+    const name = this.tableName(project);
+    const db = await this.getDb();
+    if (!(await db.tableNames()).includes(name)) return false;
+    this.tables.delete(name);
+    await db.dropTable(name);
+    const { deleteTableMeta } = await import("./meta.js");
+    await deleteTableMeta(this.dbPath, project);
+    return true;
+  }
 }

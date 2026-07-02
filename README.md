@@ -109,6 +109,8 @@ Once connected over MCP, AI assistants get these tools. The server also injects 
 | `add_knowledge` | Persist a note/decision into the brain for future sessions. |
 | `delete_knowledge` | Remove chunks by source (deleted/renamed files). |
 | `check_health` | Embedding service + index status; run if results look empty or stale. |
+| `list_projects` | List every indexed project with chunk counts and embedding meta. |
+| `delete_project` | Delete an entire indexed project's vector index + metadata (never touches its `.project-brain/` directory). |
 
 Routing: exact symbol → `find_symbol`; who-calls → `find_callers`; what-it-calls → `find_callees`; "what breaks if I change X" → `impact`; "how does A end up calling B" → `trace_path`; fuzzy/conceptual → `search_context` then `expand_context`; exact string/identifier you can type verbatim → `search_code`. The canonical tool list lives in `src/constants.ts` (`TOOL_CATALOG`) and is rendered into both the MCP server instructions and the per-project `CLAUDE.md`.
 

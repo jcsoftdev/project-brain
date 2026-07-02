@@ -16,3 +16,8 @@ export async function readTableMeta(dbPath: string, project: string): Promise<Ta
 export async function writeTableMeta(dbPath: string, project: string, meta: TableMeta): Promise<void> {
   await Bun.write(metaPath(dbPath, project), JSON.stringify(meta));
 }
+
+export async function deleteTableMeta(dbPath: string, project: string): Promise<void> {
+  const { unlink } = await import("node:fs/promises");
+  try { await unlink(metaPath(dbPath, project)); } catch {}
+}

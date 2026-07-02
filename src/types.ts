@@ -77,6 +77,20 @@ export interface VectorStore {
    * callers must check for its presence before calling.
    */
   ftsSearch?(project: string, query: string, topK: number): Promise<SearchResult[]>;
+  /**
+   * List all indexed projects with their chunk counts and meta (model/dim when
+   * known). OPTIONAL: stores that don't implement it are unaffected; admin
+   * tools return an ADMIN_UNSUPPORTED error result when absent.
+   */
+  listProjects?(): Promise<Array<{ project: string; chunks: number; model?: string; dim?: number }>>;
+  /**
+   * Drop a project's vector table + meta file ONLY — never touches any
+   * project-local `.project-brain/` directory. Returns false when the
+   * project doesn't exist. OPTIONAL: stores that don't implement it are
+   * unaffected; admin tools return an ADMIN_UNSUPPORTED error result when
+   * absent.
+   */
+  deleteProject?(project: string): Promise<boolean>;
 }
 
 import type { GraphStore } from "./graph/store.js";
