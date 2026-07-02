@@ -84,7 +84,12 @@ jobs:
         run: bun install
 
       - name: Build binary
-        run: bun build ./src/cli.ts --compile --target=${{ matrix.bun_target }} --outfile dist/project-brain-${{ matrix.target }}
+        # worker.ts is passed as a SECOND entrypoint so `--compile` bundles the
+        # worker-pool parser's FULL module graph (wasm.ts, extract.ts,
+        # languages.ts) AND its nested `{ type: "file" }` WASM assets into the
+        # binary. Without it the pool path (src/parser/pool.ts) spawns workers
+        # that cannot resolve their own imports, silently yielding zero symbols.
+        run: bun build ./src/cli.ts ./src/parser/worker.ts --compile --target=${{ matrix.bun_target }} --outfile dist/project-brain-${{ matrix.target }}
 
       - name: Smoke test native binary
         shell: bash
@@ -123,6 +128,25 @@ jobs:
             exit 1
           fi
           rm -rf "$SMOKE"
+
+          # POOL gate: exercise the worker-pool path (src/parser/pool.ts). The
+          # sequential check above cannot detect a broken worker entrypoint —
+          # this proves the second `--compile` entrypoint (worker.ts) loads its
+          # full graph + embedded WASM and extracts symbols inside the binary.
+          set +e
+          POUT="$("$BIN" __parse-selftest --pool 2>&1)"
+          PSTATUS=$?
+          set -e
+          echo "pool_exit=$PSTATUS"
+          echo "$POUT"
+          if echo "$POUT" | grep -E 'RuntimeError|\$bunfs' >/dev/null; then
+            echo "::error::worker-pool smoke hit an embedded-asset regression (RuntimeError/\$bunfs)"
+            exit 1
+          fi
+          if ! echo "$POUT" | grep -Eq 'STRUCT_OK [1-9][0-9]*'; then
+            echo "::error::worker-pool smoke did NOT emit STRUCT_OK — the pool path is dead in this binary"
+            exit 1
+          fi
 
       - name: Upload binary to release
         uses: softprops/action-gh-release@v3
