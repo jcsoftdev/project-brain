@@ -87,13 +87,17 @@ export async function loadPatterns(root: string): Promise<string[]> {
       return own;
     }
 
-    const childDirs = entries.filter(
-      (e) =>
-        e.isDirectory() &&
-        !ALWAYS_IGNORE.some(
-          (ig) => e.name + "/" === ig || e.name === ig.replace(/\/$/, "")
-        )
-    );
+    // Sort by name: readdir's enumeration order is not guaranteed across
+    // filesystems, and "last matching pattern wins" depends on array order.
+    const childDirs = entries
+      .filter(
+        (e) =>
+          e.isDirectory() &&
+          !ALWAYS_IGNORE.some(
+            (ig) => e.name + "/" === ig || e.name === ig.replace(/\/$/, "")
+          )
+      )
+      .sort((a, b) => a.name.localeCompare(b.name));
     const childResults = await Promise.all(childDirs.map((e) => walk(join(dir, e.name))));
 
     return own.concat(...childResults);
