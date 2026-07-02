@@ -2,11 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { EMBEDDING_MODEL, VERSION, toolAnnotations } from "../constants.js";
 import type { ToolDeps } from "../types.js";
-
-type ToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
+import { jsonResult, type ToolResult } from "./format.js";
 
 /** Handle check_health logic (exported for testing). */
 export async function handleHealth(
@@ -26,9 +22,7 @@ export async function handleHealth(
     version: VERSION,
   };
 
-  return {
-    content: [{ type: "text", text: JSON.stringify(report) }],
-  };
+  return jsonResult(report);
 }
 
 /** Register check_health tool with MCP server. */
@@ -39,6 +33,13 @@ export function register(server: McpServer, deps: ToolDeps): void {
       description: "Check embedding service + index status. Run when search_context returns empty/weak results to diagnose a down Ollama or stale/missing index.",
       inputSchema: {
         project: z.string().describe("Project identifier"),
+      },
+      outputSchema: {
+        store: z.string(),
+        embeddings: z.string(),
+        model: z.string(),
+        chunks: z.number(),
+        version: z.string(),
       },
       annotations: toolAnnotations("check_health"),
     },

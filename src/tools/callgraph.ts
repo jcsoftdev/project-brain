@@ -16,10 +16,11 @@ export async function handleFindCallers(
   if (hits.length === 0) {
     return {
       content: [{ type: "text", text: `No callers of "${args.name}" found in the index.` }],
+      structuredContent: { hits: [] },
     };
   }
 
-  return { content: [{ type: "text", text: formatHits(hits) }] };
+  return { content: [{ type: "text", text: formatHits(hits) }], structuredContent: { hits } };
 }
 
 /** Handle find_callees logic (exported for testing). */
@@ -34,10 +35,11 @@ export async function handleFindCallees(
   if (hits.length === 0) {
     return {
       content: [{ type: "text", text: `No callees of "${args.name}" found in the index.` }],
+      structuredContent: { hits: [] },
     };
   }
 
-  return { content: [{ type: "text", text: formatHits(hits) }] };
+  return { content: [{ type: "text", text: formatHits(hits) }], structuredContent: { hits } };
 }
 
 /** Register find_callers and find_callees tools with MCP server. */
@@ -51,6 +53,16 @@ export function register(server: McpServer, deps: ToolDeps): void {
         "Complements find_callees (what X calls), find_symbol (where X is defined), and search_context (semantic).",
       inputSchema: {
         name: z.string().describe("Exact symbol name to find callers of (case-sensitive)"),
+      },
+      outputSchema: {
+        hits: z.array(z.object({
+          name: z.string(),
+          kind: z.string(),
+          signature: z.string(),
+          path: z.string(),
+          start_line: z.number(),
+          end_line: z.number(),
+        })),
       },
       annotations: toolAnnotations("find_callers"),
     },
@@ -66,6 +78,16 @@ export function register(server: McpServer, deps: ToolDeps): void {
         "Complements find_callers (who calls X), find_symbol (where X is defined), and search_context (semantic).",
       inputSchema: {
         name: z.string().describe("Exact symbol name to find callees of (case-sensitive)"),
+      },
+      outputSchema: {
+        hits: z.array(z.object({
+          name: z.string(),
+          kind: z.string(),
+          signature: z.string(),
+          path: z.string(),
+          start_line: z.number(),
+          end_line: z.number(),
+        })),
       },
       annotations: toolAnnotations("find_callees"),
     },

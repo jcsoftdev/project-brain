@@ -19,10 +19,11 @@ export async function handleImpact(
   if (hits.length === 0) {
     return {
       content: [{ type: "text", text: `No transitive callers of "${args.name}" found in the index.` }],
+      structuredContent: { hits: [] },
     };
   }
 
-  return { content: [{ type: "text", text: formatHits(hits) }] };
+  return { content: [{ type: "text", text: formatHits(hits) }], structuredContent: { hits } };
 }
 
 /** Register impact tool with MCP server. */
@@ -45,6 +46,16 @@ export function register(server: McpServer, deps: ToolDeps): void {
           .max(20)
           .optional()
           .describe("Maximum traversal depth (default 6, max 20)"),
+      },
+      outputSchema: {
+        hits: z.array(z.object({
+          name: z.string(),
+          kind: z.string(),
+          signature: z.string(),
+          path: z.string(),
+          start_line: z.number(),
+          end_line: z.number(),
+        })),
       },
       annotations: toolAnnotations("impact"),
     },

@@ -16,10 +16,11 @@ export async function handleFindSymbol(
   if (hits.length === 0) {
     return {
       content: [{ type: "text", text: `No symbol named "${args.name}" found in the index.` }],
+      structuredContent: { hits: [] },
     };
   }
 
-  return { content: [{ type: "text", text: formatHits(hits) }] };
+  return { content: [{ type: "text", text: formatHits(hits) }], structuredContent: { hits } };
 }
 
 /** Register find_symbol tool with MCP server. */
@@ -33,6 +34,16 @@ export function register(server: McpServer, deps: ToolDeps): void {
         "Complements search_context (semantic) and expand_context (full body).",
       inputSchema: {
         name: z.string().describe("Exact symbol name to look up (case-sensitive)"),
+      },
+      outputSchema: {
+        hits: z.array(z.object({
+          name: z.string(),
+          kind: z.string(),
+          signature: z.string(),
+          path: z.string(),
+          start_line: z.number(),
+          end_line: z.number(),
+        })),
       },
       annotations: toolAnnotations("find_symbol"),
     },

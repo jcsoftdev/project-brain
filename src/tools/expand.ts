@@ -2,24 +2,19 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 import { toolAnnotations } from "../constants.js";
+import { jsonResult, type ToolResult } from "./format.js";
 
 interface ExpandArgs { project: string; chunk_id: string; }
-type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean; };
 
 export async function handleExpand(args: ExpandArgs, deps: ToolDeps): Promise<ToolResult> {
   const chunk = await deps.store.getChunkById(args.project, args.chunk_id);
   if (!chunk) {
-    return {
-      content: [{ type: "text", text: JSON.stringify({ error: "chunk_id not found", code: "CHUNK_NOT_FOUND" }) }],
-      isError: true,
-    };
+    return jsonResult({ error: "chunk_id not found", code: "CHUNK_NOT_FOUND" }, true);
   }
-  return {
-    content: [{ type: "text", text: JSON.stringify({
-      chunk_id: chunk.id, source: chunk.source, symbol: chunk.symbol_name,
-      start_line: chunk.start_line, end_line: chunk.end_line, content: chunk.content,
-    }) }],
-  };
+  return jsonResult({
+    chunk_id: chunk.id, source: chunk.source, symbol: chunk.symbol_name,
+    start_line: chunk.start_line, end_line: chunk.end_line, content: chunk.content,
+  });
 }
 
 export function register(server: McpServer, deps: ToolDeps): void {
@@ -30,6 +25,14 @@ export function register(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         project: z.string().describe("Project identifier"),
         chunk_id: z.string().describe("chunk_id from search_context results"),
+      },
+      outputSchema: {
+        chunk_id: z.string(),
+        source: z.string(),
+        symbol: z.string().optional(),
+        start_line: z.number().optional(),
+        end_line: z.number().optional(),
+        content: z.string(),
       },
       annotations: toolAnnotations("expand_context"),
     },

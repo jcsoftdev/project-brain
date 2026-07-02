@@ -4,6 +4,7 @@ import type { ToolDeps } from "../types.js";
 import { applyThreshold, mmr } from "../retrieval/rank.js";
 import { fillBudget } from "../retrieval/budget.js";
 import { SCORE_THRESHOLD, MMR_LAMBDA, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES, HARDNESS, toolAnnotations } from "../constants.js";
+import { jsonResult, type ToolResult } from "./format.js";
 
 interface SearchArgs {
   project: string;
@@ -11,11 +12,6 @@ interface SearchArgs {
   limit?: number;
   module?: string;
 }
-
-type ToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
 
 /** Handle search_context logic (exported for testing). */
 export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<ToolResult> {
@@ -25,18 +21,10 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
 
   const vectors = await emb.embed([query]);
   if (!vectors) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            error: "Embeddings unavailable — cannot perform semantic search. Start Ollama to enable.",
-            code: "EMBEDDINGS_UNAVAILABLE",
-          }),
-        },
-      ],
-      isError: true,
-    };
+    return jsonResult({
+      error: "Embeddings unavailable — cannot perform semantic search. Start Ollama to enable.",
+      code: "EMBEDDINGS_UNAVAILABLE",
+    }, true);
   }
 
   if (HARDNESS) {
@@ -47,9 +35,7 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
   const kept = applyThreshold(fused, SCORE_THRESHOLD);
   const diverse = mmr(kept, limit, MMR_LAMBDA);
   const results = fillBudget(diverse, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES);
-  return {
-    content: [{ type: "text", text: JSON.stringify({ results }) }],
-  };
+  return jsonResult({ results });
 }
 
 /** Register search_context tool with MCP server. */
@@ -63,6 +49,18 @@ export function register(server: McpServer, deps: ToolDeps): void {
         query: z.string().describe("Search query text"),
         limit: z.number().optional().describe("Max results (default 10)"),
         module: z.string().optional().describe("Filter by module name"),
+      },
+      outputSchema: {
+        results: z.array(z.object({
+          chunk_id: z.string(),
+          source: z.string(),
+          symbol: z.string().optional(),
+          signature: z.string().optional(),
+          snippet: z.string(),
+          score: z.number(),
+          start_line: z.number().optional(),
+          end_line: z.number().optional(),
+        }).passthrough()),
       },
       annotations: toolAnnotations("search_context"),
     },

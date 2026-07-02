@@ -2,11 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 import { toolAnnotations } from "../constants.js";
-
-type ToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
+import { jsonResult, type ToolResult } from "./format.js";
 
 /** Handle delete_knowledge logic (exported for testing). */
 export async function handleForget(
@@ -14,14 +10,7 @@ export async function handleForget(
   deps: ToolDeps
 ): Promise<ToolResult> {
   await deps.store.deleteBySource(args.project, args.source);
-  return {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify({ source: args.source, status: "deleted" }),
-      },
-    ],
-  };
+  return jsonResult({ source: args.source, status: "deleted" });
 }
 
 /** Register delete_knowledge tool with MCP server. */
@@ -34,6 +23,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
         project: z.string().describe("Project identifier"),
         source: z.string().describe("Source file or identifier to delete"),
       },
+      outputSchema: { source: z.string(), status: z.string() },
       annotations: toolAnnotations("delete_knowledge"),
     },
     async (args) => handleForget(args, deps)

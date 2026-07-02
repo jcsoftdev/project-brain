@@ -1,6 +1,19 @@
 import type { SymbolHit } from "../graph/store.js";
 
-export type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
+export type ToolResult = {
+  content: Array<{ type: "text"; text: string }>;
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+};
+
+/** Canonical tool result: stringified-JSON content (backward compat) + structuredContent (2026 spec). */
+export function jsonResult(payload: Record<string, unknown>, isError?: boolean): ToolResult {
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+    structuredContent: payload,
+    ...(isError ? { isError: true } : {}),
+  };
+}
 
 /** Format a SymbolHit as a single line: path:start_line  kind name — signature */
 export function formatHit(hit: SymbolHit): string {
@@ -14,8 +27,5 @@ export function formatHits(hits: SymbolHit[]): string {
 
 /** Guard: return an error result when graph store is unavailable. */
 export function graphUnavailable(): ToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify({ error: "graph store not available", code: "GRAPH_UNAVAILABLE" }) }],
-    isError: true,
-  };
+  return jsonResult({ error: "graph store not available", code: "GRAPH_UNAVAILABLE" }, true);
 }

@@ -2,11 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 import { toolAnnotations } from "../constants.js";
-
-type ToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
+import { jsonResult, type ToolResult } from "./format.js";
 
 /** Handle list_modules logic (exported for testing). */
 export async function handleListModules(
@@ -14,9 +10,7 @@ export async function handleListModules(
   deps: ToolDeps
 ): Promise<ToolResult> {
   const modules = await deps.store.listModules(args.project);
-  return {
-    content: [{ type: "text", text: JSON.stringify({ modules }) }],
-  };
+  return jsonResult({ modules });
 }
 
 /** Handle get_module logic (exported for testing). */
@@ -31,9 +25,7 @@ export async function handleGetModule(
     source: c.source,
     module: c.module,
   }));
-  return {
-    content: [{ type: "text", text: JSON.stringify({ chunks: result }) }],
-  };
+  return jsonResult({ chunks: result });
 }
 
 /** Register list_modules and get_module tools with MCP server. */
@@ -45,6 +37,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         project: z.string().describe("Project identifier"),
       },
+      outputSchema: { modules: z.array(z.string()) },
       annotations: toolAnnotations("list_modules"),
     },
     async (args) => handleListModules(args, deps)
@@ -57,6 +50,14 @@ export function register(server: McpServer, deps: ToolDeps): void {
       inputSchema: {
         project: z.string().describe("Project identifier"),
         module: z.string().describe("Module name"),
+      },
+      outputSchema: {
+        chunks: z.array(z.object({
+          id: z.string(),
+          content: z.string(),
+          source: z.string(),
+          module: z.string(),
+        })),
       },
       annotations: toolAnnotations("get_module"),
     },
