@@ -73,7 +73,13 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned (not `latest`) to match the Bun version the multi-entrypoint
+          # `--compile` worker-bundling fix (see src/parser/pool.ts) was
+          # actually verified against — this project's bun.lock also pins
+          # bun-types/@types/bun to 1.3.14. `--compile`'s entrypoint-flattening
+          # behavior this fix relies on is an undocumented implementation
+          # detail, so silent version drift here is a real regression risk.
+          bun-version: "1.3.14"
 
       - uses: actions/setup-node@v5
         with:
