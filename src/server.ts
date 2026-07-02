@@ -17,6 +17,7 @@ import { register as registerTracePath } from "./tools/trace-path.js";
 import { register as registerProjects } from "./tools/projects.js";
 import { register as registerAdr } from "./tools/adr.js";
 import { register as registerArchitecture } from "./tools/architecture.js";
+import { register as registerSyncProject } from "./tools/sync-project.js";
 import { openGraphDb } from "./graph/db.js";
 import { GraphStore } from "./graph/store.js";
 import { join } from "node:path";
@@ -102,6 +103,7 @@ export async function createServer(options: ServerOptions = {}) {
   registerProjects(server, deps);
   registerAdr(server, deps);
   registerArchitecture(server, deps);
+  registerSyncProject(server, deps);
 
   const toolNames = [
     "search_context",
@@ -121,6 +123,7 @@ export async function createServer(options: ServerOptions = {}) {
     "delete_project",
     "manage_adr",
     "get_architecture",
+    "sync_project",
   ];
 
   return { server, store, embeddings, graph, toolNames, instructions: SERVER_INSTRUCTIONS };

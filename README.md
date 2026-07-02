@@ -113,6 +113,7 @@ Once connected over MCP, AI assistants get these tools. The server also injects 
 | `delete_project` | Delete an entire indexed project's vector index + metadata (never touches its `.project-brain/` directory). |
 | `manage_adr` | Create or list Architecture Decision Records. Append-only: supersede by creating a new ADR with `supersedes:<slug>`. |
 | `get_architecture` | One-call project summary: detected tech stack, indexed modules, chunk count, and symbol count. |
+| `sync_project` | Re-index changed files now (incremental, hash-gated). Streams progress via MCP notifications when the client supplies a `progressToken`. Use when results look stale. |
 
 Routing: exact symbol → `find_symbol`; who-calls → `find_callers`; what-it-calls → `find_callees`; "what breaks if I change X" → `impact`; "how does A end up calling B" → `trace_path`; fuzzy/conceptual → `search_context` then `expand_context`; exact string/identifier you can type verbatim → `search_code`. The canonical tool list lives in `src/constants.ts` (`TOOL_CATALOG`) and is rendered into both the MCP server instructions and the per-project `CLAUDE.md`.
 
