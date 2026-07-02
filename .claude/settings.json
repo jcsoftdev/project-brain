@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "project-brain search --stdin",
+            "timeout": 8,
+            "statusMessage": "project-brain: injecting context"
+          }
+        ]
+      }
+    ]
+  }
+}

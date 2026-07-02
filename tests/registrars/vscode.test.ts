@@ -45,6 +45,19 @@ describe("VSCodeRegistrar", () => {
     );
   });
 
+  // VS Code MCP schema uses `type: "stdio"`, not `transport: "stdio"`
+  // https://code.visualstudio.com/docs/agents/reference/mcp-configuration
+  it("register entry has VS Code-specific type field and no transport field", async () => {
+    await registrar.register("/usr/local/bin/project-brain");
+
+    const configPath = join(tempDir, "mcp.json");
+    const config = JSON.parse(await Bun.file(configPath).text());
+    const entry = config.servers["project-brain"];
+
+    expect(entry.type).toBe("stdio");
+    expect(entry.transport).toBeUndefined();
+  });
+
   it("register preserves pre-existing unrelated mcp.json keys", async () => {
     const configPath = join(tempDir, "mcp.json");
     await Bun.write(

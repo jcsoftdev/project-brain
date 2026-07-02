@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { AIToolRegistrar } from "./types.js";
-import { dirExists, upsertJsonConfig, standardServerEntry } from "./json-config.js";
+import { dirExists, upsertJsonConfig } from "./json-config.js";
 
 /**
  * Doc-verified 2026-07 against code.visualstudio.com/docs/agents/reference/mcp-configuration:
@@ -36,7 +36,11 @@ export class VSCodeRegistrar implements AIToolRegistrar {
   async register(serverPath: string): Promise<void> {
     await upsertJsonConfig(join(this.baseDir, "mcp.json"), (config) => {
       config.servers ??= {};
-      config.servers["project-brain"] = standardServerEntry(serverPath);
+      config.servers["project-brain"] = {
+        type: "stdio",
+        command: "bun",
+        args: [serverPath],
+      };
     });
   }
 
