@@ -18,3 +18,4 @@ ARCHIVE-REPORT-CONTENT.md
 templates/
 --skip-index/
 .atl/
+.claude/
