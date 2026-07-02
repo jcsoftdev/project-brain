@@ -8,6 +8,7 @@ import { mapLimit } from "../indexer/concurrency.js";
 import type { EmbeddingClient, VectorStore, Chunk } from "../types.js";
 import { WasmParser } from "../parser/wasm.js";
 import { extract } from "../parser/extract.js";
+import { ParserPool, POOL_MIN_FILES } from "../parser/pool.js";
 import { GraphStore } from "../graph/store.js";
 import { openGraphDb } from "../graph/db.js";
 
@@ -174,6 +175,12 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   } catch {
     parser = null;
   }
+  // Worker pool for parallel structural parsing on large syncs. Declared here
+  // (outside the `try` below) so the sibling `finally` block can dispose it.
+  // Assigned inside `try` once `filePaths` — and thus the candidate count — is
+  // known. Stays null for small syncs, which fall back to the sequential
+  // in-process `parser` above.
+  let pool: ParserPool | null = null;
 
   try {
     const warmedExts = new Set<string>();
@@ -195,6 +202,16 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       filePaths = await listAllFiles(root, root, gitignorePatterns);
     }
     onProgress?.({ phase: "scanning", current: filePaths.length, total: filePaths.length });
+
+    // Only worth spawning worker threads when there are enough files that
+    // parallel parsing outweighs thread-startup overhead. Below the
+    // threshold, `pool` stays null and Phase A falls back to the existing
+    // sequential in-process `parser` (constructed above, unconditionally).
+    // Pool size must be a positive integer — Math.max(1, ...) guards against a
+    // 1-2 core host producing 0/negative (which would hang the pool forever).
+    pool = filePaths.length >= POOL_MIN_FILES ? new ParserPool(
+      Math.max(1, (await import("node:os")).cpus().length - 2)
+    ) : null;
 
     // 3. Ensure table exists (pass model+dim so metadata is stored correctly)
     const tableMeta = embeddings.model
@@ -269,17 +286,26 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           // Any throw from warm/parse/extract is logged and structural work for
           // this file is skipped; embedding still proceeds below.
           try {
-            if (parser && !warmedExts.has(ext)) {
-              await parser.warm(ext);
-              warmedExts.add(ext);
-            }
-            const pt = parser?.parseFile(ext, content) ?? null;
-            if (pt) {
-              try {
-                const syms = extract(pt.tree, pt.langId, content);
-                graph.replaceFile(relPath, pt.langId, hash, mtime, syms);
-              } finally {
-                pt.tree.delete();
+            if (pool) {
+              const result = await pool.parseOne({ path: relPath, content, ext });
+              if (result.error) {
+                console.warn(`[sync] structural extraction skipped for ${relPath}:`, result.error);
+              } else if (result.langId) {
+                graph.replaceFile(relPath, result.langId, hash, mtime, result.symbols);
+              }
+            } else {
+              if (parser && !warmedExts.has(ext)) {
+                await parser.warm(ext);
+                warmedExts.add(ext);
+              }
+              const pt = parser?.parseFile(ext, content) ?? null;
+              if (pt) {
+                try {
+                  const syms = extract(pt.tree, pt.langId, content);
+                  graph.replaceFile(relPath, pt.langId, hash, mtime, syms);
+                } finally {
+                  pt.tree.delete();
+                }
               }
             }
           } catch (err) {
@@ -501,10 +527,12 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       error,
     };
   } finally {
-    // 8. Dispose structural graph resources. The WASM parser is always
-    // ephemeral. The graph is closed ONLY when runSync opened it — an injected
-    // graph belongs to the caller (the MCP server) and must stay open.
+    // 8. Dispose structural graph resources. The WASM parser and worker pool
+    // are always ephemeral. The graph is closed ONLY when runSync opened it —
+    // an injected graph belongs to the caller (the MCP server) and must stay
+    // open.
     if (parser) { try { parser.dispose(); } catch {} }
+    if (pool) { try { pool.dispose(); } catch {} }
     if (ownsGraph) { try { graph.close(); } catch {} }
   }
 }

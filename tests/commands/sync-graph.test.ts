@@ -311,6 +311,40 @@ test("injected graph is used and NOT closed by runSync (caller owns lifecycle)",
   graph.close(); // caller closes
 });
 
+test("large syncs route structural extraction through a ParserPool and produce the same graph as sequential parsing", async () => {
+  const { POOL_MIN_FILES } = await import("../../src/parser/pool.js");
+
+  // One more file than the pool threshold so the pool path is exercised.
+  const fileCount = POOL_MIN_FILES + 1;
+  for (let i = 0; i < fileCount; i++) {
+    writeFileSync(
+      join(tempDir, `mod${i}.ts`),
+      `export function fn${i}() { return ${i}; }`
+    );
+  }
+
+  const { runSync } = await import("../../src/commands/sync.js");
+  const { openGraphDb } = await import("../../src/graph/db.js");
+  const { GraphStore } = await import("../../src/graph/store.js");
+
+  const graph = new GraphStore(openGraphDb(":memory:"));
+  const result = await runSync({
+    root: tempDir,
+    projectId: "test-pool",
+    store: makeMemoryStore(),
+    embeddings: noopEmbeddings,
+    graph,
+  });
+
+  expect(result.ingested).toBe(fileCount);
+  // Every file's symbol was extracted via the pool path — graph has one
+  // function symbol per file.
+  for (let i = 0; i < fileCount; i++) {
+    expect(graph.findSymbol(`fn${i}`).length).toBe(1);
+  }
+  graph.close();
+});
+
 test("throw during run → parser.dispose and graphDb still cleaned up", async () => {
   // Injection strategy: store.batchReplace throws — this propagates out of runSync
   // reliably because it's awaited inside the try block after embed phase.
