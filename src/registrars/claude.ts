@@ -11,10 +11,12 @@ export class ClaudeRegistrar implements AIToolRegistrar {
   name = "Claude Code";
   private baseDir: string;
   private cliRunner: ClaudeCliRunner;
+  private homeDir: string;
 
-  constructor(baseDir?: string, cliRunner?: ClaudeCliRunner) {
+  constructor(baseDir?: string, cliRunner?: ClaudeCliRunner, homeDir?: string) {
     this.baseDir = baseDir ?? join(homedir(), ".claude");
     this.cliRunner = cliRunner ?? defaultCliRunner;
+    this.homeDir = homeDir ?? homedir();
   }
 
   async isInstalled(): Promise<boolean> {
@@ -35,7 +37,12 @@ export class ClaudeRegistrar implements AIToolRegistrar {
   }
 
   private async fallbackJsonWrite(serverPath: string): Promise<void> {
-    const configPath = join(this.baseDir, "claude.json");
+    // Claude Code's real user-scope MCP config is the dotfile at the HOME
+    // ROOT (~/.claude.json) — NOT under baseDir (~/.claude/), which only
+    // holds settings.json/CLAUDE.md/projects/. `claude mcp add --scope user`
+    // writes to ~/.claude.json, so the fallback must match or it silently
+    // no-ops (Claude Code never reads it).
+    const configPath = join(this.homeDir, ".claude.json");
     await upsertJsonConfig(configPath, (config) => {
       config.mcpServers ??= {};
       config.mcpServers["project-brain"] = standardServerEntry(serverPath);

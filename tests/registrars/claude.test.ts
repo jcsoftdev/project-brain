@@ -26,13 +26,18 @@ describe("ClaudeRegistrar", () => {
     expect(typeof result).toBe("boolean");
   });
 
-  it("register creates claude.json with MCP entry on CLI failure", async () => {
+  it("register creates .claude.json (home root) with MCP entry on CLI failure", async () => {
     // Inject a CLI runner that always fails, forcing the JSON fallback
     // deterministically without spawning the real claude binary.
-    registrar = new ClaudeRegistrar(tempDir, async () => false);
+    // The fallback must land at the HOME ROOT dotfile (~/.claude.json), the
+    // file Claude Code's `mcp add --scope user` actually reads — NOT under
+    // baseDir (~/.claude/), which Claude Code never reads for MCP config.
+    // homeDir is injected via the 3rd constructor param to keep this
+    // deterministic/offline.
+    registrar = new ClaudeRegistrar(tempDir, async () => false, tempDir);
     await registrar.register("/usr/local/bin/project-brain");
 
-    const configPath = join(tempDir, "claude.json");
+    const configPath = join(tempDir, ".claude.json");
     const config = JSON.parse(await Bun.file(configPath).text());
 
     expect(config.mcpServers).toBeDefined();
@@ -45,8 +50,8 @@ describe("ClaudeRegistrar", () => {
 
   it("register preserves existing JSON keys in fallback", async () => {
     // Force the fallback path so the assertion is deterministic.
-    registrar = new ClaudeRegistrar(tempDir, async () => false);
-    const configPath = join(tempDir, "claude.json");
+    registrar = new ClaudeRegistrar(tempDir, async () => false, tempDir);
+    const configPath = join(tempDir, ".claude.json");
     await Bun.write(
       configPath,
       JSON.stringify({ mcpServers: { other: { command: "other" } } })
