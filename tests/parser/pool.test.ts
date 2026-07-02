@@ -81,3 +81,114 @@ test("ParserPool never spawns more workers than its configured size", async () =
     pool.dispose();
   }
 });
+
+/**
+ * Regression coverage for commit bd0e56d: `worker.onerror` (Worker fails to
+ * load/instantiate) is a DIFFERENT failure path than `worker.onmessage`
+ * receiving a `ParseFailure` (worker loaded fine, a parse threw — see
+ * worker.test.ts). Before bd0e56d, a worker that errored out never posted a
+ * response for its pending job, so that job's promise hung forever — the
+ * catastrophic hang this fix prevents.
+ *
+ * This test exercises the pool's OWN `worker.onerror` closure and the
+ * dead-pool `drainQueue` guard, using ParserPool's real public API and real
+ * internal bookkeeping (`pending`/`queue`/`workers`) — not a re-implementation
+ * of that logic in the test. The trigger is synthetic: rather than waiting on
+ * a genuine Bun Worker load failure (slow, and not something this project's
+ * real worker.ts can be made to do without touching forbidden files), we
+ * dispatch a real `ErrorEvent("error", ...)` directly at the pool's real
+ * worker instance. `Worker` is an `EventTarget`, so this invokes the exact
+ * `worker.onerror = (event) => { ... }` handler pool.ts's constructor
+ * assigned — same closure, same code path a genuine load failure would hit.
+ *
+ * The worker's `onmessage` is also overridden to a no-op BEFORE queuing any
+ * jobs. This does not touch pool.ts's error-handling logic (the thing under
+ * test) — it silences the unrelated success-delivery path so the worker
+ * behaves like the exact precondition the fix defends against: "a worker
+ * that will never post a response for its pending job" (pool.ts's own
+ * comment on `onerror`, copied above). Without this, the real worker.ts is
+ * healthy and would race to answer job1 for real (WASM init is fast), making
+ * the test's pass/fail depend on timing instead of on the onerror wiring.
+ *
+ * What this DOES prove: if the runtime ever fires `error` on a pool worker
+ * that isn't going to answer its pending job, ParserPool settles both the
+ * job already assigned to that worker (via the onerror handler's `pending`
+ * sweep) and any still-queued job (via the dead-pool `drainQueue` guard)
+ * instead of leaving their promises hanging forever. A refactor of the
+ * pending/workers bookkeeping that reintroduced the hang would fail this
+ * test with a real timeout, not just a wrong-value assertion.
+ *
+ * What this does NOT prove: that Bun's `Worker` constructor actually emits
+ * an `error` event for a genuine module-load failure in the first place —
+ * that's a separate, underlying-runtime guarantee (see the supplementary
+ * test below).
+ */
+test("ParserPool.worker.onerror settles the in-flight job AND drains queued jobs as errors instead of hanging", async () => {
+  const pool = new ParserPool(1);
+  try {
+    const worker = (pool as any).workers[0] as Worker;
+    // See the doc comment above: block real response delivery so the worker
+    // behaves like one that will never answer — the exact precondition
+    // worker.onerror exists to handle — making the test deterministic.
+    worker.onmessage = () => {};
+
+    // job1 gets assigned to the pool's only worker synchronously inside
+    // parseOne -> drainQueue. job2 has no idle worker left, so it sits in
+    // the internal queue.
+    const job1 = pool.parseOne({ path: "a.ts", content: "export function a() {}", ext: ".ts" });
+    const job2 = pool.parseOne({ path: "b.ts", content: "export function b() {}", ext: ".ts" });
+
+    expect((pool as any).pending.size).toBe(1);
+    expect((pool as any).queue.length).toBe(1);
+
+    worker.dispatchEvent(
+      new ErrorEvent("error", {
+        message: "synthetic worker load failure",
+        error: new Error("synthetic worker load failure"),
+      }),
+    );
+
+    const timeout = (label: string) =>
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`${label} did not settle — pool hung`)), 1000),
+      );
+
+    const [result1, result2] = await Promise.all([
+      Promise.race([job1, timeout("job1 (in-flight when worker errored)")]),
+      Promise.race([job2, timeout("job2 (still queued when worker errored)")]),
+    ]);
+
+    // job1 was resolved by the onerror handler's `pending` sweep.
+    expect(result1.error).toBeDefined();
+    expect(result1.error).toContain("worker error");
+
+    // job2 was resolved by the dead-pool `drainQueue` guard, since the only
+    // worker was removed from `this.workers` before drainQueue ran again.
+    expect(result2.error).toBeDefined();
+    expect(result2.error).toContain("worker pool has no live workers");
+
+    expect((pool as any).workers.length).toBe(0);
+  } finally {
+    pool.dispose();
+  }
+});
+
+/**
+ * Supplementary test — NOT a substitute for the test above. This only
+ * proves the underlying Bun mechanism pool.ts depends on (a Worker
+ * constructed against a script that fails to load fires `onerror`), by
+ * constructing a raw `Worker` directly and bypassing `ParserPool` entirely.
+ * It says nothing about ParserPool's own bookkeeping.
+ */
+test("(supplementary, underlying-mechanism only) a genuinely unloadable Worker script fires onerror", async () => {
+  const worker = new Worker(new URL("./does-not-exist-9f3c2a.js", import.meta.url).href);
+  try {
+    const errored = await new Promise<boolean>((resolve) => {
+      worker.onerror = () => resolve(true);
+      setTimeout(() => resolve(false), 2000);
+    });
+    expect(errored).toBe(true);
+  } finally {
+    worker.terminate();
+  }
+});
