@@ -53,6 +53,36 @@ describe("gitignore filter", () => {
       expect(shouldIgnore("debug.log", patterns)).toBe(true);
       expect(shouldIgnore("important.log", patterns)).toBe(false);
     });
+
+    it("does not let a single '*' cross a '/' boundary", () => {
+      const patterns = ["logs/*.txt"];
+      expect(shouldIgnore("logs/report.txt", patterns)).toBe(true);
+      expect(shouldIgnore("logs/keep/report.txt", patterns)).toBe(false);
+    });
+
+    it("matches globstar '**' across directories", () => {
+      const patterns = ["**/*.log"];
+      expect(shouldIgnore("a/b/c.log", patterns)).toBe(true);
+    });
+
+    it("matches trailing globstar 'dir/**' across nested directories", () => {
+      const patterns = ["build/**"];
+      expect(shouldIgnore("build/x/y", patterns)).toBe(true);
+      expect(shouldIgnore("build/x", patterns)).toBe(true);
+    });
+
+    it("still matches a bare '*.md' pattern against the basename", () => {
+      const patterns = ["*.md"];
+      expect(shouldIgnore("README.md", patterns)).toBe(true);
+      expect(shouldIgnore("docs/CHANGELOG.md", patterns)).toBe(true);
+    });
+
+    it("matches '?' as a single non-slash character", () => {
+      const patterns = ["file?.txt"];
+      expect(shouldIgnore("file1.txt", patterns)).toBe(true);
+      expect(shouldIgnore("file12.txt", patterns)).toBe(false);
+      expect(shouldIgnore("file/.txt", patterns)).toBe(false);
+    });
   });
 
   describe("loadPatterns", () => {

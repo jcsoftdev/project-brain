@@ -101,15 +101,9 @@ function matchPattern(filePath: string, pattern: string): boolean {
     return filePath.includes(dir + "/") || filePath.startsWith(dir + "/");
   }
 
-  // Glob pattern with *
-  if (pattern.includes("*")) {
-    const regex = new RegExp(
-      "^" +
-        pattern
-          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-          .replace(/\*/g, ".*") +
-        "$"
-    );
+  // Glob pattern with * or ?
+  if (pattern.includes("*") || pattern.includes("?")) {
+    const regex = new RegExp("^" + globToRegexSource(pattern) + "$");
     // Match against filename (basename) for simple globs
     const basename = filePath.split("/").pop() ?? filePath;
     return regex.test(basename) || regex.test(filePath);
@@ -117,4 +111,36 @@ function matchPattern(filePath: string, pattern: string): boolean {
 
   // Exact match or prefix match
   return filePath === pattern || filePath.startsWith(pattern + "/");
+}
+
+/**
+ * Translate a gitignore-style glob pattern into a regex source string,
+ * in a single left-to-right pass so `**` cannot be corrupted by a
+ * subsequent naive replacement of `*`.
+ *
+ * - `**` (globstar) matches across directory boundaries -> `.*`
+ * - `*` matches anything except `/` -> `[^/]*`
+ * - `?` matches a single character except `/` -> `[^/]`
+ * - all other regex-special characters are escaped
+ */
+function globToRegexSource(pattern: string): string {
+  let out = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i];
+    if (char === "*") {
+      if (pattern[i + 1] === "*") {
+        out += ".*";
+        i++; // consume the second '*' of the globstar
+      } else {
+        out += "[^/]*";
+      }
+    } else if (char === "?") {
+      out += "[^/]";
+    } else if (/[.+^${}()|[\]\\]/.test(char)) {
+      out += "\\" + char;
+    } else {
+      out += char;
+    }
+  }
+  return out;
 }
