@@ -9,6 +9,12 @@ export async function handleForget(
   args: { project: string; source: string },
   deps: ToolDeps
 ): Promise<ToolResult> {
+  if (deps.confirmDestructive) {
+    const ok = await deps.confirmDestructive(
+      `Delete all indexed chunks from source "${args.source}" in project "${args.project}"?`
+    );
+    if (!ok) return jsonResult({ source: args.source, status: "cancelled" });
+  }
   await deps.store.deleteBySource(args.project, args.source);
   return jsonResult({ source: args.source, status: "deleted" });
 }

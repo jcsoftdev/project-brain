@@ -87,4 +87,10 @@ export interface ToolDeps {
   embeddingsFor?: (project: string) => Promise<EmbeddingClient>;
   /** Structural graph store for exact symbol lookups (find_symbol and related tools). */
   graph?: GraphStore;
+  /**
+   * Capability-gated destructive-action confirmation. Wired by server.ts to
+   * MCP elicitation when the client declares the capability; absent otherwise
+   * (and in older/injected test deps) — absent means proceed without asking.
+   */
+  confirmDestructive?: (message: string) => Promise<boolean>;
 }

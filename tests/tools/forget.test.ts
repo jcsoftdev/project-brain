@@ -63,4 +63,35 @@ describe("delete_knowledge tool", () => {
     );
     expect(result.isError).toBeFalsy();
   });
+
+  it("asks confirmDestructive when present and aborts on false", async () => {
+    let deleted = false, asked = "";
+    const deps = {
+      store: { deleteBySource: async () => { deleted = true; } },
+      confirmDestructive: async (msg: string) => { asked = msg; return false; },
+    } as any;
+    const r = await handleForget({ project: "p", source: "notes.md" }, deps);
+    expect(asked).toContain("notes.md");
+    expect(deleted).toBe(false);
+    expect((r.structuredContent as any).status).toBe("cancelled");
+    expect(r.isError).toBeFalsy(); // decline is not an error
+  });
+
+  it("proceeds when confirmDestructive returns true", async () => {
+    let deleted = false;
+    const deps = {
+      store: { deleteBySource: async () => { deleted = true; } },
+      confirmDestructive: async () => true,
+    } as any;
+    const r = await handleForget({ project: "p", source: "s" }, deps);
+    expect(deleted).toBe(true);
+    expect((r.structuredContent as any).status).toBe("deleted");
+  });
+
+  it("proceeds without asking when confirmDestructive is absent (no capability)", async () => {
+    let deleted = false;
+    const deps = { store: { deleteBySource: async () => { deleted = true; } } } as any;
+    await handleForget({ project: "p", source: "s" }, deps);
+    expect(deleted).toBe(true);
+  });
 });

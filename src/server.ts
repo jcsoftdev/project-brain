@@ -63,7 +63,24 @@ export async function createServer(options: ServerOptions = {}) {
   const graphPath = join(graphDir, GRAPH_DB_FILE);
   const graph = new GraphStore(openGraphDb(graphPath));
 
-  const deps: ToolDeps = { store, embeddings, embeddingsFor, graph };
+  // Capability-gated destructive confirmation via MCP elicitation (2026 spec).
+  // getClientCapabilities() is only populated after initialization, so the
+  // gate is evaluated per-call, not at startup.
+  const confirmDestructive = async (message: string): Promise<boolean> => {
+    const caps = server.server.getClientCapabilities();
+    if (!caps?.elicitation) return true; // no capability → today's behavior
+    const res = await server.server.elicitInput({
+      message,
+      requestedSchema: {
+        type: "object",
+        properties: { confirm: { type: "boolean", title: "Confirm deletion" } },
+        required: ["confirm"],
+      },
+    });
+    return res.action === "accept" && res.content?.confirm === true;
+  };
+
+  const deps: ToolDeps = { store, embeddings, embeddingsFor, graph, confirmDestructive };
 
   // Register all tools
   registerSearch(server, deps);
