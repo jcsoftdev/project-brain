@@ -3,6 +3,7 @@
  * All tests use injected deps — no real network calls.
  */
 import { describe, it, expect } from "bun:test";
+import { isModelInstalled } from "../../src/embeddings/factory.js";
 
 // Helper: build a fake embed fn returning vectors of given dimension
 function makeEmbed(dim: number) {
@@ -216,6 +217,22 @@ describe("ensureEmbeddingModel", () => {
     });
 
     expect(result).toBe(false);
+  });
+});
+
+describe("isModelInstalled — tag-boundary matching", () => {
+  it("does NOT match a substring-prefix installed model without a tag boundary (the bug case)", () => {
+    // "nomic-embed-text-v2:latest" must NOT satisfy a query for "nomic-embed-text" —
+    // it's a different model, only a substring prefix.
+    expect(isModelInstalled(["nomic-embed-text-v2:latest"], "nomic-embed-text")).toBe(false);
+  });
+
+  it("matches when installed model has the query as its tag-boundary prefix", () => {
+    expect(isModelInstalled(["nomic-embed-text:latest"], "nomic-embed-text")).toBe(true);
+  });
+
+  it("matches an exact installed name with no tag suffix needed", () => {
+    expect(isModelInstalled(["qwen3-embedding:0.6b"], "qwen3-embedding:0.6b")).toBe(true);
   });
 });
 

@@ -172,8 +172,20 @@ export async function createEmbeddingClient(
 // ── Default injectable implementations ───────────────────────────────────
 
 /**
+ * Check if a query model is satisfied by any installed model name, respecting
+ * Ollama's tag-boundary semantics: an installed name matches only if it equals
+ * the query exactly, or starts with "<query>:" (a tag boundary) — never an
+ * arbitrary substring prefix. This prevents e.g. "nomic-embed-text-v2:latest"
+ * from falsely satisfying a query for "nomic-embed-text".
+ */
+export function isModelInstalled(installedNames: string[], query: string): boolean {
+  return installedNames.some((name) => name === query || name.startsWith(`${query}:`));
+}
+
+/**
  * Default availability checker: queries Ollama tags endpoint.
- * Matches on name prefix — e.g. "nomic-embed-text:latest" matches "nomic-embed-text".
+ * Matches at an Ollama tag boundary — e.g. "nomic-embed-text:latest" matches
+ * "nomic-embed-text", but "nomic-embed-text-v2:latest" does not.
  */
 function makeDefaultAvailabilityChecker(host: string): IsAvailableFn {
   return async (model: string): Promise<boolean> => {
@@ -184,7 +196,7 @@ function makeDefaultAvailabilityChecker(host: string): IsAvailableFn {
       if (!response.ok) return false;
       const data = (await response.json()) as { models?: Array<{ name: string }> };
       const models = data.models ?? [];
-      return models.some((m) => m.name.startsWith(model));
+      return isModelInstalled(models.map((m) => m.name), model);
     } catch {
       return false;
     }
