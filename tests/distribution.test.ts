@@ -16,7 +16,11 @@ describe("package.json distribution metadata (T-09)", () => {
 
   it("scripts.build equals the compile command (DIST-2)", async () => {
     const pkg = await loadPkg();
-    expect(pkg.scripts?.build).toContain("bun build ./src/cli.ts --compile");
+    // worker.ts MUST be a second entrypoint so `--compile` bundles the
+    // worker-pool parser's full graph + embedded WASM into the binary
+    // (otherwise the pool path silently yields zero symbols). See
+    // src/parser/pool.ts.
+    expect(pkg.scripts?.build).toContain("bun build ./src/cli.ts ./src/parser/worker.ts --compile");
   });
 
   it("optionalDependencies includes platform packages (DIST-3)", async () => {

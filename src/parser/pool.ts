@@ -6,20 +6,39 @@
 // after — never resident in the long-lived `serve` process.
 import type { SymbolInput } from "../graph/store.js";
 import type { ParseRequest, ParseResponse } from "./worker.js";
-// Static asset import (Bun's `with { type: "file" }` loader). This resolves
-// to an ABSOLUTE path in every context — the real on-disk path under
-// `bun test`/`bun run`, and the embedded `/$bunfs/...` virtual path inside a
-// `bun build --compile` standalone binary — with no runtime "am I compiled"
-// branching needed. This is deliberately NOT a bare literal string
-// (`new Worker("./worker.ts")`) or a `new URL("./worker.ts",
-// import.meta.url)` construction: both were empirically verified (against
-// this project's actual `bun test` runner and actual
-// `bun build ./src/cli.ts --compile` output) to resolve relative to the
-// process's CURRENT WORKING DIRECTORY, not relative to this file — so both
-// break the moment the process is invoked from anywhere other than
-// `src/parser/` (which is always, in every real invocation of this
-// codebase). Do not replace this import.
-import workerPath from "./worker.ts" with { type: "file" };
+
+// Worker script URL, resolved relative to THIS module (import.meta.url), so it
+// is CWD-independent in every context. It deliberately does NOT use a
+// `with { type: "file" }` import: that embeds only the RAW worker.ts source
+// (untranspiled, and WITHOUT its transitive graph — wasm.ts, extract.ts,
+// languages.ts — nor the nested `{ type: "file" }` grammar/core WASM assets
+// those modules pull in), so in a `bun build --compile` binary the spawned
+// worker fails to resolve its own imports and structural extraction silently
+// yields zero symbols.
+//
+// The working combination (empirically verified against Bun 1.3.14, this
+// project's `bun test` runner, and actual `bun build --compile` output) is:
+//
+//   1. Compile the worker as a SECOND entrypoint so Bun bundles its FULL
+//      graph + nested WASM assets into the one binary:
+//        bun build ./src/cli.ts ./src/parser/worker.ts --compile --outfile ...
+//      (see package.json `build` and .github/workflows/release.yml).
+//   2. Reference the bundled worker by the path it lands at.
+//
+// Path differs by context because multi-entrypoint `--compile` flattens
+// entrypoints by their COMMON BASE (here `src/`):
+//   - Dev (`bun test`/`bun run`): worker.ts is a sibling of this file, and
+//     import.meta.url is this module's real path → "./worker.js" (Bun resolves
+//     the .js specifier to worker.ts).
+//   - Compiled binary: worker.ts lands at `<bunfs>/parser/worker.js` while a
+//     bundled pool.ts's import.meta.url is the binary root
+//     (`file:///$bunfs/root/<binary>`) → "./parser/worker.js".
+const IS_COMPILED =
+  import.meta.url.includes("/$bunfs/") || import.meta.url.includes("/~BUN/");
+const workerPath = new URL(
+  IS_COMPILED ? "./parser/worker.js" : "./worker.js",
+  import.meta.url,
+).href;
 
 export interface ParseJob {
   path: string;

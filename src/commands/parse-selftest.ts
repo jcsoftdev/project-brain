@@ -13,9 +13,17 @@
  *   - On any failure (parser init, grammar load, zero symbols, read error):
  *     prints a diagnostic to stderr and exits 1.
  *
+ * With `--pool`, it exercises the WORKER-POOL path (src/parser/pool.ts)
+ * instead of the in-process sequential parser: it parses POOL_MIN_FILES+
+ * synthetic sources through a real ParserPool. This proves the worker script
+ * — bundled as a second `--compile` entrypoint with its full graph + embedded
+ * WASM assets — actually loads and extracts symbols inside the shipped binary
+ * (the single-file path above only covers the sequential parser).
+ *
  * This is intentionally minimal — no embeddings, no store, no graph DB.
  */
 import { extract } from "../parser/extract.js";
+import { ParserPool, POOL_MIN_FILES } from "../parser/pool.js";
 
 /** Run the parse self-test against a single source file. Returns symbol count. */
 export async function runParseSelfTest(filePath: string): Promise<number> {
@@ -40,7 +48,50 @@ export async function runParseSelfTest(filePath: string): Promise<number> {
   }
 }
 
+/**
+ * Run the parse self-test through the worker pool. Generates POOL_MIN_FILES + 2
+ * synthetic TS sources (each with one known symbol) and parses them via a real
+ * ParserPool, proving the compiled binary's embedded worker entrypoint loads
+ * and extracts symbols. Returns the total symbol count across all files.
+ */
+export async function runPoolSelfTest(): Promise<number> {
+  const count = POOL_MIN_FILES + 2;
+  const jobs = Array.from({ length: count }, (_, i) => ({
+    path: `selftest-${i}.ts`,
+    content: `export function selftest${i}(a: number, b: number): number { return a + b; }\n`,
+    ext: ".ts",
+  }));
+
+  const pool = new ParserPool(2);
+  try {
+    const results = await pool.parseMany(jobs);
+    let total = 0;
+    for (const r of results) {
+      if (r.error) throw new Error(`worker failed for ${r.path}: ${r.error}`);
+      total += r.symbols.length;
+    }
+    return total;
+  } finally {
+    pool.dispose();
+  }
+}
+
 export async function execute(args: string[]): Promise<void> {
+  if (args.includes("--pool")) {
+    try {
+      const count = await runPoolSelfTest();
+      if (count < 1) {
+        console.error("STRUCT_FAIL 0 — worker pool produced no symbols");
+        process.exit(1);
+      }
+      console.log(`STRUCT_OK ${count}`);
+      process.exit(0);
+    } catch (err) {
+      console.error(`STRUCT_FAIL — ${err instanceof Error ? err.message : err}`);
+      process.exit(1);
+    }
+  }
+
   const filePath = args.find((a) => !a.startsWith("--"));
   if (!filePath) {
     console.error("__parse-selftest: missing <file> argument");

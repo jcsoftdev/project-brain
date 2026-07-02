@@ -32,7 +32,7 @@
     "test": "bun test",
     "setup": "bun run src/cli.ts setup",
     "init": "bun run src/cli.ts init",
-    "build": "bun build ./src/cli.ts --compile --outfile dist/project-brain"
+    "build": "bun build ./src/cli.ts ./src/parser/worker.ts --compile --outfile dist/project-brain"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.30.0",
