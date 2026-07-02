@@ -82,8 +82,13 @@ Once connected over MCP, AI assistants get these tools. The server also injects 
 | Tool | What it does |
 |---|---|
 | `search_context` | Semantic/conceptual lookup. Returns ranked snippets, each with a `chunk_id`. **Primary** for fuzzy/cross-file questions ("how does X work"). |
-| `search_code` | Exact/keyword full-text search (BM25) over indexed code — identifiers, error strings, exact phrases. No embeddings needed, works offline. Not regex. |
 | `expand_context` | Full body of a `chunk_id` from `search_context` — read this instead of re-reading whole files. |
+
+### Lexical (keyword — no embeddings needed)
+
+| Tool | What it does |
+|---|---|
+| `search_code` | Exact/keyword full-text search (BM25) over indexed code — identifiers, error strings, exact phrases. Works offline without Ollama. Not regex. |
 
 ### Structural (AST graph — exact, no embeddings needed)
 
@@ -121,7 +126,7 @@ You talk to your **AI assistant** in natural language; it picks the right tool. 
 
 Tips to maximize value:
 
-- **Structural tools work without Ollama.** `find_symbol` / `find_callers` / `find_callees` / `impact` query the local SQLite graph — exact-symbol and call-graph answers work even with embeddings unavailable. Only semantic `search_context` needs Ollama.
+- **Structural and lexical tools work without Ollama.** `find_symbol` / `find_callers` / `find_callees` / `impact` query the local SQLite graph, and `search_code` queries the local FTS index — all work even with embeddings unavailable. Only semantic `search_context` needs Ollama.
 - **Keep the index fresh automatically.** The git hook re-syncs on commit and the file watcher re-indexes on save while `serve` runs — no manual step. Run `project-brain sync` after big external changes.
 - **Prefer `expand_context` over re-reading files.** `search_context` returns a `chunk_id`; expanding it is cheaper than the assistant reading the whole file.
 - **Lead with the exact name when you have it.** "find_symbol X" / "who calls X" is faster and more precise than a semantic search.
