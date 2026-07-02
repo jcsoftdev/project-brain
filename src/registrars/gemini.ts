@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { writeSection } from "../rules/section-marker.js";
 import type { AIToolRegistrar } from "./types.js";
+import { upsertJsonConfig, standardServerEntry } from "./json-config.js";
 
 export class GeminiRegistrar implements AIToolRegistrar {
   name = "Gemini CLI";
@@ -16,26 +17,10 @@ export class GeminiRegistrar implements AIToolRegistrar {
   }
 
   async register(serverPath: string): Promise<void> {
-    const configPath = join(this.baseDir, "settings.json");
-    let config: any = {};
-
-    try {
-      config = JSON.parse(await Bun.file(configPath).text());
-    } catch {
-      // File doesn't exist or invalid JSON
-    }
-
-    if (!config.mcpServers) {
-      config.mcpServers = {};
-    }
-
-    config.mcpServers["project-brain"] = {
-      command: "bun",
-      args: [serverPath],
-      transport: "stdio",
-    };
-
-    await Bun.write(configPath, JSON.stringify(config, null, 2));
+    await upsertJsonConfig(join(this.baseDir, "settings.json"), (config) => {
+      config.mcpServers ??= {};
+      config.mcpServers["project-brain"] = standardServerEntry(serverPath);
+    });
   }
 
   async writeRules(rulesContent: string): Promise<void> {

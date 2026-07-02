@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import { writeSection } from "../rules/section-marker.js";
 import type { AIToolRegistrar } from "./types.js";
+import { dirExists, upsertJsonConfig, standardServerEntry } from "./json-config.js";
 
 export class CursorRegistrar implements AIToolRegistrar {
   name = "Cursor";
@@ -13,38 +14,14 @@ export class CursorRegistrar implements AIToolRegistrar {
   }
 
   async isInstalled(): Promise<boolean> {
-    try {
-      const proc = Bun.spawn(["test", "-d", this.baseDir], {
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-      return (await proc.exited) === 0;
-    } catch {
-      return false;
-    }
+    return dirExists(this.baseDir);
   }
 
   async register(serverPath: string): Promise<void> {
-    const configPath = join(this.baseDir, "mcp.json");
-    let config: any = {};
-
-    try {
-      config = JSON.parse(await Bun.file(configPath).text());
-    } catch {
-      // File doesn't exist or invalid JSON
-    }
-
-    if (!config.mcpServers) {
-      config.mcpServers = {};
-    }
-
-    config.mcpServers["project-brain"] = {
-      command: "bun",
-      args: [serverPath],
-      transport: "stdio",
-    };
-
-    await Bun.write(configPath, JSON.stringify(config, null, 2));
+    await upsertJsonConfig(join(this.baseDir, "mcp.json"), (config) => {
+      config.mcpServers ??= {};
+      config.mcpServers["project-brain"] = standardServerEntry(serverPath);
+    });
   }
 
   async writeRules(rulesContent: string): Promise<void> {

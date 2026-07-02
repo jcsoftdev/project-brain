@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { writeSection } from "../rules/section-marker.js";
 import type { AIToolRegistrar } from "./types.js";
+import { upsertJsonConfig, standardServerEntry } from "./json-config.js";
 
 /** Registers the MCP server via the claude CLI. Returns true on success. */
 export type ClaudeCliRunner = (serverPath: string) => Promise<boolean>;
@@ -35,25 +36,10 @@ export class ClaudeRegistrar implements AIToolRegistrar {
 
   private async fallbackJsonWrite(serverPath: string): Promise<void> {
     const configPath = join(this.baseDir, "claude.json");
-    let config: any = {};
-
-    try {
-      config = JSON.parse(await Bun.file(configPath).text());
-    } catch {
-      // File doesn't exist or invalid JSON
-    }
-
-    if (!config.mcpServers) {
-      config.mcpServers = {};
-    }
-
-    config.mcpServers["project-brain"] = {
-      command: "bun",
-      args: [serverPath],
-      transport: "stdio",
-    };
-
-    await Bun.write(configPath, JSON.stringify(config, null, 2));
+    await upsertJsonConfig(configPath, (config) => {
+      config.mcpServers ??= {};
+      config.mcpServers["project-brain"] = standardServerEntry(serverPath);
+    });
   }
 }
 
