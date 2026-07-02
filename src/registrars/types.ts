@@ -19,11 +19,17 @@ export async function getRegistrars(): Promise<AIToolRegistrar[]> {
   const { CodexRegistrar } = await import("./codex.js");
   const { GeminiRegistrar } = await import("./gemini.js");
   const { CursorRegistrar } = await import("./cursor.js");
+  const { WindsurfRegistrar } = await import("./windsurf.js");
+  const { ZedRegistrar } = await import("./zed.js");
+  const { VSCodeRegistrar } = await import("./vscode.js");
 
   return [
     new ClaudeRegistrar(),
     new CodexRegistrar(),
     new GeminiRegistrar(),
     new CursorRegistrar(),
+    new WindsurfRegistrar(),
+    new ZedRegistrar(),
+    new VSCodeRegistrar(),
   ];
 }

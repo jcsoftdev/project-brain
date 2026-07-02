@@ -23,5 +23,8 @@ describe("Registrar types", () => {
     expect(names).toContain("Codex");
     expect(names).toContain("Gemini CLI");
     expect(names).toContain("Cursor");
+    expect(names).toContain("Windsurf");
+    expect(names).toContain("Zed");
+    expect(names).toContain("VS Code");
   });
 });

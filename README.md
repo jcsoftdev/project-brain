@@ -10,7 +10,7 @@ project-brain indexes your project files into a local LanceDB vector store using
 # 1. Install globally
 bun install -g project-brain
 
-# 2. One-time: register in your AI tools (Claude, Codex, Cursor, Gemini)
+# 2. One-time: register in your AI tools (Claude, Codex, Cursor, Gemini, Windsurf, Zed, VS Code)
 project-brain setup
 
 # 3. Per-project: initialize, index, and install git hook
@@ -61,7 +61,7 @@ Run commands directly from your terminal in any project directory.
 
 ### Inside AI tools (slash commands)
 
-Once `project-brain setup` has registered the MCP server in your AI tool, you can invoke commands as slash commands from within Claude Code, Codex, Cursor, or any MCP-compatible AI:
+Once `project-brain setup` has registered the MCP server in your AI tool, you can invoke commands as slash commands from within Claude Code, Codex, Cursor, Windsurf, Zed, VS Code, or any MCP-compatible AI:
 
 | Slash command | Equivalent CLI | What it does |
 |---|---|---|
@@ -142,7 +142,7 @@ Tips to maximize value:
 
 ### `setup`
 
-One-time global setup. Detects your environment and registers project-brain with AI tools (Claude, Cursor, Gemini, Codex).
+One-time global setup. Detects your environment and registers project-brain with AI tools (Claude, Cursor, Gemini, Codex, Windsurf, Zed, VS Code).
 
 ```bash
 project-brain setup

@@ -1,6 +1,8 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { OLLAMA_HOST } from "../constants.js";
+import { dirExists } from "../registrars/json-config.js";
+import { defaultVSCodeUserDir } from "../registrars/vscode.js";
 
 export interface AIToolInfo {
   name: string;
@@ -77,33 +79,40 @@ async function detectAITools(): Promise<AIToolInfo[]> {
     installed: geminiPath !== null,
   });
 
-  // Cursor — detected via directory existence
+  // Cursor — detected via directory existence (Windows-safe: no `test` spawn)
   const cursorDir = join(home, ".cursor");
-  let cursorInstalled = false;
-  try {
-    const stat = await Bun.file(join(cursorDir, "mcp.json")).exists();
-    // If the directory has config or just exists
-    cursorInstalled =
-      stat || (await Bun.file(cursorDir).exists().catch(() => false)) || false;
-  } catch {
-    // Try directory existence via a different approach
-    try {
-      const proc = Bun.spawn(["test", "-d", cursorDir], {
-        stdout: "ignore",
-        stderr: "ignore",
-      });
-      const code = await proc.exited;
-      cursorInstalled = code === 0;
-    } catch {
-      cursorInstalled = false;
-    }
-  }
-
   tools.push({
     name: "Cursor",
     binaryPath: null,
     configPath: join(cursorDir, "mcp.json"),
-    installed: cursorInstalled,
+    installed: await dirExists(cursorDir),
+  });
+
+  // Windsurf — detected via directory existence
+  const windsurfDir = join(home, ".codeium", "windsurf");
+  tools.push({
+    name: "Windsurf",
+    binaryPath: null,
+    configPath: join(windsurfDir, "mcp_config.json"),
+    installed: await dirExists(windsurfDir),
+  });
+
+  // Zed — detected via directory existence
+  const zedDir = join(home, ".config", "zed");
+  tools.push({
+    name: "Zed",
+    binaryPath: null,
+    configPath: join(zedDir, "settings.json"),
+    installed: await dirExists(zedDir),
+  });
+
+  // VS Code — detected via directory existence (platform-specific user dir)
+  const vscodeDir = defaultVSCodeUserDir();
+  tools.push({
+    name: "VS Code",
+    binaryPath: null,
+    configPath: join(vscodeDir, "mcp.json"),
+    installed: await dirExists(vscodeDir),
   });
 
   return tools;
