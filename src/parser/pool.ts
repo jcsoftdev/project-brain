@@ -6,6 +6,20 @@
 // after — never resident in the long-lived `serve` process.
 import type { SymbolInput } from "../graph/store.js";
 import type { ParseRequest, ParseResponse } from "./worker.js";
+// Static asset import (Bun's `with { type: "file" }` loader). This resolves
+// to an ABSOLUTE path in every context — the real on-disk path under
+// `bun test`/`bun run`, and the embedded `/$bunfs/...` virtual path inside a
+// `bun build --compile` standalone binary — with no runtime "am I compiled"
+// branching needed. This is deliberately NOT a bare literal string
+// (`new Worker("./worker.ts")`) or a `new URL("./worker.ts",
+// import.meta.url)` construction: both were empirically verified (against
+// this project's actual `bun test` runner and actual
+// `bun build ./src/cli.ts --compile` output) to resolve relative to the
+// process's CURRENT WORKING DIRECTORY, not relative to this file — so both
+// break the moment the process is invoked from anywhere other than
+// `src/parser/` (which is always, in every real invocation of this
+// codebase). Do not replace this import.
+import workerPath from "./worker.ts" with { type: "file" };
 
 export interface ParseJob {
   path: string;
@@ -37,11 +51,14 @@ export class ParserPool {
   private idle: Worker[] = [];
   private queue: QueuedJob[] = [];
   private nextId = 0;
-  private pending = new Map<number, { resolve: (r: ParseResult) => void; path: string }>();
+  private pending = new Map<
+    number,
+    { resolve: (r: ParseResult) => void; path: string; worker: Worker }
+  >();
 
   constructor(size: number) {
     for (let i = 0; i < size; i++) {
-      const worker = new Worker(new URL("./worker.ts", import.meta.url).href);
+      const worker = new Worker(workerPath);
       worker.onmessage = (event: MessageEvent<ParseResponse>) => {
         const res = event.data;
         const entry = this.pending.get(res.id);
@@ -55,17 +72,50 @@ export class ParserPool {
         this.idle.push(worker);
         this.drainQueue();
       };
+      worker.onerror = (event: ErrorEvent) => {
+        console.error(
+          `[project-brain] worker error: ${event.message || String(event.error || "unknown worker error")}`,
+        );
+        // A worker that errors out (e.g. its module failed to load) will
+        // never post the responses its currently-pending jobs are waiting
+        // on, so those jobs' promises would hang forever. Settle every
+        // pending job assigned to THIS worker with a failed result instead
+        // of leaving them unresolved.
+        for (const [id, entry] of this.pending) {
+          if (entry.worker !== worker) continue;
+          entry.resolve({
+            path: entry.path,
+            langId: "",
+            symbols: [],
+            error: `worker error: ${event.message || String(event.error || "unknown worker error")}`,
+          });
+          this.pending.delete(id);
+        }
+        // Do not return this worker to the idle pool — it's broken.
+        this.workers = this.workers.filter((w) => w !== worker);
+        this.drainQueue();
+      };
       this.workers.push(worker);
       this.idle.push(worker);
     }
   }
 
   private drainQueue(): void {
+    // If every worker has died (e.g. all failed to load), no idle worker
+    // will ever become available again — settle any still-queued jobs as
+    // failures now instead of leaving their promises pending forever.
+    if (this.workers.length === 0 && this.queue.length > 0) {
+      const stranded = this.queue.splice(0, this.queue.length);
+      for (const { job, resolve } of stranded) {
+        resolve({ path: job.path, langId: "", symbols: [], error: "worker pool has no live workers" });
+      }
+      return;
+    }
     while (this.idle.length > 0 && this.queue.length > 0) {
       const worker = this.idle.pop()!;
       const { job, resolve } = this.queue.shift()!;
       const id = this.nextId++;
-      this.pending.set(id, { resolve, path: job.path });
+      this.pending.set(id, { resolve, path: job.path, worker });
       const req: ParseRequest = { id, path: job.path, content: job.content, ext: job.ext };
       worker.postMessage(req);
     }
