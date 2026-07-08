@@ -10,6 +10,17 @@ function sanitizeProject(project: string): string {
   return project.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 64);
 }
 
+/**
+ * True when `err` is lance's specific "no INVERTED index" error — the
+ * expected condition when fullTextSearch() runs against a table that never
+ * had buildIndexes() called (e.g. brand-new or tiny tables). This is NOT a
+ * genuine failure and must not be logged as one.
+ */
+function isMissingFtsIndexError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("INVERTED index");
+}
+
 /** LanceDB-backed vector store implementation. */
 export class LanceDbStore implements VectorStore {
   private db: Awaited<ReturnType<typeof lancedb.connect>> | null = null;
@@ -164,10 +175,8 @@ export class LanceDbStore implements VectorStore {
       return [];
     }
     try {
-      const count = await table.countRows();
-      if (count === 0) {
-        return [];
-      }
+      // No countRows() pre-check: vectorSearch() on an empty table returns []
+      // naturally — the extra round-trip bought nothing.
       const results = await table.vectorSearch(vector).limit(topK).toArray();
       return results.map((r) => ({
         id: r.id as string,
@@ -203,12 +212,18 @@ export class LanceDbStore implements VectorStore {
       return [];
     }
     try {
-      const count = await table.countRows();
-      if (count === 0) return [];
+      // No countRows() pre-check: query().toArray() on an empty table
+      // returns [] naturally — the extra round-trip bought nothing.
       const rows = await table.query().select(["module"]).toArray();
       const modules = [...new Set(rows.map((r) => r.module as string))];
       return modules.sort();
-    } catch {
+    } catch (err) {
+      // No FTS involved here, so any catch is a genuine failure — must not
+      // be silently indistinguishable from "no modules".
+      console.warn(
+        `[project-brain] listModules failed for '${project}':`,
+        err instanceof Error ? err.message : err
+      );
       return [];
     }
   }
@@ -219,8 +234,8 @@ export class LanceDbStore implements VectorStore {
       return [];
     }
     try {
-      const count = await table.countRows();
-      if (count === 0) return [];
+      // No countRows() pre-check: query().toArray() on an empty table
+      // returns [] naturally — the extra round-trip bought nothing.
       const rows = await table
         .query()
         .where(`module = '${module.replace(/'/g, "''")}'`)
@@ -240,7 +255,13 @@ export class LanceDbStore implements VectorStore {
         end_line: r.end_line as number | undefined,
       }));
       return chunks.sort((a, b) => a.source.localeCompare(b.source));
-    } catch {
+    } catch (err) {
+      // No FTS involved here, so any catch is a genuine failure — must not
+      // be silently indistinguishable from "no chunks".
+      console.warn(
+        `[project-brain] getModuleChunks failed for '${project}':`,
+        err instanceof Error ? err.message : err
+      );
       return [];
     }
   }
@@ -284,7 +305,10 @@ export class LanceDbStore implements VectorStore {
     const table = await this.getTable(project);
     if (!table) return [];
     try {
-      if ((await table.countRows()) === 0) return [];
+      // No countRows() pre-check: fullTextSearch() on an empty table (with
+      // an FTS index built) returns [] naturally. A table with NO FTS index
+      // throws — that's the expected "tiny/new table" case handled below by
+      // falling back to search(), which independently logs genuine failures.
       const reranker = await this.getReranker();
       const rows = await table.query()
         .nearestTo(vector)
@@ -315,7 +339,8 @@ export class LanceDbStore implements VectorStore {
     const table = await this.getTable(project);
     if (!table) return [];
     try {
-      if ((await table.countRows()) === 0) return [];
+      // No countRows() pre-check: fullTextSearch() on an empty table (with
+      // an FTS index built) returns [] naturally.
       const rows = await table.query().fullTextSearch(query).limit(topK).toArray();
       return rows.map((r) => ({
         id: r.id as string,
@@ -329,7 +354,17 @@ export class LanceDbStore implements VectorStore {
         start_line: r.start_line as number | undefined,
         end_line: r.end_line as number | undefined,
       }));
-    } catch {
+    } catch (err) {
+      // Unlike hybridSearch, there's no fallback path here — a missing FTS
+      // index (tiny/new table, never had buildIndexes() called) is an
+      // EXPECTED condition and must stay silent. Any OTHER failure is genuine
+      // and must be logged, exactly like search()'s pattern.
+      if (!isMissingFtsIndexError(err)) {
+        console.warn(
+          `[project-brain] ftsSearch failed for '${project}':`,
+          err instanceof Error ? err.message : err
+        );
+      }
       return [];
     }
   }
