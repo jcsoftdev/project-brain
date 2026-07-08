@@ -6,6 +6,10 @@ export interface SymbolInput {
   start_line: number; end_line: number; edges: EdgeInput[];
 }
 export interface SymbolHit { name: string; kind: string; signature: string; path: string; start_line: number; end_line: number; }
+export interface RankedSymbol {
+  id: number; name: string; kind: string; signature: string;
+  file: string; start_line: number; end_line: number; rank: number;
+}
 
 export class GraphStore {
   private delStmt: ReturnType<Database["query"]>;
@@ -202,5 +206,100 @@ export class GraphStore {
     ).all(...ids) as (SymbolHit & { id: number })[];
     const byId = new Map(hits.map((h) => [h.id, h]));
     return ids.map((id) => byId.get(id)!).filter(Boolean).map(({ id: _id, ...hit }) => hit as SymbolHit);
+  }
+
+  /**
+   * PageRank over the resolved symbol-call graph (nodes = symbols, edges =
+   * resolved edges.dst_symbol_id). Aider-style repo map ranking, but at
+   * symbol granularity rather than file granularity.
+   *
+   * - Loads all symbols + all resolved edges (src_symbol_id AND dst_symbol_id
+   *   both non-null) into memory, then iterates plain-JS power iteration.
+   * - Multi-edges (same src→dst called more than once) are deduped to a
+   *   single edge — simpler than weighting, and call *count* between two
+   *   symbols isn't a meaningfully stronger importance signal here.
+   * - Dangling nodes (zero outgoing resolved edges) redistribute their rank
+   *   mass uniformly across ALL nodes each iteration (standard PageRank sink
+   *   handling) so total rank mass is conserved instead of leaking.
+   * - `focus`: when given and at least one name matches an existing symbol,
+   *   runs personalized PageRank — the teleport/reset vector concentrates
+   *   uniformly on the matching symbols instead of uniformly on all nodes.
+   *   If no name matches, silently falls back to standard uniform teleport.
+   * - Converges early once the L1 delta between iterations drops below 1e-6,
+   *   even if under `iterations`.
+   * - Empty graph → [].
+   */
+  pageRank(opts?: { damping?: number; iterations?: number; focus?: string[] }): RankedSymbol[] {
+    const damping = opts?.damping ?? 0.85;
+    const maxIterations = opts?.iterations ?? 20;
+
+    const symbols = this.db.query(
+      `SELECT s.id AS id, ${this.hitSql} FROM symbols s JOIN files f ON s.file_id=f.id`
+    ).all() as (SymbolHit & { id: number })[];
+    if (symbols.length === 0) return [];
+
+    const n = symbols.length;
+    const indexById = new Map<number, number>();
+    symbols.forEach((s, i) => indexById.set(s.id, i));
+
+    const edgeRows = this.db.query(
+      "SELECT DISTINCT src_symbol_id AS src, dst_symbol_id AS dst FROM edges WHERE src_symbol_id IS NOT NULL AND dst_symbol_id IS NOT NULL"
+    ).all() as { src: number; dst: number }[];
+
+    // Adjacency by index: out[i] = list of target indices reachable from i.
+    const out: number[][] = Array.from({ length: n }, () => []);
+    for (const e of edgeRows) {
+      const si = indexById.get(e.src);
+      const di = indexById.get(e.dst);
+      if (si === undefined || di === undefined) continue;
+      out[si].push(di);
+    }
+    const outDegree = out.map((o) => o.length);
+
+    // Teleport/reset vector: uniform over all nodes, unless a valid focus is given.
+    let teleport = new Array(n).fill(1 / n);
+    if (opts?.focus && opts.focus.length > 0) {
+      const focusSet = new Set(opts.focus);
+      const focusIdx = symbols
+        .map((s, i) => (focusSet.has(s.name) ? i : -1))
+        .filter((i) => i >= 0);
+      if (focusIdx.length > 0) {
+        teleport = new Array(n).fill(0);
+        for (const i of focusIdx) teleport[i] = 1 / focusIdx.length;
+      }
+      // else: no match — keep uniform teleport (silent fallback).
+    }
+
+    let rank = new Array(n).fill(1 / n);
+    for (let iter = 0; iter < maxIterations; iter++) {
+      const next = new Array(n).fill(0);
+
+      // Dangling mass: sum of rank held by nodes with no outgoing edges,
+      // redistributed uniformly across ALL nodes (standard sink handling).
+      let danglingMass = 0;
+      for (let i = 0; i < n; i++) if (outDegree[i] === 0) danglingMass += rank[i];
+
+      for (let i = 0; i < n; i++) {
+        if (outDegree[i] === 0) continue;
+        const share = rank[i] / outDegree[i];
+        for (const j of out[i]) next[j] += share;
+      }
+
+      let delta = 0;
+      for (let i = 0; i < n; i++) {
+        const teleported = (1 - damping) * teleport[i] + damping * (next[i] + danglingMass * teleport[i]);
+        delta += Math.abs(teleported - rank[i]);
+        next[i] = teleported;
+      }
+      rank = next;
+      if (delta < 1e-6) break;
+    }
+
+    return symbols
+      .map((s, i) => ({
+        id: s.id, name: s.name, kind: s.kind, signature: s.signature,
+        file: s.path, start_line: s.start_line, end_line: s.end_line, rank: rank[i],
+      }))
+      .sort((a, b) => b.rank - a.rank);
   }
 }
