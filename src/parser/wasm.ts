@@ -27,7 +27,15 @@ export class WasmParser {
 
   private oversize(source: string): boolean {
     if (Buffer.byteLength(source, "utf8") > MAX_PARSE_BYTES) return true;
-    for (const line of source.split("\n")) if (line.length > MAX_LINE_LENGTH) return true;
+    // Manual newline scan instead of source.split("\n") — avoids materializing
+    // an array of every line just to find one that's too long.
+    let lineStart = 0;
+    for (let i = 0; i <= source.length; i++) {
+      if (i === source.length || source.charCodeAt(i) === 10 /* "\n" */) {
+        if (i - lineStart > MAX_LINE_LENGTH) return true;
+        lineStart = i + 1;
+      }
+    }
     return false;
   }
 

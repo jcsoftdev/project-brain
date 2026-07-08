@@ -1,7 +1,7 @@
 import { test, expect, spyOn } from "bun:test";
 import { Language } from "web-tree-sitter";
 import { WasmParser } from "../../src/parser/wasm";
-import { PARSER_TEARDOWN_EVERY } from "../../src/constants";
+import { PARSER_TEARDOWN_EVERY, MAX_LINE_LENGTH, MAX_PARSE_BYTES } from "../../src/constants";
 
 test("parseFile returns a tree for known ext, null for unknown/oversized", async () => {
   const p = new WasmParser();
@@ -12,6 +12,38 @@ test("parseFile returns a tree for known ext, null for unknown/oversized", async
   ok!.tree.delete();
   expect(p.parseFile(".unknownext", "whatever")).toBeNull();
   expect(p.parseFile(".ts", "x".repeat(600 * 1024))).toBeNull(); // oversize gate
+  p.dispose();
+});
+
+test("oversize gate: a single pathologically long line is rejected even when total bytes are well under MAX_PARSE_BYTES", async () => {
+  const p = new WasmParser();
+  await p.init();
+  await p.warm(".ts");
+
+  // One line exceeding MAX_LINE_LENGTH, but total source size is nowhere
+  // near MAX_PARSE_BYTES — this must be caught by the per-line scan, not the
+  // whole-source byte-length check.
+  const longLine = `const x = "${"a".repeat(MAX_LINE_LENGTH + 10)}";`;
+  expect(Buffer.byteLength(longLine, "utf8")).toBeLessThan(MAX_PARSE_BYTES);
+  const sourceWithLongLine = `export function ok() {}\n${longLine}\nexport function alsoOk() {}\n`;
+  expect(p.parseFile(".ts", sourceWithLongLine)).toBeNull();
+
+  // Same total length distributed across many short lines must NOT be
+  // flagged — proves the gate is about per-line length, not total size.
+  const manyShortLines = Array.from(
+    { length: Math.ceil(longLine.length / 50) },
+    (_, i) => `const line${i} = ${i};`
+  ).join("\n");
+  const ok = p.parseFile(".ts", manyShortLines);
+  expect(ok).not.toBeNull();
+  ok!.tree.delete();
+
+  // Boundary case: the pathologically long line is the LAST line, with no
+  // trailing newline — an off-by-one manual scan could easily forget to
+  // check the final (unterminated) line.
+  const sourceEndingInLongLine = `export function ok() {}\n${longLine}`;
+  expect(p.parseFile(".ts", sourceEndingInLongLine)).toBeNull();
+
   p.dispose();
 });
 
