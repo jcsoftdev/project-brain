@@ -27,6 +27,8 @@ export class LanceDbStore implements VectorStore {
   private readonly dbPath: string;
   private tables = new Map<string, Awaited<ReturnType<Awaited<ReturnType<typeof lancedb.connect>>["openTable"]>>>();
   private reranker: Awaited<ReturnType<typeof rerankers.RRFReranker.create>> | null = null;
+  /** Distinct-module list per project, keyed by table name. Invalidated on any write path. */
+  private modulesCache = new Map<string, string[]>();
 
   constructor(dbPath: string) {
     this.dbPath = dbPath;
@@ -100,6 +102,7 @@ export class LanceDbStore implements VectorStore {
         `[project-brain] embedding dim changed (${existingDim} -> ${meta.dim}) for '${project}'; rebuilding table.\n`
       );
       this.tables.delete(name);
+      this.modulesCache.delete(name);
       await db.dropTable(name);
       // Fall through to the create-table path below.
     }
@@ -121,6 +124,7 @@ export class LanceDbStore implements VectorStore {
     const table = await db.createTable(name, [seed]);
     await table.delete("id = '__seed__'");
     this.tables.set(name, table);
+    this.modulesCache.delete(name);
     await writeTableMeta(this.dbPath, project, meta);
   }
 
@@ -142,6 +146,7 @@ export class LanceDbStore implements VectorStore {
       start_line: c.start_line ?? 0,
       end_line: c.end_line ?? 0,
     })));
+    this.modulesCache.delete(this.tableName(project));
   }
 
   /** Delete N sources then insert all chunks in ONE add() call — 1 fragment per wave. */
@@ -167,6 +172,7 @@ export class LanceDbStore implements VectorStore {
       start_line: c.start_line ?? 0,
       end_line: c.end_line ?? 0,
     })));
+    this.modulesCache.delete(this.tableName(project));
   }
 
   async search(project: string, vector: number[], topK: number): Promise<SearchResult[]> {
@@ -204,9 +210,15 @@ export class LanceDbStore implements VectorStore {
       return;
     }
     await table.delete(`source = '${source.replace(/'/g, "''")}'`);
+    this.modulesCache.delete(this.tableName(project));
   }
 
   async listModules(project: string): Promise<string[]> {
+    const name = this.tableName(project);
+    const cached = this.modulesCache.get(name);
+    if (cached) {
+      return [...cached];
+    }
     const table = await this.getTable(project);
     if (!table) {
       return [];
@@ -216,7 +228,9 @@ export class LanceDbStore implements VectorStore {
       // returns [] naturally — the extra round-trip bought nothing.
       const rows = await table.query().select(["module"]).toArray();
       const modules = [...new Set(rows.map((r) => r.module as string))];
-      return modules.sort();
+      modules.sort();
+      this.modulesCache.set(name, modules);
+      return [...modules];
     } catch (err) {
       // No FTS involved here, so any catch is a genuine failure — must not
       // be silently indistinguishable from "no modules".
@@ -459,6 +473,7 @@ export class LanceDbStore implements VectorStore {
     const db = await this.getDb();
     if (!(await db.tableNames()).includes(name)) return false;
     this.tables.delete(name);
+    this.modulesCache.delete(name);
     await db.dropTable(name);
     const { deleteTableMeta } = await import("./meta.js");
     await deleteTableMeta(this.dbPath, project);
