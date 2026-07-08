@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, spyOn } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readTableMeta, writeTableMeta, deleteTableMeta } from "../../src/store/meta.js";
@@ -70,5 +70,23 @@ describe("table meta — read cache", () => {
     } finally {
       await rm(dir2, { recursive: true, force: true });
     }
+  });
+
+  it("detects external writes (e.g. a separate reindex process) via mtime and invalidates the stale cache entry", async () => {
+    await writeTableMeta(dir, "proj", { model: "old-model", dim: 4 });
+    expect(await readTableMeta(dir, "proj")).toEqual({ model: "old-model", dim: 4 });
+
+    // Simulate a SEPARATE process (e.g. `project-brain reindex`) writing the
+    // meta file directly on disk, bypassing this process's in-memory cache.
+    const safe = "proj".toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 64);
+    const metaFilePath = join(dir, `${safe}.meta.json`);
+    await writeFile(metaFilePath, JSON.stringify({ model: "new-model", dim: 8 }));
+
+    // Force the mtime forward explicitly so it differs from the cached mtime
+    // even under coarse filesystem timestamp granularity (avoid same-ms flakes).
+    const future = new Date(Date.now() + 60_000);
+    await utimes(metaFilePath, future, future);
+
+    expect(await readTableMeta(dir, "proj")).toEqual({ model: "new-model", dim: 8 });
   });
 });
