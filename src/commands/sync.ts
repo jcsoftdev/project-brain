@@ -458,10 +458,10 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     }
     await flushStore(); // flush remainder
 
-    // Resolve cross-file call edges for every file that was parsed this run.
-    for (const entry of pendingEntries) {
-      graph.resolveEdgesForFile(entry.relPath);
-    }
+    // Resolve cross-file call edges for every file that was parsed this run,
+    // batched into a single transaction instead of one autocommit pair of
+    // UPDATEs per file.
+    graph.resolveEdgesForFiles(pendingEntries.map((entry) => entry.relPath));
 
     // 5. Detect deleted files (in manifest but no longer on disk).
     //    ONLY the authoritative full walk can do this: on the incremental

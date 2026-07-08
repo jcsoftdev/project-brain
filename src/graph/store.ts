@@ -90,6 +90,20 @@ export class GraphStore {
   }
 
   /**
+   * Batch variant of resolveEdgesForFile: resolves cross-file call edges for
+   * MULTIPLE files inside a single SQLite transaction, instead of one
+   * autocommit pair of UPDATEs per file. Same per-file resolution logic
+   * (reused via resolveEdgesForFile), just wrapped once — mirrors how
+   * replaceFile() wraps its per-file work in this.db.transaction().
+   */
+  resolveEdgesForFiles(paths: string[]): void {
+    const tx = this.db.transaction(() => {
+      for (const path of paths) this.resolveEdgesForFile(path);
+    });
+    tx();
+  }
+
+  /**
    * Repair edge → symbol links after deletions/renames.
    *
    * SQLite reuses rowids, so a deleted symbol's id can be reassigned to an
