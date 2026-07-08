@@ -52,7 +52,6 @@ export async function handleIngest(args: IngestArgs, deps: ToolDeps): Promise<To
     : undefined;
   await deps.store.ensureTable(project, tableMeta);
   await deps.store.upsert(project, [chunk]);
-  await deps.store.buildIndexes(project);
 
   return jsonResult({ id, source, status: "stored" });
 }
