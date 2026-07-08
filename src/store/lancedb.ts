@@ -21,13 +21,20 @@ function isMissingFtsIndexError(err: unknown): boolean {
   return msg.includes("INVERTED index");
 }
 
+/** Max number of table handles (and their module-list caches) kept alive at
+ * once. `project` is an arbitrary string per MCP call and the serve process
+ * is long-lived, so the map must be bounded to avoid unbounded growth. */
+const TABLE_CACHE_MAX = 16;
+
 /** LanceDB-backed vector store implementation. */
 export class LanceDbStore implements VectorStore {
   private db: Awaited<ReturnType<typeof lancedb.connect>> | null = null;
   private readonly dbPath: string;
   private tables = new Map<string, Awaited<ReturnType<Awaited<ReturnType<typeof lancedb.connect>>["openTable"]>>>();
   private reranker: Awaited<ReturnType<typeof rerankers.RRFReranker.create>> | null = null;
-  /** Distinct-module list per project, keyed by table name. Invalidated on any write path. */
+  /** Distinct-module list per project, keyed by table name. Invalidated on any write path.
+   * Evicted alongside its table entry — a project without an open table handle
+   * has no business keeping a cached module list either. */
   private modulesCache = new Map<string, string[]>();
 
   constructor(dbPath: string) {
@@ -45,6 +52,31 @@ export class LanceDbStore implements VectorStore {
     return `${sanitizeProject(project)}${TABLE_SUFFIX}`;
   }
 
+  /** Read a cached table handle and mark it most-recently-used (Map preserves
+   * insertion order — delete+re-set moves the key to the end). */
+  private getCachedTable(name: string) {
+    const table = this.tables.get(name);
+    if (table !== undefined) {
+      this.tables.delete(name);
+      this.tables.set(name, table);
+    }
+    return table;
+  }
+
+  /** Insert/refresh a table handle, evicting the least-recently-used entry
+   * (the Map's first key) once the cache exceeds TABLE_CACHE_MAX. Its
+   * modules cache entry is evicted alongside it. */
+  private setCachedTable(name: string, table: Awaited<ReturnType<Awaited<ReturnType<typeof lancedb.connect>>["openTable"]>>) {
+    this.tables.delete(name);
+    this.tables.set(name, table);
+    while (this.tables.size > TABLE_CACHE_MAX) {
+      const oldest = this.tables.keys().next().value;
+      if (oldest === undefined) break;
+      this.tables.delete(oldest);
+      this.modulesCache.delete(oldest);
+    }
+  }
+
   /** Lazily construct the RRFReranker once and reuse it — params are constant (no arguments), so a fresh instance per hybridSearch call is wasted work. */
   private async getReranker() {
     if (!this.reranker) {
@@ -55,8 +87,9 @@ export class LanceDbStore implements VectorStore {
 
   private async getTable(project: string) {
     const name = this.tableName(project);
-    if (this.tables.has(name)) {
-      return this.tables.get(name)!;
+    const cached = this.getCachedTable(name);
+    if (cached !== undefined) {
+      return cached;
     }
     const db = await this.getDb();
     const names = await db.tableNames();
@@ -64,7 +97,7 @@ export class LanceDbStore implements VectorStore {
       return null;
     }
     const table = await db.openTable(name);
-    this.tables.set(name, table);
+    this.setCachedTable(name, table);
     return table;
   }
 
@@ -74,10 +107,10 @@ export class LanceDbStore implements VectorStore {
     const names = await db.tableNames();
     if (names.includes(name)) {
       // Table already exists — open it (or use cached handle) and check the vector dim.
-      let table = this.tables.get(name);
+      let table = this.getCachedTable(name);
       if (!table) {
         table = await db.openTable(name);
-        this.tables.set(name, table);
+        this.setCachedTable(name, table);
       }
 
       // Read the actual vector dim from the Arrow schema.
@@ -123,7 +156,7 @@ export class LanceDbStore implements VectorStore {
     };
     const table = await db.createTable(name, [seed]);
     await table.delete("id = '__seed__'");
-    this.tables.set(name, table);
+    this.setCachedTable(name, table);
     this.modulesCache.delete(name);
     await writeTableMeta(this.dbPath, project, meta);
   }
