@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { WasmParser } from "../../src/parser/wasm.js";
 import { VECTOR_DIM } from "../../src/constants.js";
 import type { EmbeddingClient, VectorStore, Chunk, SearchResult } from "../../src/types.js";
+import * as gitignore from "../../src/indexer/gitignore.js";
 
 /** Minimal no-op in-memory store (mirrors pattern in sync.test.ts). */
 function makeMemoryStore(): VectorStore {
@@ -395,6 +396,61 @@ test("watcher-style sync (injected graph) at/above POOL_MIN_FILES never spawns a
   // gate on the pool assignment in src/commands/sync.ts itself, not from an
   // assertion here.
   graph.close();
+});
+
+test("incremental sync (changedFiles) does NOT call loadPatterns — that tree walk is only needed by the full-walk branch", async () => {
+  writeFileSync(join(tempDir, "one.ts"), "export function one(){ return 1; }");
+
+  const { runSync } = await import("../../src/commands/sync.js");
+
+  const loadPatternsSpy = spyOn(gitignore, "loadPatterns");
+
+  try {
+    // Prime the manifest with a full sync first (this legitimately calls loadPatterns).
+    await runSync({
+      root: tempDir,
+      projectId: "test-skip-loadpatterns",
+      store: makeMemoryStore(),
+      embeddings: noopEmbeddings,
+    });
+    loadPatternsSpy.mockClear();
+
+    // Incremental (watcher-driven) sync: changedFiles is non-empty, so the
+    // full-tree gitignore walk must be skipped entirely.
+    writeFileSync(join(tempDir, "one.ts"), "export function one(){ return 11; }");
+    await runSync({
+      root: tempDir,
+      projectId: "test-skip-loadpatterns",
+      store: makeMemoryStore(),
+      embeddings: noopEmbeddings,
+      changedFiles: ["one.ts"],
+    });
+
+    expect(loadPatternsSpy.mock.calls.length).toBe(0);
+  } finally {
+    loadPatternsSpy.mockRestore();
+  }
+});
+
+test("full walk (no changedFiles) still calls loadPatterns — full-walk branch is unaffected", async () => {
+  writeFileSync(join(tempDir, "two.ts"), "export function two(){ return 2; }");
+
+  const { runSync } = await import("../../src/commands/sync.js");
+
+  const loadPatternsSpy = spyOn(gitignore, "loadPatterns");
+
+  try {
+    await runSync({
+      root: tempDir,
+      projectId: "test-full-walk-loadpatterns",
+      store: makeMemoryStore(),
+      embeddings: noopEmbeddings,
+    });
+
+    expect(loadPatternsSpy.mock.calls.length).toBeGreaterThan(0);
+  } finally {
+    loadPatternsSpy.mockRestore();
+  }
 });
 
 test("throw during run → parser.dispose and graphDb still cleaned up", async () => {

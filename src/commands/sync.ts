@@ -185,11 +185,11 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   try {
     const warmedExts = new Set<string>();
 
-    // 1. Load hash manifest and gitignore patterns
-    const [hashManifest, gitignorePatterns] = await Promise.all([
-      loadHashManifest(root),
-      loadPatterns(root),
-    ]);
+    // 1. Load hash manifest. Gitignore patterns require a full recursive tree
+    // walk (loadPatterns) — only load them lazily, inside the full-walk branch
+    // below, so the incremental (changedFiles) path never pays for a tree walk
+    // whose result it would immediately discard.
+    const hashManifest = await loadHashManifest(root);
 
     // 2. Collect files to process
     onProgress?.({ phase: "scanning", current: 0, total: 0 });
@@ -199,6 +199,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
         f.startsWith("/") ? f : join(root, f)
       );
     } else {
+      const gitignorePatterns = await loadPatterns(root);
       filePaths = await listAllFiles(root, root, gitignorePatterns);
     }
     onProgress?.({ phase: "scanning", current: filePaths.length, total: filePaths.length });
