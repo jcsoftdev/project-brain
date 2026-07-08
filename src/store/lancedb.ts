@@ -435,14 +435,21 @@ export class LanceDbStore implements VectorStore {
   async listProjects(): Promise<Array<{ project: string; chunks: number; model?: string; dim?: number }>> {
     const db = await this.getDb();
     const names = await db.tableNames();
-    const out: Array<{ project: string; chunks: number; model?: string; dim?: number }> = [];
-    for (const name of names) {
-      if (!name.endsWith(TABLE_SUFFIX)) continue;
-      const project = name.slice(0, -TABLE_SUFFIX.length);
-      const chunks = await this.countChunks(project);
-      const meta = await readTableMeta(this.dbPath, project);
-      out.push({ project, chunks, ...(meta ? { model: meta.model, dim: meta.dim } : {}) });
-    }
+    const projectNames = names.filter((name) => name.endsWith(TABLE_SUFFIX));
+    // Run each project's countChunks + readTableMeta lookups concurrently
+    // instead of sequentially — Promise.all preserves the input order in its
+    // resolved array regardless of individual settle order, so this stays a
+    // straight drop-in for the previous for-loop.
+    const out = await Promise.all(
+      projectNames.map(async (name) => {
+        const project = name.slice(0, -TABLE_SUFFIX.length);
+        const [chunks, meta] = await Promise.all([
+          this.countChunks(project),
+          readTableMeta(this.dbPath, project),
+        ]);
+        return { project, chunks, ...(meta ? { model: meta.model, dim: meta.dim } : {}) };
+      })
+    );
     return out;
   }
 
