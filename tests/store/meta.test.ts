@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "bun:test";
+import { describe, expect, it, beforeEach, afterEach, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,5 +21,54 @@ describe("table meta", () => {
     await deleteTableMeta(dir, "proj");
     expect(await readTableMeta(dir, "proj")).toBeNull();
     await deleteTableMeta(dir, "proj"); // no throw when already gone
+  });
+});
+
+describe("table meta — read cache", () => {
+  it("readTableMeta only touches disk once across repeated reads for the same project", async () => {
+    await writeTableMeta(dir, "proj", { model: "nomic-embed-code", dim: 768 });
+
+    const fileSpy = spyOn(Bun, "file");
+    try {
+      const first = await readTableMeta(dir, "proj");
+      const second = await readTableMeta(dir, "proj");
+      const third = await readTableMeta(dir, "proj");
+
+      expect(first).toEqual({ model: "nomic-embed-code", dim: 768 });
+      expect(second).toEqual({ model: "nomic-embed-code", dim: 768 });
+      expect(third).toEqual({ model: "nomic-embed-code", dim: 768 });
+      expect(fileSpy.mock.calls.length).toBeLessThanOrEqual(1);
+    } finally {
+      fileSpy.mockRestore();
+    }
+  });
+
+  it("writeTableMeta invalidates the cache — next readTableMeta sees the NEW value", async () => {
+    await writeTableMeta(dir, "proj", { model: "old-model", dim: 4 });
+    expect(await readTableMeta(dir, "proj")).toEqual({ model: "old-model", dim: 4 });
+
+    await writeTableMeta(dir, "proj", { model: "new-model", dim: 8 });
+    expect(await readTableMeta(dir, "proj")).toEqual({ model: "new-model", dim: 8 });
+  });
+
+  it("deleteTableMeta invalidates the cache — next readTableMeta returns null", async () => {
+    await writeTableMeta(dir, "proj", { model: "m", dim: 1 });
+    expect(await readTableMeta(dir, "proj")).toEqual({ model: "m", dim: 1 });
+
+    await deleteTableMeta(dir, "proj");
+    expect(await readTableMeta(dir, "proj")).toBeNull();
+  });
+
+  it("cache is keyed by dbPath+project — different dbPath for same project name stays isolated", async () => {
+    const dir2 = await mkdtemp(join(tmpdir(), "pb-meta2-"));
+    try {
+      await writeTableMeta(dir, "proj", { model: "dir1-model", dim: 4 });
+      await writeTableMeta(dir2, "proj", { model: "dir2-model", dim: 8 });
+
+      expect(await readTableMeta(dir, "proj")).toEqual({ model: "dir1-model", dim: 4 });
+      expect(await readTableMeta(dir2, "proj")).toEqual({ model: "dir2-model", dim: 8 });
+    } finally {
+      await rm(dir2, { recursive: true, force: true });
+    }
   });
 });
