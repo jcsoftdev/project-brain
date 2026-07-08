@@ -169,12 +169,11 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   // Structural extraction is best-effort: if the WASM parser cannot initialise
   // (e.g. grammar assets missing in an exotic runtime), skip structural work
   // rather than crashing the whole indexer. parseFile is guarded on `parser` below.
-  let parser: WasmParser | null = new WasmParser();
-  try {
-    await parser.init();
-  } catch {
-    parser = null;
-  }
+  // Construction+init is deferred until AFTER the pool-eligibility gate below
+  // (once `filePaths` is known) — when the worker pool takes over, the
+  // sequential in-process parser is never needed, so building it eagerly here
+  // would be wasted initialisation.
+  let parser: WasmParser | null = null;
   // Worker pool for parallel structural parsing on large syncs. Declared here
   // (outside the `try` below) so the sibling `finally` block can dispose it.
   // Assigned inside `try` once `filePaths` — and thus the candidate count — is
@@ -213,6 +212,17 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     pool = ownsGraph && filePaths.length >= POOL_MIN_FILES ? new ParserPool(
       Math.max(1, (await import("node:os")).cpus().length - 2)
     ) : null;
+
+    // Only construct+init the sequential WasmParser when the pool is NOT
+    // taking over — it would sit initialised and unused on the pool path.
+    if (!pool) {
+      parser = new WasmParser();
+      try {
+        await parser.init();
+      } catch {
+        parser = null;
+      }
+    }
 
     // 3. Ensure table exists (pass model+dim so metadata is stored correctly)
     const tableMeta = embeddings.model

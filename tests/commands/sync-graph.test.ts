@@ -453,6 +453,41 @@ test("full walk (no changedFiles) still calls loadPatterns — full-walk branch 
   }
 });
 
+test("pool-eligible sync (no injected graph, >= POOL_MIN_FILES) never constructs/inits the sequential WasmParser", async () => {
+  const { POOL_MIN_FILES } = await import("../../src/parser/pool.js");
+
+  // No injected graph → ownsGraph === true, and file count >= POOL_MIN_FILES
+  // → the pool-eligibility gate takes the ParserPool branch. The sequential
+  // WasmParser must never be constructed+initialised in this case.
+  const fileCount = POOL_MIN_FILES + 1;
+  for (let i = 0; i < fileCount; i++) {
+    writeFileSync(
+      join(tempDir, `pmod${i}.ts`),
+      `export function pfn${i}() { return ${i}; }`
+    );
+  }
+
+  const { runSync } = await import("../../src/commands/sync.js");
+
+  const initSpy = spyOn(WasmParser.prototype, "init");
+
+  try {
+    const result = await runSync({
+      root: tempDir,
+      projectId: "test-defer-wasmparser",
+      store: makeMemoryStore(),
+      embeddings: noopEmbeddings,
+      // No `graph` option — runSync opens its own ephemeral one, satisfying
+      // ownsGraph === true, the pool-eligibility precondition.
+    });
+
+    expect(result.ingested).toBe(fileCount);
+    expect(initSpy.mock.calls.length).toBe(0);
+  } finally {
+    initSpy.mockRestore();
+  }
+});
+
 test("throw during run → parser.dispose and graphDb still cleaned up", async () => {
   // Injection strategy: store.batchReplace throws — this propagates out of runSync
   // reliably because it's awaited inside the try block after embed phase.
