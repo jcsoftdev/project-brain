@@ -66,18 +66,6 @@ export function chunkContent(
   return chunks.length > 0 ? chunks : [makeChunk(content, source, module, now, 0)];
 }
 
-/**
- * Read a file and chunk its content.
- */
-export async function chunkFile(
-  filePath: string,
-  project: string,
-  module: string
-): Promise<RawChunk[]> {
-  const content = await Bun.file(filePath).text();
-  return chunkContent(content, filePath, module);
-}
-
 function makeChunk(
   content: string,
   source: string,
