@@ -15,6 +15,7 @@ export class LanceDbStore implements VectorStore {
   private db: Awaited<ReturnType<typeof lancedb.connect>> | null = null;
   private readonly dbPath: string;
   private tables = new Map<string, Awaited<ReturnType<Awaited<ReturnType<typeof lancedb.connect>>["openTable"]>>>();
+  private reranker: Awaited<ReturnType<typeof rerankers.RRFReranker.create>> | null = null;
 
   constructor(dbPath: string) {
     this.dbPath = dbPath;
@@ -29,6 +30,14 @@ export class LanceDbStore implements VectorStore {
 
   private tableName(project: string): string {
     return `${sanitizeProject(project)}${TABLE_SUFFIX}`;
+  }
+
+  /** Lazily construct the RRFReranker once and reuse it — params are constant (no arguments), so a fresh instance per hybridSearch call is wasted work. */
+  private async getReranker() {
+    if (!this.reranker) {
+      this.reranker = await rerankers.RRFReranker.create();
+    }
+    return this.reranker;
   }
 
   private async getTable(project: string) {
@@ -276,7 +285,7 @@ export class LanceDbStore implements VectorStore {
     if (!table) return [];
     try {
       if ((await table.countRows()) === 0) return [];
-      const reranker = await rerankers.RRFReranker.create();
+      const reranker = await this.getReranker();
       const rows = await table.query()
         .nearestTo(vector)
         .fullTextSearch(text)
