@@ -79,4 +79,73 @@ describe("repo_map", () => {
     await handleRepoMap({ focus: ["createServer"] }, deps);
     expect(receivedOpts).toEqual({ focus: ["createServer"] });
   });
+
+  // --- regression guards (added post-review; assert current correct behavior) ---
+
+  function depsWith(ranked: any[]): ToolDeps {
+    return {
+      store: {} as ToolDeps["store"],
+      embeddings: {} as ToolDeps["embeddings"],
+      graph: { pageRank: (_opts?: any) => ranked } as any,
+    } as ToolDeps;
+  }
+
+  /** Split a rendered map into header lines (file paths) and indented symbol lines. */
+  function parseMap(map: string): { headers: string[]; symbolLines: string[] } {
+    const lines = map === "" ? [] : map.split("\n");
+    return {
+      headers: lines.filter((l) => !l.startsWith("  ")),
+      symbolLines: lines.filter((l) => l.startsWith("  ")),
+    };
+  }
+
+  it("never emits an orphan file header (every header has >=1 symbol under it)", async () => {
+    const r = await handleRepoMap({ token_budget: 100 }, depsWith(MANY_RANKED));
+    const sc = r.structuredContent as any;
+    expect(sc.truncated).toBe(true); // sanity: this budget really cuts mid-set
+    const lines = (sc.map as string).split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].startsWith("  ")) {
+        // file header — the NEXT line must exist and be an indented symbol line
+        expect(lines[i + 1], `orphan header: ${lines[i]}`).toBeDefined();
+        expect(lines[i + 1]!.startsWith("  "), `orphan header: ${lines[i]}`).toBe(true);
+      }
+    }
+  });
+
+  it("rendered map line counts match files/symbols counts (truncated and non-truncated)", async () => {
+    const full = (await handleRepoMap({}, depsWith(RANKED))).structuredContent as any;
+    expect(full.truncated).toBe(false);
+    let parsed = parseMap(full.map);
+    expect(parsed.headers.length).toBe(full.files);
+    expect(parsed.symbolLines.length).toBe(full.symbols);
+
+    const cut = (await handleRepoMap({ token_budget: 100 }, depsWith(MANY_RANKED))).structuredContent as any;
+    expect(cut.truncated).toBe(true);
+    parsed = parseMap(cut.map);
+    expect(parsed.headers.length).toBe(cut.files);
+    expect(parsed.symbolLines.length).toBe(cut.symbols);
+  });
+
+  it("accepts clamp boundaries (100, 8000) and treats below-min identically to 100", async () => {
+    const atMin = (await handleRepoMap({ token_budget: 100 }, depsWith(MANY_RANKED))).structuredContent;
+    const atMax = (await handleRepoMap({ token_budget: 8000 }, depsWith(MANY_RANKED))).structuredContent as any;
+    const belowMin = (await handleRepoMap({ token_budget: 1 }, depsWith(MANY_RANKED))).structuredContent;
+
+    // 8000 comfortably fits the whole stubbed set — nothing truncated.
+    expect(atMax.truncated).toBe(false);
+    expect(atMax.symbols).toBe(MANY_RANKED.length);
+    // 1 clamps up to the 100 floor → byte-identical result to an explicit 100.
+    expect(belowMin).toEqual(atMin);
+  });
+
+  it("empty graph at handler level: empty map, zero counts, not truncated", async () => {
+    const r = await handleRepoMap({}, depsWith([]));
+    expect(r.isError).toBeFalsy();
+    const sc = r.structuredContent as any;
+    expect(sc.map).toBe("");
+    expect(sc.files).toBe(0);
+    expect(sc.symbols).toBe(0);
+    expect(sc.truncated).toBe(false);
+  });
 });

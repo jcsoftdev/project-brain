@@ -88,6 +88,34 @@ test("empty graph returns []", () => {
   db.close();
 });
 
+test("rank mass is conserved (sums to 1) for unfocused and focused runs", () => {
+  const db = openGraphDb(":memory:"); const store = new GraphStore(db);
+  // seedFocus has two dangling sinks (onlyFromTarget, shared) — mass
+  // conservation here also guards the dangling-mass redistribution path.
+  seedFocus(store);
+  const unfocusedSum = store.pageRank().reduce((s, r) => s + r.rank, 0);
+  const focusedSum = store.pageRank({ focus: ["target"] }).reduce((s, r) => s + r.rank, 0);
+  expect(Math.abs(unfocusedSum - 1.0)).toBeLessThan(1e-6);
+  expect(Math.abs(focusedSum - 1.0)).toBeLessThan(1e-6);
+  db.close();
+});
+
+test("dangling mass is routed through the personalization vector, not uniformly", () => {
+  const db = openGraphDb(":memory:"); const store = new GraphStore(db);
+  seedFocus(store);
+  // Under focus on "target": "other" has no inbound edges AND zero teleport
+  // mass. With personalization-routed dangling mass (textbook personalized
+  // PageRank), the sinks' mass teleports back to "target" only, so "other"
+  // receives exactly 0. If dangling mass were instead redistributed
+  // UNIFORMLY across all nodes, "other" would get damping * danglingMass / n
+  // per iteration — a measurably positive rank. This pins the correct choice.
+  const focused = store.pageRank({ focus: ["target"] });
+  const other = focused.find((r) => r.name === "other")!;
+  expect(other.rank).toBeGreaterThanOrEqual(0);
+  expect(other.rank).toBeLessThan(1e-12);
+  db.close();
+});
+
 test("results are sorted descending by rank", () => {
   const db = openGraphDb(":memory:"); const store = new GraphStore(db);
   seedHub(store);
