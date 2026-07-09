@@ -5,6 +5,7 @@
 // nothing is shared across threads. Spawned per reindex run, terminated
 // after — never resident in the long-lived `serve` process.
 import type { SymbolInput } from "../graph/store.js";
+import type { Boundary } from "./extract.js";
 import type { ParseRequest, ParseResponse } from "./worker.js";
 
 // Worker script URL, resolved relative to THIS module (import.meta.url), so it
@@ -50,6 +51,7 @@ export interface ParseResult {
   path: string;
   langId: string;
   symbols: SymbolInput[];
+  boundaries: Boundary[];
   error?: string;
 }
 
@@ -84,9 +86,9 @@ export class ParserPool {
         if (!entry) return;
         this.pending.delete(res.id);
         if ("error" in res) {
-          entry.resolve({ path: res.path, langId: "", symbols: [], error: res.error });
+          entry.resolve({ path: res.path, langId: "", symbols: [], boundaries: [], error: res.error });
         } else {
-          entry.resolve({ path: res.path, langId: res.langId, symbols: res.symbols });
+          entry.resolve({ path: res.path, langId: res.langId, symbols: res.symbols, boundaries: res.boundaries });
         }
         this.idle.push(worker);
         this.drainQueue();
@@ -106,6 +108,7 @@ export class ParserPool {
             path: entry.path,
             langId: "",
             symbols: [],
+            boundaries: [],
             error: `worker error: ${event.message || String(event.error || "unknown worker error")}`,
           });
           this.pending.delete(id);
@@ -126,7 +129,7 @@ export class ParserPool {
     if (this.workers.length === 0 && this.queue.length > 0) {
       const stranded = this.queue.splice(0, this.queue.length);
       for (const { job, resolve } of stranded) {
-        resolve({ path: job.path, langId: "", symbols: [], error: "worker pool has no live workers" });
+        resolve({ path: job.path, langId: "", symbols: [], boundaries: [], error: "worker pool has no live workers" });
       }
       return;
     }

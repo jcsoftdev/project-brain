@@ -72,6 +72,24 @@ test("ParserPool.parseMany output matches sequential WasmParser output (parity)"
   }
 });
 
+test("ParserPool.parseOne returns serializable AST boundaries alongside symbols", async () => {
+  const pool = new ParserPool(2);
+  try {
+    const result = await pool.parseOne({
+      path: "add.ts",
+      content: "export function add(a: number, b: number) { return a + b; }",
+      ext: ".ts",
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.boundaries.some((b) => b.name === "add")).toBe(true);
+    // Worker → main-thread messages are structured-clone/JSON safe — the
+    // boundaries must survive a JSON roundtrip identically (no Node/Tree refs).
+    expect(JSON.parse(JSON.stringify(result.boundaries))).toEqual(result.boundaries);
+  } finally {
+    pool.dispose();
+  }
+});
+
 test("ParserPool never spawns more workers than its configured size", async () => {
   const pool = new ParserPool(3);
   try {

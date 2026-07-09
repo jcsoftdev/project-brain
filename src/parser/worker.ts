@@ -6,7 +6,7 @@
 // long-lived `serve` process — see docs/superpowers/specs/
 // 2026-06-16-structural-layer-design.md §3.3 (heavy work stays ephemeral).
 import { WasmParser } from "./wasm.js";
-import { extract } from "./extract.js";
+import { extract, extractBoundaries, type Boundary } from "./extract.js";
 import type { SymbolInput } from "../graph/store.js";
 
 export interface ParseRequest {
@@ -21,6 +21,13 @@ export interface ParseSuccess {
   path: string;
   langId: string;
   symbols: SymbolInput[];
+  /**
+   * Serializable AST declaration boundaries (byte/line spans, no Node/Tree
+   * references — tree-sitter Tree objects cannot cross the worker
+   * postMessage boundary). Used by the cAST chunker to derive chunk
+   * boundaries from real AST structure instead of regex/brace-counting.
+   */
+  boundaries: Boundary[];
 }
 
 export interface ParseFailure {
@@ -52,13 +59,14 @@ self.onmessage = async (event: MessageEvent<ParseRequest>) => {
     if (!pt) {
       // Unsupported extension or gated input (oversize / pathological line) —
       // not an error, just no structural data for this file.
-      const success: ParseSuccess = { id, path, langId: "", symbols: [] };
+      const success: ParseSuccess = { id, path, langId: "", symbols: [], boundaries: [] };
       postMessage(success);
       return;
     }
     try {
       const symbols = extract(pt.tree, pt.langId, content);
-      const success: ParseSuccess = { id, path, langId: pt.langId, symbols };
+      const boundaries = extractBoundaries(pt.tree, pt.langId);
+      const success: ParseSuccess = { id, path, langId: pt.langId, symbols, boundaries };
       postMessage(success);
     } finally {
       pt.tree.delete();

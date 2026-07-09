@@ -171,6 +171,61 @@ function collectCalls(
   }
 }
 
+/**
+ * A serializable AST declaration boundary — byte/line span of a declaration
+ * node, suitable for postMessage across worker threads (plain data only,
+ * no tree-sitter Node/Tree references). Used by the cAST chunker
+ * (src/indexer/cast.ts) to derive chunk boundaries from real AST structure
+ * instead of regex/brace-counting.
+ */
+export interface Boundary {
+  name: string;
+  kind: string;
+  start_index: number;
+  end_index: number;
+  start_line: number;
+  end_line: number;
+  /** Nesting depth among matched declaration nodes (0 = top-level). */
+  depth: number;
+}
+
+// Walk the full AST and extract serializable declaration boundaries
+// (byte offsets + line numbers), including nested declarations with their
+// depth, so a chunker can recursively split an oversized parent via its
+// children. Reuses the same DECL_KINDS map and name-resolution logic as
+// extract() but tracks nesting depth and does NOT collect call edges.
+export function extractBoundaries(tree: any, langId: string): Boundary[] {
+  const kinds = DECL_KINDS[langId] ?? DECL_KINDS.typescript;
+  const out: Boundary[] = [];
+  const stack: Array<{ node: any; depth: number }> = [{ node: tree.rootNode, depth: 0 }];
+  while (stack.length) {
+    const { node: n, depth } = stack.pop()!;
+    const kind = kinds[n.type];
+    let childDepth = depth;
+    if (kind) {
+      const name = nameOf(n);
+      if (name) {
+        out.push({
+          name,
+          kind,
+          start_index: n.startIndex,
+          end_index: n.endIndex,
+          start_line: n.startPosition.row + 1,
+          end_line: n.endPosition.row + 1,
+          depth,
+        });
+        childDepth = depth + 1;
+      }
+    }
+    for (let i = 0; i < (n.namedChildCount ?? 0); i++) {
+      stack.push({ node: n.namedChild(i), depth: childDepth });
+    }
+  }
+  // Boundaries must be in source order for the greedy chunker to work.
+  out.sort((a, b) => a.start_index - b.start_index);
+  return out;
+}
+
 // Walk the full AST and extract symbols with their call edges.
 // Uses plain node iteration — no Query/cursor objects, nothing to leak.
 export function extract(tree: any, langId: string, _source: string): SymbolInput[] {
