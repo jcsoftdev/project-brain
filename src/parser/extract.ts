@@ -1,8 +1,11 @@
 import type { SymbolInput, EdgeInput } from "../graph/store";
+import type { SymbolKind } from "../types";
 
 // Per-language map of node type → symbol kind.
 // Node type names confirmed against real grammar outputs from web-tree-sitter.
-const DECL_KINDS: Record<string, Record<string, string>> = {
+// Values are typed as SymbolKind so the union in src/types.ts is enforced at
+// the source: adding a kind here without extending SymbolKind fails to compile.
+const DECL_KINDS: Record<string, Record<string, SymbolKind>> = {
   typescript: {
     function_declaration: "function",
     method_definition: "method",
@@ -180,7 +183,7 @@ function collectCalls(
  */
 export interface Boundary {
   name: string;
-  kind: string;
+  kind: SymbolKind;
   start_index: number;
   end_index: number;
   start_line: number;

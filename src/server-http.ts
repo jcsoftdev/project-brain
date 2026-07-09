@@ -74,7 +74,7 @@ export function authorize(
 export async function createHttpServer(
   opts: HttpServerOptions
 ): Promise<HttpServerHandle> {
-  const { token, port } = opts;
+  const { token, port: requestedPort } = opts;
 
   // Validate token — reject immediately if blank (HTTP-4a)
   if (!token || !token.trim()) {
@@ -111,7 +111,7 @@ export async function createHttpServer(
 
   // Build the Bun HTTP server — auth middleware runs BEFORE transport
   const bunServer = Bun.serve({
-    port,
+    port: requestedPort,
     fetch: async (req: Request): Promise<Response> => {
       // Bearer auth check — NEVER log token or Authorization header value
       const authHeader = req.headers.get("authorization") ?? undefined;
@@ -128,8 +128,10 @@ export async function createHttpServer(
   });
 
   return {
-    // Report the actually-bound port (matters when port 0 = ephemeral)
-    port: bunServer.port,
+    // Report the actually-bound port (matters when port 0 = ephemeral).
+    // bunServer.port is typed number | undefined in bun-types; fall back to
+    // the originally requested port if Bun ever omits it.
+    port: bunServer.port ?? requestedPort,
     async close(): Promise<void> {
       await transport.close();
       bunServer.stop(true);

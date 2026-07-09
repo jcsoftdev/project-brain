@@ -1,6 +1,7 @@
 import { computeHash } from "./hash.js";
 import { castChunk } from "./cast.js";
 import type { Boundary } from "../parser/extract.js";
+import type { SymbolKind } from "../types.js";
 
 const MAX_CHUNK_SIZE = 1600;
 const OVERLAP_SIZE = 120;
@@ -13,7 +14,7 @@ interface RawChunk {
   content_hash: string;
   updated_at: number;
   symbol_name?: string;
-  symbol_kind?: string;
+  symbol_kind?: SymbolKind;
   signature?: string;
   start_line?: number;
   end_line?: number;
@@ -22,7 +23,7 @@ interface RawChunk {
 export interface Section {
   content: string;
   symbol_name?: string;
-  symbol_kind?: string;
+  symbol_kind?: SymbolKind;
   signature?: string;
   start_line?: number;
   end_line?: number;
@@ -274,16 +275,31 @@ function countBraces(line: string, state: { inBlock: boolean }): number {
 }
 
 /**
+ * Map matched declaration keywords to the canonical SymbolKind union.
+ * Language-specific function keywords (fn/def/func) normalize to "function";
+ * binding keywords (val/var/const) normalize to "variable" — storing the raw
+ * keyword would put out-of-union strings (e.g. "def") into the index, which
+ * the SymbolKind boundary validation in the store would then degrade to
+ * "unknown" on read.
+ */
+const KEYWORD_KINDS: Record<string, SymbolKind> = {
+  function: "function", fn: "function", def: "function", func: "function",
+  class: "class", interface: "interface", type: "type", enum: "enum",
+  struct: "struct", trait: "trait", impl: "impl",
+  val: "variable", var: "variable", const: "variable",
+};
+
+/**
  * Extract symbol name and kind from a declaration line (best-effort, language-agnostic).
  */
-function extractSymbol(line: string): { name: string; kind: string } {
+function extractSymbol(line: string): { name: string; kind: SymbolKind } {
   const t = line.trim();
   const m = t.match(/\b(function|class|interface|type|enum|struct|trait|impl|fn|def|func|val|var|const)\b\s+([A-Za-z_][\w]*)/)
     ?? t.match(/\b([A-Za-z_][\w]*)\s*[:=]\s*(?:async\s*)?\(/)   // const f = (..) =>
     ?? t.match(/\b([A-Za-z_][\w]*)\s*\(/);                      // method(...)
   if (!m) return { name: "", kind: "unknown" };
-  const kw = /^(function|class|interface|type|enum|struct|trait|impl|fn|def|func|val|var|const)$/.test(m[1] ?? "");
-  return { name: (kw ? m[2] : m[1]) ?? "", kind: kw ? (m[1] as string) : "function" };
+  const kw = KEYWORD_KINDS[m[1] ?? ""];
+  return { name: (kw ? m[2] : m[1]) ?? "", kind: kw ?? "function" };
 }
 
 /** Split code content by function/class boundaries (language-aware). */
@@ -297,7 +313,7 @@ function splitCode(content: string, ext = ""): Section[] {
 
   // Track symbol metadata for current section
   let currentSymbolName: string | undefined;
-  let currentSymbolKind: string | undefined;
+  let currentSymbolKind: SymbolKind | undefined;
   let currentSignature: string | undefined;
   let currentStartLine = 1;
 

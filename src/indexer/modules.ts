@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { readdir, stat, mkdir, writeFile, access } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { WATCHER_ALWAYS_IGNORE } from "../constants.js";
 
 /** Recognized source extensions that qualify a directory as a module. */
@@ -32,7 +33,7 @@ function buildIgnoreSet(): Set<string> {
 
 /** Recursively check if a directory contains at least one file with a recognized source extension. */
 async function hasSourceFile(dirPath: string): Promise<boolean> {
-  let entries: Awaited<ReturnType<typeof readdir>>;
+  let entries: Dirent[];
   try {
     entries = await readdir(dirPath, { withFileTypes: true });
   } catch {
@@ -67,7 +68,7 @@ async function hasSourceFile(dirPath: string): Promise<boolean> {
 export async function detectModules(root: string): Promise<string[]> {
   const ignoreSet = buildIgnoreSet();
 
-  let entries: Awaited<ReturnType<typeof readdir>>;
+  let entries: Dirent[];
   try {
     entries = await readdir(root, { withFileTypes: true });
   } catch {

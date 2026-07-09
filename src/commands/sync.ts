@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { readFile, writeFile, readdir, mkdir } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { computeHash } from "../indexer/hash.js";
 import { chunkContent } from "../indexer/parser.js";
 import { shouldIgnore, loadPatterns } from "../indexer/gitignore.js";
@@ -104,7 +105,7 @@ async function listAllFiles(
 ): Promise<string[]> {
   const results: string[] = [];
 
-  let entries: Awaited<ReturnType<typeof readdir>>;
+  let entries: Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
@@ -454,11 +455,9 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           source: entry.relPath, module: raw.module,
           content_hash: raw.content_hash, updated_at: raw.updated_at,
           symbol_name: raw.symbol_name,
-          // raw.symbol_kind is `string | undefined` on RawChunk (parser.ts), so this
-          // assertion is structurally required even though SymbolKind now covers every
-          // value DECL_KINDS/extractBoundaries can actually emit (src/parser/extract.ts) —
-          // it's a truthful narrowing, not a lie to the type checker.
-          symbol_kind: raw.symbol_kind as import("../types.js").SymbolKind | undefined,
+          // RawChunk.symbol_kind is SymbolKind since parser.ts/extract.ts were
+          // made honest at the source — no assertion needed anymore.
+          symbol_kind: raw.symbol_kind,
           signature: raw.signature,
           start_line: raw.start_line,
           end_line: raw.end_line,

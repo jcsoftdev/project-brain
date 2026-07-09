@@ -169,8 +169,7 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
       try { await readFile(manifestPath, "utf-8"); alreadyIndexed = true; } catch {}
 
       if (alreadyIndexed) {
-        const syncResult = await runSync({ root, projectId, store, embeddings, onProgress: options.onProgress });
-        indexStats = { ingested: syncResult.ingested, skipped: syncResult.skipped, deleted: syncResult.deleted, scanned: syncResult.scanned };
+        indexStats = await runSync({ root, projectId, store, embeddings, onProgress: options.onProgress });
       } else {
         indexStats = await runReindex({ root, projectId, store, embeddings, onProgress: options.onProgress });
       }

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { writeFile, mkdir } from "node:fs/promises";
 import { runSync } from "./sync.js";
-import type { SyncProgress } from "./sync.js";
+import type { SyncProgress, SyncResult } from "./sync.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
 
 const CONFIG_DIR = ".project-brain";
@@ -20,16 +20,12 @@ export interface ReindexOptions {
   onProgress?: (p: SyncProgress) => void;
 }
 
-export interface ReindexResult {
-  /** Files indexed this run. */
-  ingested: number;
-  /** Always 0 for reindex (full re-scan, no skipping). */
-  skipped: number;
-  /** Files deleted from the store. */
-  deleted: number;
-  /** Total files scanned. */
-  scanned: number;
-}
+/**
+ * Result of a reindex run. Identical shape to SyncResult since runReindex
+ * delegates entirely to runSync — `skipped` is always 0 for reindex (full
+ * re-scan, no skipping).
+ */
+export type ReindexResult = SyncResult;
 
 /**
  * Core reindex logic — DI-friendly.

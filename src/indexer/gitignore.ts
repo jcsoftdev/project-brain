@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { Dirent } from "node:fs";
 
 /** Directories/patterns always ignored regardless of .gitignore. */
 const ALWAYS_IGNORE = [
@@ -80,7 +81,7 @@ export async function loadPatterns(root: string): Promise<string[]> {
   async function walk(dir: string): Promise<string[]> {
     const own = await loadPatternsFromDir(dir, root);
 
-    let entries: Awaited<ReturnType<typeof readdir>>;
+    let entries: Dirent[];
     try {
       entries = await readdir(dir, { withFileTypes: true });
     } catch {

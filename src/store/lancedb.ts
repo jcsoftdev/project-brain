@@ -3,11 +3,22 @@ import { Index, rerankers } from "@lancedb/lancedb";
 import { EMBEDDING_MODEL, TABLE_SUFFIX, VECTOR_DIM } from "../constants.js";
 import { readTableMeta, writeTableMeta } from "./meta.js";
 import type { TableMeta } from "./meta.js";
-import type { Chunk, SearchResult, VectorStore } from "../types.js";
+import type { Chunk, SearchResult, VectorStore, SymbolKind } from "../types.js";
 
 /** Sanitize project name for use as table name. */
 function sanitizeProject(project: string): string {
   return project.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 64);
+}
+
+const SYMBOL_KINDS = new Set<SymbolKind>([
+  "function", "method", "class", "interface", "type",
+  "enum", "struct", "impl", "trait", "variable", "section", "unknown",
+]);
+
+/** Validate an untyped LanceDB row field against the known SymbolKind union. Unknown/malformed values map to "unknown" rather than silently passing through. */
+function asSymbolKind(s: string | undefined): SymbolKind | undefined {
+  if (s === undefined) return undefined;
+  return (SYMBOL_KINDS as Set<string>).has(s) ? (s as SymbolKind) : "unknown";
 }
 
 /**
@@ -296,7 +307,7 @@ export class LanceDbStore implements VectorStore {
         content_hash: r.content_hash as string,
         updated_at: r.updated_at as number,
         symbol_name: r.symbol_name as string | undefined,
-        symbol_kind: r.symbol_kind as string | undefined,
+        symbol_kind: asSymbolKind(r.symbol_kind as string | undefined),
         signature: r.signature as string | undefined,
         start_line: r.start_line as number | undefined,
         end_line: r.end_line as number | undefined,
@@ -439,7 +450,7 @@ export class LanceDbStore implements VectorStore {
         content_hash: r.content_hash as string,
         updated_at: r.updated_at as number,
         symbol_name: r.symbol_name as string | undefined,
-        symbol_kind: r.symbol_kind as string | undefined,
+        symbol_kind: asSymbolKind(r.symbol_kind as string | undefined),
         signature: r.signature as string | undefined,
         start_line: r.start_line as number | undefined,
         end_line: r.end_line as number | undefined,
@@ -465,7 +476,7 @@ export class LanceDbStore implements VectorStore {
           content_hash: r.content_hash as string,
           updated_at: r.updated_at as number,
           symbol_name: r.symbol_name as string | undefined,
-          symbol_kind: r.symbol_kind as string | undefined,
+          symbol_kind: asSymbolKind(r.symbol_kind as string | undefined),
           signature: r.signature as string | undefined,
           start_line: r.start_line as number | undefined,
           end_line: r.end_line as number | undefined,

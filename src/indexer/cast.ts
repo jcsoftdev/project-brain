@@ -1,4 +1,5 @@
 import type { Boundary } from "../parser/extract.js";
+import type { SymbolKind } from "../types.js";
 
 /**
  * cAST-style AST-aware chunking (arxiv 2506.15655, reference impl
@@ -17,7 +18,7 @@ export const CAST_MAX_NON_WHITESPACE_CHARS = 2000;
 export interface Section {
   content: string;
   symbol_name?: string;
-  symbol_kind?: string;
+  symbol_kind?: SymbolKind;
   signature?: string;
   start_line?: number;
   end_line?: number;
@@ -50,7 +51,7 @@ function sectionFromSpan(
   source: string,
   start: number,
   end: number,
-  meta?: { name: string; kind: string },
+  meta?: { name: string; kind: SymbolKind },
 ): Section {
   const content = source.slice(start, end);
   return {
@@ -117,7 +118,7 @@ function greedyMerge(
   // representing that span.
   let accStart: number | null = null;
   let accEnd = rangeStart;
-  let accMeta: { name: string; kind: string } | undefined;
+  let accMeta: { name: string; kind: SymbolKind } | undefined;
 
   function flush(endAt: number) {
     if (accStart === null) return;
@@ -131,7 +132,7 @@ function greedyMerge(
   for (const node of siblings) {
     const gapStart = cursor;
     const gapEnd = node.start_index;
-    const candidateStart = accStart ?? gapStart;
+    const candidateStart: number = accStart ?? gapStart;
     const candidateEnd = node.end_index;
     const candidateText = source.slice(candidateStart, candidateEnd);
 

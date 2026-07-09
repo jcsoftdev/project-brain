@@ -1,12 +1,13 @@
 import { describe, it, expect } from "bun:test";
 import { castChunk, CAST_MAX_NON_WHITESPACE_CHARS } from "../../src/indexer/cast.js";
 import type { Boundary } from "../../src/parser/extract.js";
+import type { SymbolKind } from "../../src/types.js";
 
 /** Build a Boundary for a slice of `source` spanning [start, end) (byte offsets). */
 function boundary(
   source: string,
   name: string,
-  kind: string,
+  kind: SymbolKind,
   start: number,
   end: number,
   depth = 0,
