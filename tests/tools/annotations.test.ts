@@ -4,6 +4,7 @@ import { TOOL_CATALOG, toolAnnotations } from "../../src/constants.js";
 const READ_ONLY = [
   "search_context", "expand_context", "find_symbol", "find_callers",
   "find_callees", "impact", "list_modules", "get_module", "check_health",
+  "repo_map",
 ];
 
 describe("tool annotations in TOOL_CATALOG", () => {

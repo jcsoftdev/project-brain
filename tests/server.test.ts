@@ -32,6 +32,7 @@ describe("Server", () => {
       "find_callees",
       "impact",
       "trace_path",
+      "repo_map",
       "list_projects",
       "delete_project",
       "manage_adr",
@@ -41,7 +42,7 @@ describe("Server", () => {
     for (const name of expected) {
       expect(toolNames).toContain(name);
     }
-    expect(toolNames.length).toBe(18);
+    expect(toolNames.length).toBe(19);
   });
 
   it("wires SERVER_INSTRUCTIONS into the server (instructions const is passed)", async () => {

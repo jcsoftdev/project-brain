@@ -99,6 +99,7 @@ Once connected over MCP, AI assistants get these tools. The server also injects 
 | `find_callees` | Every symbol the named symbol calls (what X depends on). |
 | `impact` | Blast radius — all symbols transitively affected if the named symbol changes (reverse call graph, bounded by `maxDepth`). |
 | `trace_path` | Shortest call path between two symbols (how does A reach B) — ordered caller→callee chain. |
+| `repo_map` | Token-budgeted overview of the most important symbols in the codebase, ranked by PageRank over the call graph. Use for repo orientation / where to start reading. |
 
 ### Modules & knowledge
 

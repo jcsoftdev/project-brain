@@ -14,6 +14,7 @@ import { register as registerFindSymbol } from "./tools/find-symbol.js";
 import { register as registerCallgraph } from "./tools/callgraph.js";
 import { register as registerImpact } from "./tools/impact.js";
 import { register as registerTracePath } from "./tools/trace-path.js";
+import { register as registerRepoMap } from "./tools/repo-map.js";
 import { register as registerProjects } from "./tools/projects.js";
 import { register as registerAdr } from "./tools/adr.js";
 import { register as registerArchitecture } from "./tools/architecture.js";
@@ -100,6 +101,7 @@ export async function createServer(options: ServerOptions = {}) {
   registerCallgraph(server, deps);
   registerImpact(server, deps);
   registerTracePath(server, deps);
+  registerRepoMap(server, deps);
   registerProjects(server, deps);
   registerAdr(server, deps);
   registerArchitecture(server, deps);
@@ -119,6 +121,7 @@ export async function createServer(options: ServerOptions = {}) {
     "find_callees",
     "impact",
     "trace_path",
+    "repo_map",
     "list_projects",
     "delete_project",
     "manage_adr",
