@@ -134,5 +134,35 @@ export class MyClass {
       const withoutBoundaries = chunkContent(content, "docs/x.md", "docs");
       expect(withBoundaries).toEqual(withoutBoundaries);
     });
+
+    it("does not re-slice a cAST section via splitBySize even when raw length exceeds 1600 (non-whitespace budget already respects cAST's 2000 limit)", () => {
+      // Pad with lots of whitespace/indentation so RAW length > 1600 while
+      // non-whitespace char count stays well under CAST_MAX_NON_WHITESPACE_CHARS (2000).
+      const padLines = Array.from({ length: 100 }, (_, i) => `        // pad line ${i}`).join("\n");
+      const content = `function helper() {\n${padLines}\n  return 1;\n}\n`;
+      expect(content.length).toBeGreaterThan(1600);
+
+      const nonWhitespace = content.replace(/\s/g, "").length;
+      expect(nonWhitespace).toBeLessThanOrEqual(2000);
+
+      const end = content.length;
+      const boundaries: Boundary[] = [
+        { name: "helper", kind: "function", start_index: 0, end_index: end, start_line: 1, end_line: 102, depth: 0 },
+      ];
+
+      const chunks = chunkContent(content, "src/foo.ts", "src", boundaries);
+
+      expect(chunks.length).toBe(1);
+      expect(chunks[0].content).toBe(content);
+    });
+
+    it("legacy path (no boundaries) still splits raw content > 1600 chars via splitBySize with overlap", () => {
+      const content = "x".repeat(3000);
+      const chunks = chunkContent(content, "big.ts", "mod");
+      expect(chunks.length).toBeGreaterThan(1);
+      // 120-byte overlap: tail of first chunk should reappear at the head of the second.
+      const overlap = chunks[0].content.slice(-120);
+      expect(chunks[1].content.startsWith(overlap)).toBe(true);
+    });
   });
 });

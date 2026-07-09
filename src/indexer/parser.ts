@@ -48,10 +48,11 @@ export function chunkContent(
   const ext = source.includes(".") ? "." + source.split(".").pop()! : "";
   const isMarkdown = MD_EXTENSIONS.includes(ext.toLowerCase());
 
+  const isCastPath = !isMarkdown && !!boundaries && boundaries.length > 0;
   const sections = isMarkdown
     ? splitMarkdown(content)
-    : boundaries && boundaries.length > 0
-      ? castChunk(content, boundaries)
+    : isCastPath
+      ? castChunk(content, boundaries!)
       : splitCode(content, ext);
 
   const chunks: RawChunk[] = [];
@@ -61,8 +62,14 @@ export function chunkContent(
     const section = sections[i];
     const sectionContent = section.content;
 
-    // If a section exceeds max size, split it further
-    if (sectionContent.length > MAX_CHUNK_SIZE) {
+    // cAST sections are already budget-bounded by non-whitespace char count
+    // (src/indexer/cast.ts, CAST_MAX_NON_WHITESPACE_CHARS) following real AST
+    // boundaries. Their raw byte length can legitimately exceed MAX_CHUNK_SIZE
+    // (e.g. whitespace-heavy code) without exceeding that budget — re-slicing
+    // them here with the legacy blind splitBySize would destroy the clean AST
+    // boundary cAST already produced. Only legacy (splitCode/splitMarkdown)
+    // sections get the raw-length re-split.
+    if (!isCastPath && sectionContent.length > MAX_CHUNK_SIZE) {
       const subChunks = splitBySize(sectionContent);
       for (let j = 0; j < subChunks.length; j++) {
         chunks.push(makeChunk(subChunks[j], source, module, now, i, j, section));
