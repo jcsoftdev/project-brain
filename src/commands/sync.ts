@@ -454,6 +454,10 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           source: entry.relPath, module: raw.module,
           content_hash: raw.content_hash, updated_at: raw.updated_at,
           symbol_name: raw.symbol_name,
+          // raw.symbol_kind is `string | undefined` on RawChunk (parser.ts), so this
+          // assertion is structurally required even though SymbolKind now covers every
+          // value DECL_KINDS/extractBoundaries can actually emit (src/parser/extract.ts) —
+          // it's a truthful narrowing, not a lie to the type checker.
           symbol_kind: raw.symbol_kind as import("../types.js").SymbolKind | undefined,
           signature: raw.signature,
           start_line: raw.start_line,

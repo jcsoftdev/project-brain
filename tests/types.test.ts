@@ -91,6 +91,27 @@ describe("Chunk symbol metadata", () => {
     };
     expect(r.signature).toContain("handleSearch");
   });
+
+  it("accepts non-TS DECL_KINDS vocabulary (struct/impl/trait) emitted by extractBoundaries for Rust/C/C#", () => {
+    const c: Chunk = {
+      id: "h-0", vector: [0], content: "x", source: "lib.rs", module: "src",
+      content_hash: "h", updated_at: 1,
+      symbol_name: "MyStruct", symbol_kind: "struct",
+      signature: "struct MyStruct", start_line: 1, end_line: 5,
+    };
+    expect(c.symbol_kind).toBe("struct");
+
+    // Mirrors sync.ts's `raw.symbol_kind as SymbolKind` flow — a raw string
+    // kind coming out of parser.ts's RawChunk cast into a Chunk field.
+    const rawKind: string = "impl";
+    const asserted = rawKind as import("../src/types.js").SymbolKind;
+    const traitChunk: Chunk = {
+      id: "h-1", vector: [0], content: "y", source: "lib.rs", module: "src",
+      content_hash: "h", updated_at: 1,
+      symbol_kind: asserted,
+    };
+    expect(traitChunk.symbol_kind).toBe("impl");
+  });
 });
 
 describe("VectorStore.getChunksByIds", () => {

@@ -1,6 +1,12 @@
+// Covers every kind string extractBoundaries/DECL_KINDS (src/parser/extract.ts)
+// can emit across all supported languages (function, method, class, interface,
+// type, enum, struct, impl, trait), plus the legacy/local-only kinds emitted
+// outside cAST: "variable" (legacy splitCode extractSymbol), "section"
+// (splitMarkdown), and "unknown" (fallback).
 export type SymbolKind =
   | "function" | "method" | "class" | "interface" | "type"
-  | "enum" | "variable" | "section" | "unknown";
+  | "enum" | "struct" | "impl" | "trait"
+  | "variable" | "section" | "unknown";
 
 /** A chunk of knowledge stored in the vector database. */
 export interface Chunk {
