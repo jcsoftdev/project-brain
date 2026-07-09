@@ -127,11 +127,17 @@ export async function createHttpServer(
     },
   });
 
+  // bunServer.port is typed number | undefined in bun-types, but Bun.serve()
+  // always sets it once the server is listening — treat undefined here as an
+  // invariant violation rather than silently reporting requestedPort, which
+  // would be 0 (wrong) whenever the caller asked for an ephemeral port.
+  if (bunServer.port === undefined) {
+    throw new Error("Bun.serve() did not report a bound port");
+  }
+
   return {
     // Report the actually-bound port (matters when port 0 = ephemeral).
-    // bunServer.port is typed number | undefined in bun-types; fall back to
-    // the originally requested port if Bun ever omits it.
-    port: bunServer.port ?? requestedPort,
+    port: bunServer.port,
     async close(): Promise<void> {
       await transport.close();
       bunServer.stop(true);
