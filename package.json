@@ -30,6 +30,7 @@
   "scripts": {
     "dev": "bun run src/cli.ts",
     "test": "bun test",
+    "typecheck": "tsc --noEmit",
     "setup": "bun run src/cli.ts setup",
     "init": "bun run src/cli.ts init",
     "build": "bun build ./src/cli.ts ./src/parser/worker.ts --compile --outfile dist/project-brain"
