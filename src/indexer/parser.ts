@@ -1,4 +1,6 @@
 import { computeHash } from "./hash.js";
+import { castChunk } from "./cast.js";
+import type { Boundary } from "../parser/extract.js";
 
 const MAX_CHUNK_SIZE = 1600;
 const OVERLAP_SIZE = 120;
@@ -17,7 +19,7 @@ interface RawChunk {
   end_line?: number;
 }
 
-interface Section {
+export interface Section {
   content: string;
   symbol_name?: string;
   symbol_kind?: string;
@@ -31,19 +33,26 @@ const MD_EXTENSIONS = [".md", ".mdx", ".markdown"];
 
 /**
  * Chunk file content into semantically meaningful pieces.
- * Markdown: split by headings. Code: split by function/class boundaries.
+ * Markdown: split by headings. Code: split by real AST declaration
+ * boundaries (cAST, src/indexer/cast.ts) when `boundaries` is provided and
+ * non-empty; otherwise falls back to the legacy regex/brace-counter
+ * splitCode — used for markdown, unsupported languages, parse failures, and
+ * oversize-skipped files, none of which ever produce AST boundaries.
  */
 export function chunkContent(
   content: string,
   source: string,
-  module: string
+  module: string,
+  boundaries?: Boundary[]
 ): RawChunk[] {
   const ext = source.includes(".") ? "." + source.split(".").pop()! : "";
   const isMarkdown = MD_EXTENSIONS.includes(ext.toLowerCase());
 
   const sections = isMarkdown
     ? splitMarkdown(content)
-    : splitCode(content, ext);
+    : boundaries && boundaries.length > 0
+      ? castChunk(content, boundaries)
+      : splitCode(content, ext);
 
   const chunks: RawChunk[] = [];
   const now = Date.now();

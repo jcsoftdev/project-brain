@@ -111,8 +111,10 @@ function greedyMerge(
   const sections: Section[] = [];
 
   // Accumulator for the chunk currently being built: a contiguous byte span
-  // plus the metadata of the LAST boundary node merged into it (cAST/most
-  // chunkers report the trailing/primary symbol when multiple nodes merge).
+  // plus the metadata of the FIRST boundary node merged into it — when
+  // several small sibling declarations merge into one chunk, the leading
+  // symbol is the one a reader scanning search results would recognize as
+  // representing that span.
   let accStart: number | null = null;
   let accEnd = rangeStart;
   let accMeta: { name: string; kind: string } | undefined;
@@ -134,10 +136,11 @@ function greedyMerge(
     const candidateText = source.slice(candidateStart, candidateEnd);
 
     if (nonWhitespaceLength(candidateText) <= CAST_MAX_NON_WHITESPACE_CHARS) {
-      // Fits — merge gap + node into the current accumulator.
+      // Fits — merge gap + node into the current accumulator. Keep the
+      // FIRST node's metadata as the chunk's primary symbol.
       accStart = candidateStart;
       accEnd = candidateEnd;
-      accMeta = { name: node.name, kind: node.kind };
+      if (!accMeta) accMeta = { name: node.name, kind: node.kind };
     } else {
       // Adding this node would exceed budget.
       // First, flush whatever was already accumulated (gap text before this

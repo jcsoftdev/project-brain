@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { chunkContent } from "../../src/indexer/parser.js";
+import type { Boundary } from "../../src/parser/extract.js";
 
 describe("parser / chunker", () => {
   describe("markdown splitting", () => {
@@ -98,6 +99,40 @@ export class MyClass {
           endOfFirst.length > 0 || startOfSecond.length > 0
         ).toBe(true);
       }
+    });
+  });
+
+  describe("AST-aware chunking (boundaries param)", () => {
+    it("uses castChunk when non-empty boundaries are provided, carrying AST symbol metadata", () => {
+      const content = `function helper() { return 1; }\n`;
+      const end = content.indexOf("}") + 1;
+      const boundaries: Boundary[] = [
+        { name: "helper", kind: "function", start_index: 0, end_index: end, start_line: 1, end_line: 1, depth: 0 },
+      ];
+
+      const chunks = chunkContent(content, "src/main.ts", "src", boundaries);
+
+      expect(chunks.length).toBe(1);
+      expect(chunks[0].symbol_name).toBe("helper");
+      expect(chunks[0].symbol_kind).toBe("function");
+      expect(chunks[0].content).toBe(content);
+    });
+
+    it("falls back to legacy regex/brace splitting when boundaries is undefined", () => {
+      const content = `function foo() {\n  return 1;\n}\n`;
+      const withoutBoundaries = chunkContent(content, "src/main.ts", "src");
+      const withEmptyBoundaries = chunkContent(content, "src/main.ts", "src", []);
+      expect(withoutBoundaries).toEqual(withEmptyBoundaries);
+    });
+
+    it("markdown files ignore boundaries entirely (markdown path is unchanged)", () => {
+      const content = "# Title\n\nSome text.\n";
+      const boundaries: Boundary[] = [
+        { name: "Title", kind: "function", start_index: 0, end_index: content.length, start_line: 1, end_line: 3, depth: 0 },
+      ];
+      const withBoundaries = chunkContent(content, "docs/x.md", "docs", boundaries);
+      const withoutBoundaries = chunkContent(content, "docs/x.md", "docs");
+      expect(withBoundaries).toEqual(withoutBoundaries);
     });
   });
 });

@@ -7,7 +7,7 @@ import { WATCHER_ALWAYS_IGNORE, GRAPH_DB_FILE } from "../constants.js";
 import { mapLimit } from "../indexer/concurrency.js";
 import type { EmbeddingClient, VectorStore, Chunk } from "../types.js";
 import { WasmParser } from "../parser/wasm.js";
-import { extract } from "../parser/extract.js";
+import { extract, extractBoundaries } from "../parser/extract.js";
 import { ParserPool, POOL_MIN_FILES } from "../parser/pool.js";
 import { GraphStore } from "../graph/store.js";
 import { openGraphDb } from "../graph/db.js";
@@ -296,6 +296,14 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           // whole sync (which would also kill embedding of every other file).
           // Any throw from warm/parse/extract is logged and structural work for
           // this file is skipped; embedding still proceeds below.
+          // Populated when structural extraction succeeds — fed into
+          // chunkContent below so code files get real AST-derived (cAST)
+          // chunk boundaries instead of the regex/brace-counter fallback.
+          // Stays empty on parse failure, unsupported extensions, or when
+          // the WASM parser could not initialise — chunkContent falls back
+          // to the legacy splitter automatically when boundaries is empty.
+          let boundaries: ReturnType<typeof extractBoundaries> = [];
+
           try {
             if (pool) {
               const result = await pool.parseOne({ path: relPath, content, ext });
@@ -303,6 +311,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
                 console.warn(`[sync] structural extraction skipped for ${relPath}:`, result.error);
               } else if (result.langId) {
                 graph.replaceFile(relPath, result.langId, hash, mtime, result.symbols);
+                boundaries = result.boundaries;
               }
             } else {
               if (parser && !warmedExts.has(ext)) {
@@ -314,6 +323,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
                 try {
                   const syms = extract(pt.tree, pt.langId, content);
                   graph.replaceFile(relPath, pt.langId, hash, mtime, syms);
+                  boundaries = extractBoundaries(pt.tree, pt.langId);
                 } finally {
                   pt.tree.delete();
                 }
@@ -323,7 +333,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
             console.warn(`[sync] structural extraction skipped for ${relPath}:`, err instanceof Error ? err.message : err);
           }
 
-          return { relPath, hash, mtime, rawChunks: chunkContent(content, relPath, module) };
+          return { relPath, hash, mtime, rawChunks: chunkContent(content, relPath, module, boundaries) };
         })
       );
 
