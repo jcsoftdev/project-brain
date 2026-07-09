@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   dirExists,
   upsertJsonConfig,
   standardServerEntry,
+  UnparseableConfigError,
 } from "../../src/registrars/json-config.js";
 
 describe("json-config helper", () => {
@@ -58,9 +59,64 @@ describe("json-config helper", () => {
       expect(config.mcpServers["project-brain"]).toBeDefined();
     });
 
-    it("recovers from invalid JSON by starting fresh with {}", async () => {
+    it("throws UnparseableConfigError on invalid JSON and never writes", async () => {
       const configPath = join(tempDir, "config.json");
-      await Bun.write(configPath, "{ this is not valid json ][");
+      const original = "{ this is not valid json ][";
+      await Bun.write(configPath, original);
+
+      await expect(
+        upsertJsonConfig(configPath, (config) => {
+          config.mcpServers ??= {};
+          config.mcpServers["project-brain"] = standardServerEntry(
+            "/usr/local/bin/project-brain"
+          );
+        })
+      ).rejects.toThrow(UnparseableConfigError);
+
+      const afterContent = await Bun.file(configPath).text();
+      expect(afterContent).toBe(original);
+    });
+
+    it("UnparseableConfigError message includes the config path", async () => {
+      const configPath = join(tempDir, "config.json");
+      await Bun.write(configPath, "{ nope");
+
+      try {
+        await upsertJsonConfig(configPath, (config) => {
+          config.mcpServers ??= {};
+        });
+        throw new Error("expected upsertJsonConfig to throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(UnparseableConfigError);
+        expect((err as Error).message).toContain(configPath);
+      }
+    });
+
+    it("throws UnparseableConfigError on JSONC with comments and never writes (no silent comment-stripping rewrite)", async () => {
+      const configPath = join(tempDir, "config.json");
+      const original = [
+        "{",
+        '  // this is a JSONC comment',
+        '  "mcpServers": { "other": { "command": "bar" } }',
+        "}",
+      ].join("\n");
+      await Bun.write(configPath, original);
+
+      await expect(
+        upsertJsonConfig(configPath, (config) => {
+          config.mcpServers ??= {};
+          config.mcpServers["project-brain"] = standardServerEntry(
+            "/usr/local/bin/project-brain"
+          );
+        })
+      ).rejects.toThrow(UnparseableConfigError);
+
+      const afterContent = await Bun.file(configPath).text();
+      expect(afterContent).toBe(original);
+    });
+
+    it("cleans up the tmp file after a successful atomic write (no .tmp left behind)", async () => {
+      const configPath = join(tempDir, "config.json");
 
       await upsertJsonConfig(configPath, (config) => {
         config.mcpServers ??= {};
@@ -69,8 +125,9 @@ describe("json-config helper", () => {
         );
       });
 
-      const config = JSON.parse(await Bun.file(configPath).text());
-      expect(config.mcpServers["project-brain"]).toBeDefined();
+      const entries = await readdir(tempDir);
+      const tmpLeftovers = entries.filter((name) => name.includes(".tmp-"));
+      expect(tmpLeftovers).toEqual([]);
     });
   });
 
