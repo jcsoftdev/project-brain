@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { VECTOR_DIM } from "../../src/constants.js";
 import type { VectorStore, EmbeddingClient, Chunk, SearchResult } from "../../src/types.js";
 
 /**
@@ -157,6 +158,7 @@ function makeFakeStore(): VectorStore & { upsertCalls: number } {
 /** Build a fake EmbeddingClient that returns vectors. */
 function makeFakeEmbeddings(): EmbeddingClient {
   return {
+    dim: VECTOR_DIM,
     async embed(texts: string[]) {
       return texts.map(() => new Array(768).fill(0.1));
     },
@@ -167,6 +169,7 @@ function makeFakeEmbeddings(): EmbeddingClient {
 /** Build a fake EmbeddingClient that always throws. */
 function makeThrowingEmbeddings(): EmbeddingClient {
   return {
+    dim: VECTOR_DIM,
     async embed() {
       throw new Error("Ollama unreachable (fake)");
     },

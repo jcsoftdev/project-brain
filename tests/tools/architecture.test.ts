@@ -3,10 +3,12 @@ import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { handleArchitecture } from "../../src/tools/architecture.js";
+import { VECTOR_DIM } from "../../src/constants.js";
 import type { VectorStore, EmbeddingClient } from "../../src/types.js";
 import type { GraphStore } from "../../src/graph/store.js";
 
 const mockEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async () => null,
   isAvailable: async () => false,
 };

@@ -57,6 +57,7 @@ describe("types", () => {
     };
 
     const mockEmbeddings: EmbeddingClient = {
+      dim: VECTOR_DIM,
       embed: async () => null,
       isAvailable: async () => false,
     };

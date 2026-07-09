@@ -33,6 +33,7 @@ function makeMockStore(): VectorStore & { upserted: Chunk[]; buildIndexesCalls: 
 
 function makeMockEmbeddings(available = true): EmbeddingClient {
   return {
+    dim: VECTOR_DIM,
     embed: async (texts) =>
       available ? texts.map(() => new Array(VECTOR_DIM).fill(0.1)) : null,
     isAvailable: async () => available,

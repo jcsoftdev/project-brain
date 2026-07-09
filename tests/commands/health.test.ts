@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { VECTOR_DIM } from "../../src/constants.js";
 import type { VectorStore, EmbeddingClient, Chunk, SearchResult } from "../../src/types.js";
 
 function makeStore(count: number): VectorStore {
@@ -24,6 +25,7 @@ function makeStore(count: number): VectorStore {
 
 function makeEmbeddings(available: boolean): EmbeddingClient {
   return {
+    dim: VECTOR_DIM,
     embed: async (texts) => (available ? texts.map(() => [0.1]) : null),
     isAvailable: async () => available,
   };

@@ -58,7 +58,6 @@ function makeMemoryStoreWithBatchLookup(): VectorStore & { data: Map<string, Chu
   let batchCalls = 0;
   return {
     ...base,
-    batchCalls: 0,
     get batchCalls() { return batchCalls; },
     getChunksByIds: async (project, ids) => {
       batchCalls++;

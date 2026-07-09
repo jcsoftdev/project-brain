@@ -16,12 +16,14 @@ let store: LanceDbStore;
 
 /** Embeddings that simulate being unavailable. */
 const unavailableEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async () => null,
   isAvailable: async () => false,
 };
 
 /** Working embeddings for seeding data. */
 const workingEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async (texts) => texts.map(() => new Array(VECTOR_DIM).fill(0.5)),
   isAvailable: async () => true,
 };

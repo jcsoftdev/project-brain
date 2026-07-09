@@ -1,8 +1,10 @@
 import { describe, it, expect } from "bun:test";
 import { handleListProjects, handleDeleteProject } from "../../src/tools/projects.js";
+import { VECTOR_DIM } from "../../src/constants.js";
 import type { VectorStore, EmbeddingClient } from "../../src/types.js";
 
 const mockEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async () => null,
   isAvailable: async () => false,
 };

@@ -64,6 +64,7 @@ function makeMemoryStore(): VectorStore & { data: Map<string, Chunk[]> } {
 }
 
 const mockEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async (texts) => texts.map(() => new Array(VECTOR_DIM).fill(0.1)),
   isAvailable: async () => true,
 };

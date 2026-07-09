@@ -22,6 +22,7 @@ function makeMockStore(modules: string[] = ["api", "auth", "core"], chunks: Chun
 }
 
 const mockEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async () => null,
   isAvailable: async () => false,
 };

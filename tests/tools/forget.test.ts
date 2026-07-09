@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { handleForget } from "../../src/tools/forget.js";
+import { VECTOR_DIM } from "../../src/constants.js";
 import type { VectorStore, EmbeddingClient, Chunk } from "../../src/types.js";
 
 function makeMockStore(chunksWithSource: number = 3): VectorStore & { deletedSource: string | null } {
@@ -25,6 +26,7 @@ function makeMockStore(chunksWithSource: number = 3): VectorStore & { deletedSou
 }
 
 const mockEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async () => null,
   isAvailable: async () => false,
 };

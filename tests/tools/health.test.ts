@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { handleHealth } from "../../src/tools/health.js";
+import { VECTOR_DIM } from "../../src/constants.js";
 import type { VectorStore, EmbeddingClient } from "../../src/types.js";
 
 function makeMockStore(count = 42): VectorStore {
@@ -22,6 +23,7 @@ function makeMockStore(count = 42): VectorStore {
 
 function makeMockEmbeddings(available = true): EmbeddingClient {
   return {
+    dim: VECTOR_DIM,
     embed: async () => (available ? [[0.1]] : null),
     isAvailable: async () => available,
   };
@@ -64,6 +66,7 @@ describe("check_health tool", () => {
 
   it("uses embeddingsFor(project) when provided — reports the resolved client's model + availability", async () => {
     const sentinel: EmbeddingClient = {
+      dim: VECTOR_DIM,
       model: "sentinel-model",
       embed: async () => [[0.9]],
       isAvailable: async () => false,

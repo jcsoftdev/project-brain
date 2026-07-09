@@ -35,6 +35,7 @@ function startMockServer(handler: (req: Request) => Response | Promise<Response>
     port: 0,
     fetch: handler,
   });
+  if (server.port === undefined) throw new Error("mock server has no port");
   port = server.port;
   return `http://127.0.0.1:${port}`;
 }

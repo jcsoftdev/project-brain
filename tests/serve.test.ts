@@ -42,6 +42,7 @@ function makeMemoryStore(): VectorStore {
 }
 
 const mockEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async (texts) => texts.map(() => new Array(VECTOR_DIM).fill(0.1)),
   isAvailable: async () => true,
 };
@@ -183,7 +184,7 @@ describe("createShutdownHandler", () => {
     await shutdown();
 
     expect(stopped).toBe(true);
-    expect(exitCode).toBe(0);
+    expect<number | null>(exitCode).toBe(0);
   });
 
   it("exits 0 even when there is no watcher", async () => {
@@ -195,6 +196,6 @@ describe("createShutdownHandler", () => {
     });
     await shutdown();
 
-    expect(exitCode).toBe(0);
+    expect<number | null>(exitCode).toBe(0);
   });
 });

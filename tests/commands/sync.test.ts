@@ -50,6 +50,7 @@ function makeMemoryStore(): VectorStore & { data: Map<string, Chunk[]> } {
 }
 
 const mockEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async (texts) =>
     texts.map(() => new Array(VECTOR_DIM).fill(0.1)),
   isAvailable: async () => true,
@@ -150,6 +151,7 @@ describe("sync command", () => {
       await writeFile(join(tempDir, "file.md"), "Some content to embed.");
 
       const nullEmbeddings: EmbeddingClient = {
+        dim: VECTOR_DIM,
         embed: async (_texts) => null,
         isAvailable: async () => true,
       };
@@ -208,6 +210,7 @@ describe("sync command", () => {
 
       let callCount = 0;
       const partialEmbeddings: EmbeddingClient = {
+        dim: VECTOR_DIM,
         embed: async (texts) => {
           callCount++;
           // Second batch fails, first succeeds
@@ -241,6 +244,7 @@ describe("sync command", () => {
       const progressEvents: Array<{ phase: string; current: number }> = [];
 
       const nullEmbeddings: EmbeddingClient = {
+        dim: VECTOR_DIM,
         embed: async (_texts) => null,
         isAvailable: async () => true,
       };

@@ -14,7 +14,7 @@ function makeMemoryStore(): VectorStore & { data: Map<string, Chunk[]> } {
     ensureTable: async () => {},
     upsert: async () => {},
     search: async (): Promise<SearchResult[]> => [],
-    deleteBySource: async (project, source) => {
+    deleteBySource: async (project: string, source: string) => {
       const existing = data.get(project) ?? [];
       data.set(project, existing.filter((c) => c.source !== source));
     },
@@ -22,7 +22,7 @@ function makeMemoryStore(): VectorStore & { data: Map<string, Chunk[]> } {
     getModuleChunks: async () => [],
     countChunks: async () => 0,
     optimize: async () => {},
-    batchReplace: async (project, sources, chunks) => {
+    batchReplace: async (project: string, sources: string[], chunks: Chunk[]) => {
       const existing = (data.get(project) ?? []).filter((c) => !sources.includes(c.source));
       data.set(project, [...existing, ...chunks]);
     },
@@ -34,6 +34,7 @@ function makeMemoryStore(): VectorStore & { data: Map<string, Chunk[]> } {
 }
 
 const noopEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async (texts) => texts.map(() => new Array(VECTOR_DIM).fill(0.0)),
   isAvailable: async () => true,
 };

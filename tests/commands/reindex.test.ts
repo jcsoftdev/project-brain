@@ -50,6 +50,7 @@ function makeMemoryStore(): VectorStore & { data: Map<string, Chunk[]> } {
 }
 
 const mockEmbeddings: EmbeddingClient = {
+  dim: VECTOR_DIM,
   embed: async (texts) =>
     texts.map(() => new Array(VECTOR_DIM).fill(0.1)),
   isAvailable: async () => true,
@@ -132,6 +133,7 @@ describe("reindex command", () => {
       await writeFile(join(tempDir, "file.md"), "Some content to embed.");
 
       const nullEmbeddings: EmbeddingClient = {
+        dim: VECTOR_DIM,
         embed: async (_texts) => null,
         isAvailable: async () => true,
       };
