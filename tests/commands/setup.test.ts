@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { UnparseableConfigError } from "../../src/registrars/json-config.js";
+import type { AIToolRegistrar } from "../../src/registrars/types.js";
 
 describe("setup command", () => {
   let tempDir: string;
@@ -83,5 +85,69 @@ describe("setup command", () => {
     });
 
     expect(result.dataDir).toBe(dataDir);
+  });
+
+  it("degrades gracefully when one registrar throws UnparseableConfigError: others still register", async () => {
+    const { runSetup } = await import("../../src/commands/setup.js");
+    const dataDir = join(tempDir, "data");
+
+    const badRegistrar: AIToolRegistrar = {
+      name: "Zed",
+      isInstalled: async () => true,
+      register: async () => {
+        throw new UnparseableConfigError(
+          join(tempDir, "zed-settings.json"),
+          new SyntaxError("Unexpected token")
+        );
+      },
+      writeRules: async () => {},
+    };
+
+    const goodRegistrar: AIToolRegistrar = {
+      name: "Cursor",
+      isInstalled: async () => true,
+      register: async () => {},
+      writeRules: async () => {},
+    };
+
+    const result = await runSetup({
+      dataDir,
+      skipOllama: true,
+      registrars: [badRegistrar, goodRegistrar],
+    });
+
+    expect(result.registeredTools).toEqual(["Cursor"]);
+  });
+
+  it("reports manual-instructions for an UnparseableConfigError without throwing out of runSetup", async () => {
+    const { runSetup } = await import("../../src/commands/setup.js");
+    const dataDir = join(tempDir, "data");
+    const badConfigPath = join(tempDir, "zed-settings.json");
+
+    const badRegistrar: AIToolRegistrar = {
+      name: "Zed",
+      isInstalled: async () => true,
+      register: async () => {
+        throw new UnparseableConfigError(
+          badConfigPath,
+          new SyntaxError("Unexpected token")
+        );
+      },
+      writeRules: async () => {},
+    };
+
+    const result = await runSetup({
+      dataDir,
+      skipOllama: true,
+      registrars: [badRegistrar],
+    });
+
+    expect(result.registeredTools).toEqual([]);
+    expect(result.manualInstructions).toHaveLength(1);
+    expect(result.manualInstructions[0]).toContain("Zed");
+    expect(result.manualInstructions[0]).toContain(badConfigPath);
+    expect(result.manualInstructions[0]).toContain("JSONC");
+    expect(result.manualInstructions[0]).toContain("command");
+    expect(result.manualInstructions[0]).toContain("stdio");
   });
 });

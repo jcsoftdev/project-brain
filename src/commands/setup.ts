@@ -2,19 +2,46 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { mkdir } from "node:fs/promises";
 import { detectEnvironment, type Environment } from "../env/detect.js";
-import { getRegistrars } from "../registrars/types.js";
+import { getRegistrars, type AIToolRegistrar } from "../registrars/types.js";
+import { UnparseableConfigError, standardServerEntry } from "../registrars/json-config.js";
 import { getGlobalRules } from "../rules/global.js";
 
 export interface SetupOptions {
   dataDir?: string;
   skipOllama?: boolean;
   skipRegistration?: boolean;
+  /** Injectable for testing; defaults to the real getRegistrars(). */
+  registrars?: AIToolRegistrar[];
 }
 
 export interface SetupResult {
   dataDir: string;
   env: Environment;
   registeredTools: string[];
+  /** Human-readable manual-setup instructions for registrars that could not
+   *  safely auto-register (e.g. an unparseable config file). */
+  manualInstructions: string[];
+}
+
+/** Tool names whose settings file is commonly hand-edited as JSONC (comments allowed). */
+const JSONC_TOOLS = new Set(["Zed", "VS Code"]);
+
+function buildManualInstructions(
+  toolName: string,
+  err: UnparseableConfigError
+): string {
+  const jsoncHint = JSONC_TOOLS.has(toolName)
+    ? ` This file commonly contains JSONC comments — project-brain does not rewrite JSONC files to avoid stripping your comments.`
+    : "";
+  const snippet = JSON.stringify(
+    standardServerEntry("<path-to-project-brain>"),
+    null,
+    2
+  );
+  return (
+    `${toolName} config at ${err.configPath} is not valid JSON (JSONC/comments?)` +
+    ` — add this entry manually:${jsoncHint}\n${snippet}`
+  );
 }
 
 const DEFAULT_DATA_DIR = join(homedir(), ".project-brain");
@@ -52,9 +79,10 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
 
   // 4. Register in AI tools
   const registeredTools: string[] = [];
+  const manualInstructions: string[] = [];
 
   if (!options.skipRegistration) {
-    const registrars = await getRegistrars();
+    const registrars = options.registrars ?? (await getRegistrars());
     const serverPath =
       Bun.which("project-brain") ??
       join(import.meta.dir, "../../src/cli.ts");
@@ -77,12 +105,16 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
 
         registeredTools.push(registrar.name);
       } catch (e: any) {
-        console.warn(`Warning: Failed to register in ${registrar.name}: ${e.message}`);
+        if (e instanceof UnparseableConfigError) {
+          manualInstructions.push(buildManualInstructions(registrar.name, e));
+        } else {
+          console.warn(`Warning: Failed to register in ${registrar.name}: ${e.message}`);
+        }
       }
     }
   }
 
-  return { dataDir, env, registeredTools };
+  return { dataDir, env, registeredTools, manualInstructions };
 }
 
 /** CLI entry point for the setup command. */
@@ -107,6 +139,13 @@ export async function execute(_args: string[]): Promise<void> {
 
   if (result.registeredTools.length > 0) {
     console.log(`\nRegistered in: ${result.registeredTools.join(", ")}`);
+  }
+
+  if (result.manualInstructions.length > 0) {
+    console.log(`\nManual setup needed:`);
+    for (const instructions of result.manualInstructions) {
+      console.log(`\n${instructions}`);
+    }
   }
 
   console.log("\nSetup complete. Run `project-brain init` in a project.");
