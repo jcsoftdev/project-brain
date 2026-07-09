@@ -32,7 +32,7 @@ export interface SearchResult {
   module: string;
   score: number;
   symbol_name?: string;
-  symbol_kind?: string;
+  symbol_kind?: SymbolKind;
   signature?: string;
   start_line?: number;
   end_line?: number;

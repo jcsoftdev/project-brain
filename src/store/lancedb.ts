@@ -234,6 +234,11 @@ export class LanceDbStore implements VectorStore {
         source: r.source as string,
         module: r.module as string,
         score: 1 / (1 + (r._distance as number)),
+        symbol_name: r.symbol_name as string | undefined,
+        symbol_kind: asSymbolKind(r.symbol_kind as string | undefined),
+        signature: r.signature as string | undefined,
+        start_line: r.start_line as number | undefined,
+        end_line: r.end_line as number | undefined,
       }));
     } catch (err) {
       // A genuine failure (dim mismatch, connection error, corrupted
@@ -381,7 +386,7 @@ export class LanceDbStore implements VectorStore {
         module: r.module as string,
         score: 1 / (1 + ((r._distance as number) ?? 0)),
         symbol_name: r.symbol_name as string | undefined,
-        symbol_kind: r.symbol_kind as string | undefined,
+        symbol_kind: asSymbolKind(r.symbol_kind as string | undefined),
         signature: r.signature as string | undefined,
         start_line: r.start_line as number | undefined,
         end_line: r.end_line as number | undefined,
@@ -407,7 +412,7 @@ export class LanceDbStore implements VectorStore {
         module: r.module as string,
         score: (r._score as number) ?? 1,
         symbol_name: r.symbol_name as string | undefined,
-        symbol_kind: r.symbol_kind as string | undefined,
+        symbol_kind: asSymbolKind(r.symbol_kind as string | undefined),
         signature: r.signature as string | undefined,
         start_line: r.start_line as number | undefined,
         end_line: r.end_line as number | undefined,

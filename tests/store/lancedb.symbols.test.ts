@@ -83,3 +83,59 @@ describe("LanceDbStore symbol field round-trip", () => {
     expect(got!.end_line).toBe(41);
   });
 });
+
+describe("LanceDbStore degrades legacy/unknown symbol_kind on all read paths", () => {
+  // Legacy pre-normalization chunks stored a raw keyword like "def"/"fn"
+  // instead of the current SymbolKind union. upsert() writes symbol_kind
+  // as a bare string (no validation on the write path), so casting through
+  // Chunk here faithfully reproduces a row that predates normalization.
+  const legacyChunk = {
+    id: "legacy-1",
+    vector: vec(2),
+    content: "def handle_search(args): pass",
+    source: "src/legacy.py",
+    module: "src",
+    content_hash: "legacy123",
+    updated_at: 1_000_000,
+    symbol_name: "handle_search",
+    symbol_kind: "def",
+    signature: "handle_search(args)",
+    start_line: 1,
+    end_line: 3,
+  } as unknown as Chunk;
+
+  it("search (vector-only) degrades legacy symbol_kind to unknown", async () => {
+    const store = new LanceDbStore(dir);
+    await store.ensureTable("proj", { model: "m", dim: 4 });
+    await store.upsert("proj", [legacyChunk]);
+
+    const results = await store.search("proj", vec(2), 5);
+    const match = results.find((r) => r.id === "legacy-1");
+    expect(match).toBeDefined();
+    expect(match!.symbol_kind).toBe("unknown");
+  });
+
+  it("hybridSearch degrades legacy symbol_kind to unknown", async () => {
+    const store = new LanceDbStore(dir);
+    await store.ensureTable("proj", { model: "m", dim: 4 });
+    await store.upsert("proj", [legacyChunk]);
+    await store.buildIndexes("proj");
+
+    const results = await store.hybridSearch("proj", vec(2), "handle_search", 5);
+    const match = results.find((r) => r.id === "legacy-1");
+    expect(match).toBeDefined();
+    expect(match!.symbol_kind).toBe("unknown");
+  });
+
+  it("ftsSearch degrades legacy symbol_kind to unknown", async () => {
+    const store = new LanceDbStore(dir);
+    await store.ensureTable("proj", { model: "m", dim: 4 });
+    await store.upsert("proj", [legacyChunk]);
+    await store.buildIndexes("proj");
+
+    const results = await store.ftsSearch!("proj", "handle_search", 5);
+    const match = results.find((r) => r.id === "legacy-1");
+    expect(match).toBeDefined();
+    expect(match!.symbol_kind).toBe("unknown");
+  });
+});
