@@ -8,7 +8,7 @@
 // network, or a spawn failure never affects the command being run.
 //
 // Opt out with BRAIN_NO_UPDATE_CHECK=1.
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { DATA_DIR, VERSION } from "./constants.js";
@@ -43,6 +43,52 @@ export function isNewer(latest: string, current: string): boolean {
   return false;
 }
 
+export type InstallManager = "bun" | "pnpm" | "yarn" | "npm";
+
+/**
+ * Pure detection of the install manager from the running binary's path.
+ * No fs/process access — caller resolves binPath (e.g. via realpath) and
+ * passes in env explicitly.
+ */
+export function detectInstallManager(
+  binPath: string,
+  env: Record<string, string | undefined>
+): InstallManager {
+  const normalized = binPath.replace(/\\/g, "/");
+
+  if (normalized.includes(".bun/bin") || normalized.includes(".bun/install/global")) {
+    return "bun";
+  }
+
+  const pnpmHome = env.PNPM_HOME?.replace(/\\/g, "/");
+  if (pnpmHome && normalized.startsWith(pnpmHome)) {
+    return "pnpm";
+  }
+  if (/(^|\/)pnpm(\/|$)/.test(normalized)) {
+    return "pnpm";
+  }
+
+  if (normalized.includes(".yarn/bin") || normalized.includes("yarn/global")) {
+    return "yarn";
+  }
+
+  return "npm";
+}
+
+/** Update command for the given install manager. */
+export function updateCommand(manager: InstallManager): string {
+  switch (manager) {
+    case "bun":
+      return "bun add -g project-brain@latest";
+    case "pnpm":
+      return "pnpm add -g project-brain@latest";
+    case "yarn":
+      return "yarn global add project-brain@latest";
+    case "npm":
+      return "npm install -g project-brain@latest";
+  }
+}
+
 export interface NotifierDeps {
   currentVersion: string;
   now: () => number;
@@ -51,6 +97,7 @@ export interface NotifierDeps {
   refresh: () => void;
   staleMs: number;
   optedOut: boolean;
+  updateCmd: string;
 }
 
 /** Pure, fully-injectable core. Never throws. */
@@ -68,7 +115,7 @@ export function checkForUpdate(deps: NotifierDeps): void {
     try {
       deps.warn(
         `\n  project-brain update available: ${deps.currentVersion} → ${cache.latest}\n` +
-          `  Run: npm install -g project-brain@latest\n`
+          `  Run: ${deps.updateCmd}\n`
       );
     } catch {
       /* fail-silent */
@@ -105,8 +152,18 @@ function spawnRefresh(): void {
   child.unref();
 }
 
+/** Resolve the true install location of the running binary, fail-silent to the raw path. */
+function resolveBinPath(): string {
+  try {
+    return realpathSync(process.execPath);
+  } catch {
+    return process.execPath;
+  }
+}
+
 /** Default wrapper wired to the real filesystem, registry, and process. */
 export function notifyIfUpdateAvailable(): void {
+  const manager = detectInstallManager(resolveBinPath(), process.env);
   checkForUpdate({
     currentVersion: VERSION,
     now: () => Date.now(),
@@ -115,5 +172,6 @@ export function notifyIfUpdateAvailable(): void {
     refresh: spawnRefresh,
     staleMs: STALE_MS,
     optedOut: process.env.BRAIN_NO_UPDATE_CHECK === "1" || process.env.CI === "true",
+    updateCmd: updateCommand(manager),
   });
 }

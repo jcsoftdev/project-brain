@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { isNewer, checkForUpdate } from "../src/notifier.js";
+import { isNewer, checkForUpdate, detectInstallManager, updateCommand } from "../src/notifier.js";
 
 describe("isNewer", () => {
   test("detects a newer minor/major/patch", () => {
@@ -21,6 +21,83 @@ describe("isNewer", () => {
   });
 });
 
+describe("detectInstallManager", () => {
+  test("detects bun from ~/.bun/bin", () => {
+    expect(detectInstallManager("/Users/x/.bun/bin/project-brain", {})).toBe("bun");
+  });
+
+  test("detects bun from ~/.bun/install/global", () => {
+    expect(
+      detectInstallManager(
+        "/Users/x/.bun/install/global/node_modules/.bin/project-brain",
+        {}
+      )
+    ).toBe("bun");
+  });
+
+  test("detects pnpm via PNPM_HOME env prefix", () => {
+    expect(
+      detectInstallManager("/Users/x/Library/pnpm/project-brain", {
+        PNPM_HOME: "/Users/x/Library/pnpm",
+      })
+    ).toBe("pnpm");
+  });
+
+  test("detects pnpm via path segment even without PNPM_HOME", () => {
+    expect(
+      detectInstallManager("/Users/x/Library/pnpm/project-brain", {})
+    ).toBe("pnpm");
+  });
+
+  test("detects yarn from .yarn/bin", () => {
+    expect(detectInstallManager("/Users/x/.yarn/bin/project-brain", {})).toBe("yarn");
+  });
+
+  test("detects yarn from yarn/global", () => {
+    expect(
+      detectInstallManager("/Users/x/.config/yarn/global/node_modules/.bin/project-brain", {})
+    ).toBe("yarn");
+  });
+
+  test("defaults to npm for /usr/local/lib/node_modules", () => {
+    expect(
+      detectInstallManager("/usr/local/lib/node_modules/.bin/project-brain", {})
+    ).toBe("npm");
+  });
+
+  test("defaults to npm for nvm-style paths", () => {
+    expect(
+      detectInstallManager(
+        "/Users/x/.nvm/versions/node/v20.0.0/bin/project-brain",
+        {}
+      )
+    ).toBe("npm");
+  });
+
+  test("handles Windows backslash bun path", () => {
+    expect(
+      detectInstallManager("C:\\Users\\x\\.bun\\bin\\project-brain.exe", {})
+    ).toBe("bun");
+  });
+
+  test("handles Windows backslash pnpm path via PNPM_HOME", () => {
+    expect(
+      detectInstallManager("C:\\Users\\x\\AppData\\pnpm\\project-brain.exe", {
+        PNPM_HOME: "C:\\Users\\x\\AppData\\pnpm",
+      })
+    ).toBe("pnpm");
+  });
+});
+
+describe("updateCommand", () => {
+  test("maps each manager to its update command", () => {
+    expect(updateCommand("bun")).toBe("bun add -g project-brain@latest");
+    expect(updateCommand("pnpm")).toBe("pnpm add -g project-brain@latest");
+    expect(updateCommand("yarn")).toBe("yarn global add project-brain@latest");
+    expect(updateCommand("npm")).toBe("npm install -g project-brain@latest");
+  });
+});
+
 describe("checkForUpdate", () => {
   const baseDeps = () => {
     const warned: string[] = [];
@@ -36,6 +113,7 @@ describe("checkForUpdate", () => {
         refresh: () => { refreshed++; },
         staleMs: 86_400_000,
         optedOut: false,
+        updateCmd: "npm install -g project-brain@latest",
       },
     };
   };
@@ -47,6 +125,14 @@ describe("checkForUpdate", () => {
     expect(h.warned.length).toBe(1);
     expect(h.warned[0]).toContain("0.7.0");
     expect(h.warned[0]).toContain("0.6.0");
+  });
+
+  test("warn message contains the injected update command", () => {
+    const h = baseDeps();
+    h.deps.updateCmd = "bun add -g project-brain@latest";
+    h.deps.readCache = () => ({ checkedAt: 1_000_000_000, latest: "0.7.0" });
+    checkForUpdate(h.deps);
+    expect(h.warned[0]).toContain("Run: bun add -g project-brain@latest");
   });
 
   test("silent when cached latest equals current", () => {
