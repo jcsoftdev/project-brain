@@ -33,12 +33,11 @@ describe("installGitHook", () => {
     const { installGitHook } = await import("../../src/hooks/git.js");
     await installGitHook(tempDir);
 
-    const proc = Bun.spawn(["stat", "-f", "%Lp", hookPath], {
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const perms = (await new Response(proc.stdout).text()).trim();
-    expect(perms).toBe("755");
+    // node:fs stat, not the `stat` binary — `stat -f "%Lp"` is BSD/macOS
+    // syntax and fails on GNU/Linux (CI runners), where -f means filesystem.
+    const { stat } = await import("node:fs/promises");
+    const mode = (await stat(hookPath)).mode & 0o777;
+    expect(mode).toBe(0o755);
   });
 
   it("appends to existing hook without project-brain", async () => {
