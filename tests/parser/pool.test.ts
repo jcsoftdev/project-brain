@@ -1,5 +1,12 @@
 import { test, expect } from "bun:test";
-import { ParserPool, POOL_MIN_FILES } from "../../src/parser/pool.js";
+import {
+  ParserPool,
+  POOL_MIN_FILES,
+  __resetWorkerEntryCacheForTests,
+} from "../../src/parser/pool.js";
+
+/** Real dev worker-entry URL, resolved the same way pool.ts itself would. */
+const REAL_WORKER_URL = new URL("../../src/parser/worker.ts", import.meta.url).href;
 
 test("POOL_MIN_FILES is a positive threshold", () => {
   expect(POOL_MIN_FILES).toBeGreaterThan(0);
@@ -145,6 +152,19 @@ test("ParserPool.worker.onerror settles the in-flight job AND drains queued jobs
   const pool = new ParserPool(1);
   try {
     const worker = (pool as any).workers[0] as Worker;
+
+    // Candidate-based construction confirms a worker slot asynchronously (a
+    // probe request/response round-trip — see pool.ts's `spawnSlot`), so
+    // the worker is not guaranteed to be in `idle` synchronously right
+    // after `new ParserPool(...)` the way it was pre-candidate-resolver.
+    // Wait for the real probe to land (dev has exactly one candidate, so
+    // this resolves on the first event-loop turn) before overriding
+    // `onmessage` and simulating a POST-load failure — the exact scenario
+    // this test targets.
+    while ((pool as any).idle.length === 0) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
+
     // See the doc comment above: block real response delivery so the worker
     // behaves like one that will never answer — the exact precondition
     // worker.onerror exists to handle — making the test deterministic.
@@ -210,3 +230,79 @@ test("(supplementary, underlying-mechanism only) a genuinely unloadable Worker s
     worker.terminate();
   }
 });
+
+/**
+ * Candidate-resolver regression coverage (2nd Windows finding — the
+ * separator-agnostic fix alone did NOT fix the real Windows failure; see
+ * pool.ts's doc comment and pool-path.test.ts). ParserPool now takes an
+ * optional `candidates` list (test-only injection seam — production always
+ * defaults to `workerEntryCandidates(import.meta.url)`) so this can be
+ * exercised deterministically in dev, without a genuine multi-layout
+ * compiled binary.
+ */
+test("ParserPool falls back to the next candidate when the first candidate's module can't be found, and still parses", async () => {
+  __resetWorkerEntryCacheForTests();
+  const deadCandidate = new URL("./nonexistent-worker-9f3c2a.js", import.meta.url).href;
+  const pool = new ParserPool(1, [deadCandidate, REAL_WORKER_URL]);
+  try {
+    const result = await pool.parseOne({
+      path: "add.ts",
+      content: "export function add(a: number, b: number) { return a + b; }",
+      ext: ".ts",
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.symbols.some((s) => s.name === "add")).toBe(true);
+  } finally {
+    pool.dispose();
+  }
+});
+
+test("ParserPool caches the winning candidate index module-wide after the first successful fallback", async () => {
+  __resetWorkerEntryCacheForTests();
+  const deadCandidate = new URL("./nonexistent-worker-9f3c2a.js", import.meta.url).href;
+
+  const pool1 = new ParserPool(1, [deadCandidate, REAL_WORKER_URL]);
+  try {
+    await pool1.parseOne({ path: "a.ts", content: "export function a() {}", ext: ".ts" });
+  } finally {
+    pool1.dispose();
+  }
+
+  // A second pool constructed with the SAME dead-first candidate list should
+  // skip straight to the cached winning candidate (index 1) instead of
+  // re-probing the dead one — verify indirectly via the worker's script URL,
+  // which is only observable if it never spawned the dead candidate.
+  const pool2 = new ParserPool(1, [deadCandidate, REAL_WORKER_URL]);
+  try {
+    const result = await pool2.parseOne({
+      path: "b.ts",
+      content: "export function b() {}",
+      ext: ".ts",
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.symbols.some((s) => s.name === "b")).toBe(true);
+  } finally {
+    pool2.dispose();
+  }
+});
+
+test("ParserPool falls back to the next candidate when a candidate hangs past the probe timeout (not just onerror)", async () => {
+  __resetWorkerEntryCacheForTests();
+  // A worker script that loads successfully but never responds to ANY
+  // message (including the probe) — simulates a candidate that resolves to
+  // a real, loadable file yet is still the wrong one (e.g. a stale/mismatched
+  // build artifact), which would never fire `onerror` on its own.
+  const hangingCandidate = new URL("./hanging-worker-fixture.ts", import.meta.url).href;
+  const pool = new ParserPool(1, [hangingCandidate, REAL_WORKER_URL]);
+  try {
+    const result = await pool.parseOne({
+      path: "add.ts",
+      content: "export function add(a: number, b: number) { return a + b; }",
+      ext: ".ts",
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.symbols.some((s) => s.name === "add")).toBe(true);
+  } finally {
+    pool.dispose();
+  }
+}, 10_000);

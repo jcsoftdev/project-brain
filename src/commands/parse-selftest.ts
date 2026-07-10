@@ -23,7 +23,7 @@
  * This is intentionally minimal — no embeddings, no store, no graph DB.
  */
 import { extract } from "../parser/extract.js";
-import { ParserPool, POOL_MIN_FILES } from "../parser/pool.js";
+import { ParserPool, POOL_MIN_FILES, poolDiagnostics } from "../parser/pool.js";
 
 /** Run the parse self-test against a single source file. Returns symbol count. */
 export async function runParseSelfTest(filePath: string): Promise<number> {
@@ -53,6 +53,13 @@ export async function runParseSelfTest(filePath: string): Promise<number> {
  * synthetic TS sources (each with one known symbol) and parses them via a real
  * ParserPool, proving the compiled binary's embedded worker entrypoint loads
  * and extracts symbols. Returns the total symbol count across all files.
+ *
+ * On failure, the thrown Error's `cause` carries the pool's `attemptLog` (see
+ * pool.ts's candidate-based resolver) so callers can print WHICH worker-entry
+ * candidates were tried and how each failed — empirical diagnostics instead
+ * of a bare error message, for the still-unexplained Windows worker-path
+ * failure (see pool.ts's doc comment: byte-identical error survived the
+ * separator-agnostic detection fix).
  */
 export async function runPoolSelfTest(): Promise<number> {
   const count = POOL_MIN_FILES + 2;
@@ -67,10 +74,17 @@ export async function runPoolSelfTest(): Promise<number> {
     const results = await pool.parseMany(jobs);
     let total = 0;
     for (const r of results) {
-      if (r.error) throw new Error(`worker failed for ${r.path}: ${r.error}`);
+      if (r.error) {
+        throw new Error(`worker failed for ${r.path}: ${r.error}`, { cause: pool.attemptLog });
+      }
       total += r.symbols.length;
     }
     return total;
+  } catch (err) {
+    if (err instanceof Error && err.cause === undefined) {
+      throw new Error(err.message, { cause: pool.attemptLog });
+    }
+    throw err;
   } finally {
     pool.dispose();
   }
@@ -78,6 +92,9 @@ export async function runPoolSelfTest(): Promise<number> {
 
 export async function execute(args: string[]): Promise<void> {
   if (args.includes("--pool")) {
+    const { importMetaUrl, candidates } = poolDiagnostics();
+    console.error(`DIAG: pool.ts import.meta.url = ${importMetaUrl}`);
+    console.error(`DIAG: worker-entry candidates (in try order) = ${JSON.stringify(candidates)}`);
     try {
       const count = await runPoolSelfTest();
       if (count < 1) {
@@ -87,6 +104,15 @@ export async function execute(args: string[]): Promise<void> {
       console.log(`STRUCT_OK ${count}`);
       process.exit(0);
     } catch (err) {
+      const attemptLog =
+        err instanceof Error && Array.isArray(err.cause) ? err.cause : undefined;
+      if (attemptLog) {
+        for (const attempt of attemptLog) {
+          console.error(`DIAG: candidate tried = ${attempt.url} -> ${attempt.outcome}`);
+        }
+      } else {
+        console.error("DIAG: no candidate attempt log available (failure occurred outside pool construction)");
+      }
       console.error(`STRUCT_FAIL — ${err instanceof Error ? err.message : err}`);
       process.exit(1);
     }
