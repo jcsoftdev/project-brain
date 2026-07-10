@@ -131,7 +131,9 @@ jobs:
           echo "exit=$STATUS"
           echo "$OUT"
           # Defense-in-depth: an embedded-asset regression marker is a hard fail.
-          if echo "$OUT" | grep -E 'RuntimeError|\$bunfs' >/dev/null; then
+          # DIAG: lines are excluded — the selftest's own diagnostics print the
+          # raw import.meta.url, which legitimately contains $bunfs on POSIX.
+          if echo "$OUT" | grep -v '^DIAG:' | grep -E 'RuntimeError|\$bunfs' >/dev/null; then
             echo "::error::native binary smoke hit an embedded-asset regression (RuntimeError/\$bunfs)"
             exit 1
           fi
@@ -152,7 +154,9 @@ jobs:
           set -e
           echo "pool_exit=$PSTATUS"
           echo "$POUT"
-          if echo "$POUT" | grep -E 'RuntimeError|\$bunfs' >/dev/null; then
+          # DIAG: lines excluded here too — pool diagnostics always print the
+          # raw import.meta.url ($bunfs is expected content on POSIX).
+          if echo "$POUT" | grep -v '^DIAG:' | grep -E 'RuntimeError|\$bunfs' >/dev/null; then
             echo "::error::worker-pool smoke hit an embedded-asset regression (RuntimeError/\$bunfs)"
             exit 1
           fi
