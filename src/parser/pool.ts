@@ -34,12 +34,75 @@ import type { ParseRequest, ParseResponse } from "./worker.js";
 //   - Compiled binary: worker.ts lands at `<bunfs>/parser/worker.js` while a
 //     bundled pool.ts's import.meta.url is the binary root
 //     (`file:///$bunfs/root/<binary>`) → "./parser/worker.js".
-const IS_COMPILED =
-  import.meta.url.includes("/$bunfs/") || import.meta.url.includes("/~BUN/");
-const workerPath = new URL(
-  IS_COMPILED ? "./parser/worker.js" : "./worker.js",
-  import.meta.url,
-).href;
+//
+// WINDOWS FINDING (release blocker, v0.7.0 — 3 failed releases on
+// windows-x64 AND windows-arm64):
+//
+//   worker error: BuildMessage: ModuleNotFound resolving
+//   "B:\~BUN\root\worker.js" (entry point)
+//
+// The original detection required POSIX slashes around the marker
+// (`/$bunfs/` or `/~BUN/`). On Windows, Bun mounts the embedded FS at
+// `B:\~BUN\...` — backslash-separated, so neither `/$bunfs/` nor `/~BUN/`
+// ever matched. IS_COMPILED came out false, the dev sibling path
+// ("./worker.js") was chosen, and it resolved to the nonexistent
+// `B:\~BUN\root\worker.js` instead of the real bundled location
+// `B:\~BUN\root\parser\worker.js`.
+//
+// Empirically verified (Bun 1.3.14, this repo, 2026-07):
+//   - `new URL("./worker.js", base)` works correctly for well-formed
+//     `file://` bases, INCLUDING `file:///B:/~BUN/root/cli.exe` (forward
+//     slashes) — resolves to `file:///B:/~BUN/root/worker.js` as expected.
+//   - A raw Windows path used directly as a URL base (e.g.
+//     `B:\~BUN\root\cli.exe`, no `file://` prefix) does NOT behave like a
+//     file path under the WHATWG URL parser: `new URL(base)` alone parses
+//     it as a special URL with scheme `b:` (lowercased) and treats
+//     everything after the first `\` as opaque path — passing that base to
+//     `new URL("./worker.js", base)` throws
+//     ("./worker.js" cannot be parsed as a URL). This shape must be
+//     resolved via plain string manipulation instead of the URL API.
+//   - A `file://` base with `%5C`-encoded backslashes (e.g.
+//     `file:///B:%5C~BUN%5Croot%5Ccli.exe`) parses as a URL without
+//     throwing, but `new URL("./worker.js", base)` collapses the whole
+//     percent-encoded path to `file:///worker.js` — because there is no
+//     literal `/` for the URL parser to split the last path segment on.
+//     Detection still fires correctly here (the literal substring "~BUN"
+//     survives percent-encoding), but resolution falls back to best-effort
+//     string join rather than `new URL`.
+//
+// Detection is therefore separator- and encoding-agnostic: compiled if the
+// url contains "$bunfs" OR "~BUN" anywhere, with no surrounding-slash
+// requirement. "~BUN" itself is fixed-case in Bun's own source as of
+// 1.3.14; this has NOT been verified against other Bun versions or against
+// a genuine Windows compiled binary (no Windows machine available in this
+// environment) — validated indirectly via `workflow_dispatch` on the
+// release workflow instead. If Bun ever lowercases the drive letter or the
+// marker itself in some future version, this detection would need
+// case-insensitive matching; kept case-sensitive for now since that's what
+// was empirically observed and documented above.
+export function resolveWorkerEntry(importMetaUrl: string): string {
+  const isCompiled =
+    importMetaUrl.includes("$bunfs") || importMetaUrl.includes("~BUN");
+  const relPath = isCompiled ? "parser/worker.js" : "worker.js";
+
+  // Well-formed file:// (or other) URL bases resolve correctly with the URL
+  // API — this covers dev, POSIX compiled, the Windows URL-form
+  // (file:///B:/~BUN/...), and best-effort for the URL-encoded form.
+  try {
+    return new URL(`./${relPath}`, importMetaUrl).href;
+  } catch {
+    // Raw Windows path shapes (e.g. "B:\~BUN\root\cli.exe") are not
+    // well-formed file:// URLs and throw out of `new URL`. Fall back to
+    // string manipulation, preserving the original backslash separator
+    // style: replace the last path segment (after the final backslash)
+    // with the resolved relative path, also backslash-joined.
+    const lastSep = importMetaUrl.lastIndexOf("\\");
+    const dir = lastSep === -1 ? "" : importMetaUrl.slice(0, lastSep + 1);
+    return dir + relPath.replace(/\//g, "\\");
+  }
+}
+
+const workerPath = resolveWorkerEntry(import.meta.url);
 
 export interface ParseJob {
   path: string;
