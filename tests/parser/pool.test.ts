@@ -257,6 +257,39 @@ test("ParserPool falls back to the next candidate when the first candidate's mod
   }
 });
 
+/**
+ * attemptLog regression coverage (iteration 4): a dead candidate's `onerror`
+ * event carries a real message ("ModuleNotFound resolving ..." from Bun
+ * itself) — this must now be captured on the "errored" attemptLog entry so
+ * parse-selftest.ts's DIAG output can print WHY a candidate failed, not just
+ * THAT it failed. Reuses the same dead-candidate-then-fallback fixture as the
+ * test above (a genuinely unloadable module path fires a real Bun `onerror`,
+ * same mechanism the supplementary test further up in this file verifies).
+ */
+test("ParserPool.attemptLog captures the onerror event's message text for an errored candidate", async () => {
+  __resetWorkerEntryCacheForTests();
+  const deadCandidate = new URL("./nonexistent-worker-9f3c2a.js", import.meta.url).href;
+  const pool = new ParserPool(1, [deadCandidate, REAL_WORKER_URL]);
+  try {
+    await pool.parseOne({
+      path: "add.ts",
+      content: "export function add(a: number, b: number) { return a + b; }",
+      ext: ".ts",
+    });
+    const erroredEntry = pool.attemptLog.find((a) => a.outcome === "errored");
+    expect(erroredEntry).toBeDefined();
+    expect(erroredEntry?.url).toBe(deadCandidate);
+    expect(typeof erroredEntry?.message).toBe("string");
+    expect(erroredEntry?.message?.length).toBeGreaterThan(0);
+
+    const confirmedEntry = pool.attemptLog.find((a) => a.outcome === "confirmed");
+    expect(confirmedEntry).toBeDefined();
+    expect(confirmedEntry?.message).toBeUndefined();
+  } finally {
+    pool.dispose();
+  }
+});
+
 test("ParserPool caches the winning candidate index module-wide after the first successful fallback", async () => {
   __resetWorkerEntryCacheForTests();
   const deadCandidate = new URL("./nonexistent-worker-9f3c2a.js", import.meta.url).href;

@@ -111,6 +111,33 @@ import type { ParseRequest, ParseResponse } from "./worker.js";
 // ever lowercases the drive letter or the marker itself in some future
 // version, this detection would need case-insensitive matching; kept
 // case-sensitive for now since that's what was empirically observed.
+//
+// WINDOWS FINDING #4 (iteration 4 — with FINDING #3's %7E detection fixed,
+// BOTH URL-resolved candidates still fail on real windows-x64/arm64 runners;
+// DIAG confirmed both attempts as "errored", workflow_dispatch @ 29126136354).
+// This is a known, still-open upstream Bun bug: oven-sh/bun#15981, with
+// oven-sh/bun#16869 ("Compile the worker with import.meta.url doesn't work")
+// closed as an exact-match duplicate of #15981 — NOT fixed as of this
+// writing. #16869 confirms, for the IDENTICAL error, that passing a PLAIN
+// RELATIVE STRING straight to `new Worker()` (e.g. `new Worker("./worker.ts")`)
+// WORKS in a compiled Windows binary, while `new Worker(new URL("./worker.ts",
+// import.meta.url))` / `.href` forms BREAK. This matches Bun's own docs
+// (bun.sh/docs/bundler/executables, "Worker" section), which show the plain
+// relative-string form as the canonical worker-in-compile pattern — NOT
+// manual URL resolution against `import.meta.url`. A related bug,
+// oven-sh/bun#29124, further reports that NESTED subdirectory worker paths
+// specifically may fail even as plain strings (flat paths at the binary root
+// work; nested ones like "./parser/worker.ts" may not) — so both a nested
+// and a flat plain-string candidate are tried, in both `.js` (compiled
+// entrypoint output) and `.ts` (source name, matching #16869's own working
+// example) extension forms.
+//
+// Consequence: for the compiled case, four PLAIN RELATIVE STRING candidates
+// are tried FIRST (docs-canonical, #16869-confirmed working pattern), and
+// the two URL-resolved forms (FINDING #2/#3's approach) are demoted to
+// last-resort fallback — kept because they are still verified-working on
+// macOS/Linux and cost nothing extra once `cachedWorkingCandidateIndex`
+// (below) remembers whichever candidate actually wins.
 
 /**
  * Build the ORDERED list of plausible worker-entry locations for a given
@@ -118,19 +145,22 @@ import type { ParseRequest, ParseResponse } from "./worker.js";
  * directly unit-testable without spawning real Workers.
  *
  * - Dev (not compiled): only `./worker.js` is plausible — worker.ts is
- *   always a sibling of pool.ts in source.
- * - Compiled: two layouts are plausible, since WINDOWS FINDING #2 proved the
- *   "always ./parser/worker.js" assumption wrong for at least one platform.
- *   `./parser/worker.js` (the macOS/Linux-observed layout) is tried first
- *   because it is verified on two platforms; `./worker.js` (flat, no
- *   `parser/` segment — consistent with the path Windows actually reported
- *   in finding #2) is the fallback.
- *
- * Each relative candidate is resolved through the same two-tier strategy
- * `resolveWorkerEntry` used previously: try the WHATWG URL API first (covers
- * well-formed `file://` bases, including the Windows URL-form and
- * URL-encoded form), falling back to backslash-preserving string join for
- * raw Windows path bases that throw out of `new URL`.
+ *   always a sibling of pool.ts in source. Deliberately UNCHANGED by FINDING
+ *   #4 — dev's cwd-relative resolution semantics for a plain string are
+ *   unverified, and the URL-resolved sibling form is already known-good.
+ * - Compiled: six candidates are plausible now, in this exact order (see
+ *   WINDOWS FINDING #4 above):
+ *     1. "./parser/worker.js" — plain string, nested, compiled extension
+ *     2. "./worker.js"        — plain string, flat, compiled extension
+ *     3. "./parser/worker.ts" — plain string, nested, source extension
+ *     4. "./worker.ts"        — plain string, flat, source extension
+ *     5. URL-resolved "parser/worker.js" (FINDING #1-#3's approach)
+ *     6. URL-resolved "worker.js" (same, flat variant)
+ *   Candidates 5-6 are resolved through the same two-tier strategy
+ *   `resolveWorkerEntry` used previously: try the WHATWG URL API first
+ *   (covers well-formed `file://` bases, including the Windows URL-form and
+ *   URL-encoded form), falling back to backslash-preserving string join for
+ *   raw Windows path bases that throw out of `new URL`.
  */
 export function workerEntryCandidates(importMetaUrl: string): string[] {
   // FINDING #3 (DIAG from a real windows-x64 runner, run 29125864060):
@@ -140,11 +170,24 @@ export function workerEntryCandidates(importMetaUrl: string): string[] {
   const normalizedUrl = importMetaUrl.replace(/%7E/gi, "~");
   const isCompiled =
     normalizedUrl.includes("$bunfs") || normalizedUrl.includes("~BUN");
-  const relPaths = isCompiled
-    ? ["parser/worker.js", "worker.js"]
-    : ["worker.js"];
 
-  return relPaths.map((relPath) => {
+  if (!isCompiled) {
+    return [new URL("./worker.js", importMetaUrl).href];
+  }
+
+  // FINDING #4: plain relative strings first (docs-canonical, #16869-confirmed
+  // Windows-compiled workaround) — NOT resolved via `new URL`; Bun resolves a
+  // plain string passed to `new Worker()` relative to the running
+  // module/binary itself.
+  const plainStringCandidates = [
+    "./parser/worker.js",
+    "./worker.js",
+    "./parser/worker.ts",
+    "./worker.ts",
+  ];
+
+  // Existing URL-resolved logic (FINDING #1-#3), now last-resort fallback.
+  const urlResolvedCandidates = ["parser/worker.js", "worker.js"].map((relPath) => {
     try {
       return new URL(`./${relPath}`, importMetaUrl).href;
     } catch {
@@ -158,6 +201,8 @@ export function workerEntryCandidates(importMetaUrl: string): string[] {
       return dir + relPath.replace(/\//g, "\\");
     }
   });
+
+  return [...plainStringCandidates, ...urlResolvedCandidates];
 }
 
 /**
@@ -251,9 +296,15 @@ export class ParserPool {
    * Diagnostic trail of every candidate this pool attempted and its outcome
    * — read by callers (e.g. parse-selftest's `--pool` DIAG output) on
    * failure to explain WHICH candidates were tried and why they were
-   * rejected, instead of just "it didn't work."
+   * rejected, instead of just "it didn't work." `message` is populated only
+   * for "errored" outcomes (the underlying `onerror` event's message text);
+   * "confirmed"/"timed-out" outcomes don't carry one.
    */
-  readonly attemptLog: Array<{ url: string; outcome: "confirmed" | "errored" | "timed-out" }> = [];
+  readonly attemptLog: Array<{
+    url: string;
+    outcome: "confirmed" | "errored" | "timed-out";
+    message?: string;
+  }> = [];
 
   /**
    * @param size number of worker slots to maintain.
@@ -362,6 +413,7 @@ export class ParserPool {
         this.attemptLog.push({
           url,
           outcome: "errored",
+          message: event.message || String(event.error || "unknown worker error"),
         });
         worker.onmessage = null;
         worker.onerror = null;

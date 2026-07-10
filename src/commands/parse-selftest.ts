@@ -108,7 +108,18 @@ export async function execute(args: string[]): Promise<void> {
         err instanceof Error && Array.isArray(err.cause) ? err.cause : undefined;
       if (attemptLog) {
         for (const attempt of attemptLog) {
-          console.error(`DIAG: candidate tried = ${attempt.url} -> ${attempt.outcome}`);
+          if (attempt.outcome === "errored" && attempt.message) {
+            // Keep DIAG output single-line so a CI grep matching on the
+            // `^DIAG:` prefix (see commit ab74b2d) can reliably match each
+            // attempt as one line, even if the underlying worker error
+            // message itself contains newlines.
+            const singleLineMessage = attempt.message.replace(/\r?\n/g, " ");
+            console.error(`DIAG: candidate tried = ${attempt.url} -> errored: ${singleLineMessage}`);
+          } else if (attempt.outcome === "timed-out") {
+            console.error(`DIAG: candidate tried = ${attempt.url} -> timed-out`);
+          } else {
+            console.error(`DIAG: candidate tried = ${attempt.url} -> ${attempt.outcome}`);
+          }
         }
       } else {
         console.error("DIAG: no candidate attempt log available (failure occurred outside pool construction)");
