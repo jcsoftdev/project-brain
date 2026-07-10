@@ -133,8 +133,13 @@ import type { ParseRequest, ParseResponse } from "./worker.js";
  * raw Windows path bases that throw out of `new URL`.
  */
 export function workerEntryCandidates(importMetaUrl: string): string[] {
+  // FINDING #3 (DIAG from a real windows-x64 runner, run 29125864060):
+  // the actual compiled import.meta.url is file:///B:/%7EBUN/root/<binary> —
+  // the tilde arrives percent-encoded ("%7EBUN"), which neither "$bunfs" nor
+  // "~BUN" matches. Normalize %7E/%7e → "~" before the substring check.
+  const normalizedUrl = importMetaUrl.replace(/%7E/gi, "~");
   const isCompiled =
-    importMetaUrl.includes("$bunfs") || importMetaUrl.includes("~BUN");
+    normalizedUrl.includes("$bunfs") || normalizedUrl.includes("~BUN");
   const relPaths = isCompiled
     ? ["parser/worker.js", "worker.js"]
     : ["worker.js"];

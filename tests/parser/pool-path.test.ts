@@ -67,6 +67,27 @@ test("compiled Windows URL-encoded base (%5C separators): two candidates, both b
   expect(result[1]).toBe("file:///worker.js");
 });
 
+// FINDING #3 (DIAG output, workflow_dispatch @ ff11cf0, real windows-x64
+// runner — GROUND TRUTH at last):
+//   DIAG: pool.ts import.meta.url = file:///B:/%7EBUN/root/project-brain-windows-x64
+// The real Windows compiled import.meta.url percent-encodes the tilde:
+// "%7EBUN", NOT "~BUN". Neither "$bunfs" nor "~BUN" substring-matches it,
+// so detection fell into the dev branch (single sibling candidate) both
+// times. Detection must also match the %7E-encoded marker (any case).
+test("compiled Windows REAL shape (file:///B:/%7EBUN/...): detected as compiled, two candidates", () => {
+  const result = workerEntryCandidates("file:///B:/%7EBUN/root/project-brain-windows-x64");
+  expect(result).toEqual([
+    "file:///B:/%7EBUN/root/parser/worker.js",
+    "file:///B:/%7EBUN/root/worker.js",
+  ]);
+});
+
+test("compiled Windows REAL shape, lowercase %7e variant: still detected as compiled", () => {
+  const result = workerEntryCandidates("file:///B:/%7eBUN/root/project-brain-windows-x64");
+  expect(result.length).toBe(2);
+  expect(result[0]).toContain("parser/worker.js");
+});
+
 test("first candidate is always the historically-verified layout (parser/worker.js) when compiled", () => {
   const posix = workerEntryCandidates("file:///$bunfs/root/cli");
   const winUrl = workerEntryCandidates("file:///B:/~BUN/root/cli.exe");
