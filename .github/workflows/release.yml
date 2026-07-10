@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  # Allows a manual, tag-free run of build + smoke test (e.g. to validate the
+  # Windows worker-path fix in src/parser/pool.ts on real windows-x64/arm64
+  # runners) without burning a version tag. Release-creation and publish
+  # steps below are gated on `github.ref` actually being a tag, so a
+  # workflow_dispatch run exercises build+smoke only and skips those.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,6 +28,7 @@ jobs:
 
       - name: Create release
         id: create
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           draft: false
@@ -155,6 +162,7 @@ jobs:
           fi
 
       - name: Upload binary to release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
           files: dist/project-brain-${{ matrix.target }}*
@@ -162,6 +170,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish platform package
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           VERSION="${{ github.ref_name }}"
@@ -195,6 +204,7 @@ jobs:
   publish-npm:
     name: Publish to npm
     needs: build
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
