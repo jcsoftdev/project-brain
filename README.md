@@ -133,7 +133,7 @@ You talk to your **AI assistant** in natural language; it picks the right tool. 
 
 Tips to maximize value:
 
-- **Structural and lexical tools work without Ollama.** `find_symbol` / `find_callers` / `find_callees` / `impact` / `trace_path` query the local SQLite graph, and `search_code` queries the local FTS index — all work even with embeddings unavailable. Only semantic `search_context` needs Ollama.
+- **Structural and lexical tools work without Ollama.** `find_symbol` / `find_callers` / `find_callees` / `impact` / `trace_path` query the local SQLite graph, and `search_code` queries the local FTS index — all work even with embeddings unavailable. `search_context` itself degrades gracefully too: with no Ollama it falls back to a BM25 lexical floor (code-aware query expansion over the local FTS index) and marks the result `degraded: true, mode: "lexical"` instead of failing — conceptual recall is reduced, so start Ollama for full semantic search when you can.
 - **Keep the index fresh automatically.** The git hook re-syncs on commit and the file watcher re-indexes on save while `serve` runs — no manual step. Run `project-brain sync` after big external changes.
 - **Prefer `expand_context` over re-reading files.** `search_context` returns a `chunk_id`; expanding it is cheaper than the assistant reading the whole file.
 - **Lead with the exact name when you have it.** "find_symbol X" / "who calls X" is faster and more precise than a semantic search.

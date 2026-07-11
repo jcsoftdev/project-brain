@@ -21,10 +21,11 @@ describe("handlers emit structuredContent", () => {
     const r = await handleForget({ project: "p", source: "s" }, deps);
     expect(r.structuredContent).toEqual({ source: "s", status: "deleted" });
   });
-  it("search_context error path carries structuredContent", async () => {
+  it("search_context lexical-degraded path carries structuredContent", async () => {
     const deps = { embeddings: { embed: async () => null, dim: 4 }, store: {} } as any;
     const r = await handleSearch({ project: "p", query: "q" }, deps);
-    expect(r.isError).toBe(true);
-    expect((r.structuredContent as any).code).toBe("EMBEDDINGS_UNAVAILABLE");
+    expect(r.isError).toBeFalsy();
+    expect((r.structuredContent as any).degraded).toBe(true);
+    expect((r.structuredContent as any).mode).toBe("lexical");
   });
 });

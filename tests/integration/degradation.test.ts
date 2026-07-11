@@ -50,16 +50,20 @@ describe("Integration: graceful degradation", () => {
     expect(data.code).toBe("EMBEDDINGS_UNAVAILABLE");
   });
 
-  it("search_context returns error when embeddings down", async () => {
+  it("search_context degrades to the lexical floor when embeddings down", async () => {
     const deps: ToolDeps = { store, embeddings: unavailableEmbeddings };
 
     const result = await handleSearch(
       { project: "demo", query: "anything" },
       deps
     );
-    expect(result.isError).toBe(true);
+    expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0].text);
-    expect(data.error).toContain("unavailable");
+    expect(data.degraded).toBe(true);
+    expect(data.mode).toBe("lexical");
+    // No FTS index synced in this empty temp store — honest empty result,
+    // not a crash.
+    expect(data.results).toEqual([]);
   });
 
   it("store-only tools work normally when embeddings are down", async () => {

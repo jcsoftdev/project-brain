@@ -3,8 +3,12 @@ import { z } from "zod";
 import type { ToolDeps } from "../types.js";
 import { applyThreshold, mmr } from "../retrieval/rank.js";
 import { fillBudget } from "../retrieval/budget.js";
+import { expandQuery } from "../retrieval/query-expand.js";
 import { SCORE_THRESHOLD, MMR_LAMBDA, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES, HARDNESS, toolAnnotations } from "../constants.js";
 import { jsonResult, type ToolResult } from "./format.js";
+
+const LEXICAL_DEGRADED_NOTE =
+  "Embeddings unavailable — showing keyword (BM25) results. Conceptual matches may be missed; start Ollama for full semantic search.";
 
 interface SearchArgs {
   project: string;
@@ -22,10 +26,21 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
 
   const vectors = await emb.embed([query]);
   if (!vectors) {
+    // Lexical floor: no Ollama / embeddings available. Degrade to BM25 with
+    // code-aware query expansion instead of hard-failing — same threshold/
+    // budget post-processing as the vector path, minus MMR (no vectors to
+    // diversify against).
+    const ftsResults = deps.store.ftsSearch
+      ? await deps.store.ftsSearch(project, expandQuery(query), Math.max(limit * 3, 20))
+      : [];
+    const kept = applyThreshold(ftsResults, SCORE_THRESHOLD);
+    const results = fillBudget(kept, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES);
     return jsonResult({
-      error: "Embeddings unavailable — cannot perform semantic search. Start Ollama to enable.",
-      code: "EMBEDDINGS_UNAVAILABLE",
-    }, true);
+      results,
+      degraded: true,
+      mode: "lexical",
+      note: LEXICAL_DEGRADED_NOTE,
+    });
   }
 
   if (HARDNESS) {
@@ -62,6 +77,9 @@ export function register(server: McpServer, deps: ToolDeps): void {
           start_line: z.number().optional(),
           end_line: z.number().optional(),
         }).passthrough()),
+        degraded: z.boolean().optional(),
+        mode: z.literal("lexical").optional(),
+        note: z.string().optional(),
       },
       annotations: toolAnnotations("search_context"),
     },

@@ -23,6 +23,7 @@ function makeMockStore(results: SearchResult[] = mockResults): VectorStore {
     buildIndexes: async () => {},
     getChunkById: async () => null,
     assertDim: async () => {},
+    ftsSearch: async () => results,
   };
 }
 
@@ -50,14 +51,16 @@ describe("search_context tool", () => {
     expect(data.results[0].score).toBe(0.95);
   });
 
-  it("returns isError when embeddings unavailable", async () => {
+  it("degrades to the lexical floor (not isError) when embeddings unavailable", async () => {
     const result = await handleSearch(
       { project: "demo", query: "anything" },
       { store: makeMockStore(), embeddings: makeMockEmbeddings(false) }
     );
-    expect(result.isError).toBe(true);
+    expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0].text);
-    expect(data.error).toContain("unavailable");
+    expect(data.degraded).toBe(true);
+    expect(data.mode).toBe("lexical");
+    expect(data.results.length).toBeGreaterThan(0);
   });
 
   it("returns empty results for non-existent project", async () => {
@@ -199,7 +202,7 @@ describe("handleSearch — embeddingsFor per-project resolver", () => {
     expect(capturedVector![0]).toBeCloseTo(0.1);
   });
 
-  it("returns EMBEDDINGS_UNAVAILABLE when resolved client embed returns null", async () => {
+  it("degrades to the lexical floor when resolved client embed returns null", async () => {
     const nullClient: EmbeddingClient = {
       dim: 768,
       model: "unavailable-model",
@@ -216,9 +219,89 @@ describe("handleSearch — embeddingsFor per-project resolver", () => {
       }
     );
 
-    expect(result.isError).toBe(true);
+    expect(result.isError).toBeFalsy();
     const data = JSON.parse(result.content[0].text);
-    expect(data.code).toBe("EMBEDDINGS_UNAVAILABLE");
+    expect(data.degraded).toBe(true);
+    expect(data.mode).toBe("lexical");
+  });
+});
+
+describe("handleSearch — lexical floor (embeddings unavailable)", () => {
+  it("calls store.ftsSearch with the expanded query and an enlarged topK", async () => {
+    const store = makeMockStore();
+    const spy = { query: null as any, topK: null as any };
+    store.ftsSearch = async (_project, query, topK) => {
+      spy.query = query;
+      spy.topK = topK;
+      return mockResults;
+    };
+
+    await handleSearch(
+      { project: "demo", query: "getUserAuth", limit: 5 },
+      { store, embeddings: makeMockEmbeddings(false) }
+    );
+
+    // query-expand appends split/synonym terms — expanded query must still
+    // contain the raw original query text.
+    expect(spy.query).toContain("getUserAuth");
+    expect(spy.query).toContain("auth");
+    // topK = Math.max(limit*3, 20) = Math.max(15, 20) = 20
+    expect(spy.topK).toBe(20);
+  });
+
+  it("returns empty results (not an error) when ftsSearch finds nothing", async () => {
+    const store = makeMockStore([]);
+    store.ftsSearch = async () => [];
+
+    const result = await handleSearch(
+      { project: "demo", query: "nonexistent", limit: 5 },
+      { store, embeddings: makeMockEmbeddings(false) }
+    );
+
+    expect(result.isError).toBeFalsy();
+    const data = JSON.parse(result.content[0].text);
+    expect(data.results).toEqual([]);
+    expect(data.degraded).toBe(true);
+    expect(data.mode).toBe("lexical");
+  });
+
+  it("includes a human-readable note explaining the degraded mode", async () => {
+    const result = await handleSearch(
+      { project: "demo", query: "test" },
+      { store: makeMockStore(), embeddings: makeMockEmbeddings(false) }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(typeof data.note).toBe("string");
+    expect(data.note.length).toBeGreaterThan(0);
+  });
+
+  it("does not call hybridSearch on the degraded path", async () => {
+    const store = makeMockStore();
+    let hybridCalled = false;
+    store.hybridSearch = async () => {
+      hybridCalled = true;
+      return mockResults;
+    };
+
+    await handleSearch(
+      { project: "demo", query: "test" },
+      { store, embeddings: makeMockEmbeddings(false) }
+    );
+
+    expect(hybridCalled).toBe(false);
+  });
+});
+
+describe("handleSearch — happy (vector) path regression guard", () => {
+  it("does not include degraded or mode fields when embeddings are available", async () => {
+    const result = await handleSearch(
+      { project: "demo", query: "auth flow", limit: 10 },
+      { store: makeMockStore(), embeddings: makeMockEmbeddings() }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data).not.toHaveProperty("degraded");
+    expect(data).not.toHaveProperty("mode");
+    expect(data).not.toHaveProperty("note");
   });
 });
 
