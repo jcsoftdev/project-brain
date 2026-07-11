@@ -19,9 +19,14 @@ const ALWAYS_IGNORE = [
  * Uses hardcoded always-ignore list + custom patterns from .gitignore.
  */
 export function shouldIgnore(filePath: string, patterns: string[]): boolean {
-  // Check always-ignore list
+  // Check always-ignore list. Entries must match as complete path segments
+  // (bounded by "/" or string start/end) — a raw substring check would
+  // over-match, e.g. ".claude/" wrongly matching "src/foo.claude/bar.ts"
+  // or "dist/" wrongly matching "src/redistribute.ts".
+  const boundedPath = "/" + filePath + "/";
   for (const ignore of ALWAYS_IGNORE) {
-    if (filePath.includes(ignore)) {
+    const segment = ignore.replace(/\/$/, "");
+    if (boundedPath.includes("/" + segment + "/")) {
       return true;
     }
   }

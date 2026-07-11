@@ -42,6 +42,37 @@ describe("gitignore filter", () => {
       expect(shouldIgnore("src/foo.ts", [])).toBe(false);
     });
 
+    it("matches ALWAYS_IGNORE entries as path segments, not substrings", () => {
+      // Directory name merely CONTAINS the ignored segment as a substring —
+      // must NOT be treated as the real ignored directory.
+      expect(shouldIgnore("src/foo.claude/bar.ts", [])).toBe(false);
+      expect(shouldIgnore("my.claude/x.ts", [])).toBe(false);
+      // "dist" substring inside an unrelated filename/dirname.
+      expect(shouldIgnore("src/redistribute.ts", [])).toBe(false);
+      expect(shouldIgnore("redistribution/index.ts", [])).toBe(false);
+      // "target" substring inside an unrelated dirname.
+      expect(shouldIgnore("src/retargeting.ts", [])).toBe(false);
+      // "build" substring inside an unrelated dirname.
+      expect(shouldIgnore("src/rebuild-helpers/x.ts", [])).toBe(false);
+      // "node_modules" substring inside an unrelated dirname.
+      expect(shouldIgnore("src/node_modules_polyfill/x.ts", [])).toBe(false);
+    });
+
+    it("regression: every ALWAYS_IGNORE entry still matches a genuine path under it", () => {
+      expect(shouldIgnore(".git/config", [])).toBe(true);
+      expect(shouldIgnore("node_modules/x", [])).toBe(true);
+      expect(shouldIgnore("dist/bundle.js", [])).toBe(true);
+      expect(shouldIgnore("build/output.js", [])).toBe(true);
+      expect(shouldIgnore(".next/server/app.js", [])).toBe(true);
+      expect(shouldIgnore("target/debug/main", [])).toBe(true);
+      expect(shouldIgnore("__pycache__/mod.pyc", [])).toBe(true);
+      expect(shouldIgnore(".project-brain/index.db", [])).toBe(true);
+      expect(shouldIgnore(".claude/worktrees/agent-x/src/foo.ts", [])).toBe(true);
+      // Nested (not just root-level) genuine occurrences must still match.
+      expect(shouldIgnore("packages/app/node_modules/x.js", [])).toBe(true);
+      expect(shouldIgnore("packages/app/dist/bundle.js", [])).toBe(true);
+    });
+
     it("does not ignore normal files with no patterns", () => {
       expect(shouldIgnore("src/main.ts", [])).toBe(false);
       expect(shouldIgnore("README.md", [])).toBe(false);
