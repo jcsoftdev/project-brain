@@ -6,7 +6,7 @@ import { chunkContent } from "../indexer/parser.js";
 import { shouldIgnore, loadPatterns } from "../indexer/gitignore.js";
 import { WATCHER_ALWAYS_IGNORE, GRAPH_DB_FILE } from "../constants.js";
 import { mapLimit } from "../indexer/concurrency.js";
-import type { EmbeddingClient, VectorStore, Chunk } from "../types.js";
+import type { EmbeddingClient, VectorStore, Chunk, TableMeta } from "../types.js";
 import { WasmParser } from "../parser/wasm.js";
 import { extract, extractBoundaries } from "../parser/extract.js";
 import { ParserPool, POOL_MIN_FILES } from "../parser/pool.js";
@@ -98,6 +98,32 @@ export function resolveEmbedConfig(env: NodeJS.ProcessEnv | Record<string, strin
       MAX_EMBED_CONCURRENCY
     ),
   };
+}
+
+/** Inputs for resolving which embedding model key a sync/reindex run should use. */
+export interface ResolveSyncModelOptions {
+  /** BRAIN_EMBED_MODEL env override, if set. Wins unconditionally — this is the documented model-switch path. */
+  envModel: string | undefined;
+  /** The project's stored table meta (readTableMeta result), or null when the project has no index yet. */
+  storedMeta: TableMeta | null;
+}
+
+/**
+ * Resolve the embedding model key to pass to createEmbeddingClient for a
+ * sync/reindex run, in precedence order:
+ *   1. Explicit env override (envModel) — deliberate model switch, always wins.
+ *   2. The project's stored table meta model — an already-indexed project must
+ *      keep using the model it was built with, not the registry default.
+ *   3. undefined — no env, no stored meta (fresh project) — the registry
+ *      default (DEFAULT_MODEL_KEY) applies downstream in createEmbeddingClient.
+ *
+ * Pure: no process.env / fs reads here — both inputs are injected by the caller.
+ */
+export function resolveSyncModel(options: ResolveSyncModelOptions): string | undefined {
+  const { envModel, storedMeta } = options;
+  if (envModel) return envModel;
+  if (storedMeta) return storedMeta.model;
+  return undefined;
 }
 
 export interface SyncResult {
@@ -746,8 +772,17 @@ export async function execute(args: string[]): Promise<void> {
 
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
   const { createEmbeddingClient } = await import("../embeddings/factory.js");
+  const { readTableMeta } = await import("../store/meta.js");
   const store = new LanceDbStore(DB_PATH);
-  const embeddings = await createEmbeddingClient(process.env.BRAIN_EMBED_MODEL || undefined, { host: OLLAMA_HOST, autoPull: true });
+
+  // Prefer the model the project's index was already built with (stored table
+  // meta) over the registry default — otherwise sync on an existing project
+  // built with a non-default model (e.g. nomic-embed-text) tries to embed with
+  // the CURRENT registry default (qwen3-embedding), causing a dim mismatch and
+  // total embed failure. An explicit BRAIN_EMBED_MODEL override still wins
+  // (deliberate model-switch path).
+  const storedMeta = await readTableMeta(DB_PATH, projectId);
+  const embeddings = await createEmbeddingClient(resolveSyncModel({ envModel: process.env.BRAIN_EMBED_MODEL || undefined, storedMeta }), { host: OLLAMA_HOST, autoPull: true });
 
   console.log(`Syncing project: ${projectId}\n`);
 

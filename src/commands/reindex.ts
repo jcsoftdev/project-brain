@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { writeFile, mkdir } from "node:fs/promises";
-import { runSync } from "./sync.js";
+import { runSync, resolveSyncModel } from "./sync.js";
 import type { SyncProgress, SyncResult } from "./sync.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
 
@@ -70,8 +70,14 @@ export async function execute(args: string[]): Promise<void> {
 
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
   const { createEmbeddingClient } = await import("../embeddings/factory.js");
+  const { readTableMeta } = await import("../store/meta.js");
   const store = new LanceDbStore(DB_PATH);
-  const embeddings = await createEmbeddingClient(process.env.BRAIN_EMBED_MODEL || undefined, { host: OLLAMA_HOST, autoPull: true });
+
+  // Same precedence as sync.ts execute(): prefer the model the project's
+  // index was already built with (stored table meta) over the registry
+  // default, unless BRAIN_EMBED_MODEL explicitly overrides it.
+  const storedMeta = await readTableMeta(DB_PATH, projectId);
+  const embeddings = await createEmbeddingClient(resolveSyncModel({ envModel: process.env.BRAIN_EMBED_MODEL || undefined, storedMeta }), { host: OLLAMA_HOST, autoPull: true });
 
   console.log(`Re-indexing project: ${projectId} (full scan)\n`);
 
