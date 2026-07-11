@@ -10,6 +10,22 @@ export function embedTimeoutMs(count: number): number {
   return Math.max(10_000, count * 600);
 }
 
+/**
+ * Max attempts (1 initial + retries) for a single embed request when the
+ * failure looks TRANSIENT (subprocess crash / connection reset / 5xx) —
+ * not a sustained/genuine-down condition. Keeps one blip from tripping the
+ * circuit breaker and cascading to concurrent sibling requests in the same
+ * batch (see mapLimit usage in commands/sync.ts).
+ */
+const TRANSIENT_RETRY_ATTEMPTS = 3;
+
+/** Base backoff between retry attempts; grows exponentially (150ms, 300ms, ...). */
+const TRANSIENT_RETRY_BASE_MS = 150;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Ollama-backed embedding client with circuit breaker cooldown. */
 export class OllamaEmbeddingClient implements EmbeddingClient {
   private readonly host: string;
@@ -34,15 +50,35 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
       }
     }
 
-    try {
-      const response = await fetch(`${this.host}/api/embed`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: this.model, input: texts }),
-        signal: AbortSignal.timeout(embedTimeoutMs(texts.length)),
-      });
+    for (let attempt = 1; attempt <= TRANSIENT_RETRY_ATTEMPTS; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch(`${this.host}/api/embed`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: this.model, input: texts }),
+          signal: AbortSignal.timeout(embedTimeoutMs(texts.length)),
+        });
+      } catch {
+        // Thrown errors (ECONNRESET, socket hang up, fetch failure, abort)
+        // are treated as TRANSIENT: a crashed/restarting llama-server
+        // subprocess looks exactly like this on a single request. Retry
+        // with backoff before giving up and tripping the breaker.
+        if (attempt < TRANSIENT_RETRY_ATTEMPTS) {
+          await sleep(TRANSIENT_RETRY_BASE_MS * 2 ** (attempt - 1));
+          continue;
+        }
+        this.lastFailure = Date.now();
+        return null;
+      }
 
       if (!response.ok) {
+        // 5xx is treated as TRANSIENT (server-side blip); 4xx is terminal
+        // immediately (retrying a bad request/model won't help).
+        if (response.status >= 500 && attempt < TRANSIENT_RETRY_ATTEMPTS) {
+          await sleep(TRANSIENT_RETRY_BASE_MS * 2 ** (attempt - 1));
+          continue;
+        }
         this.lastFailure = Date.now();
         return null;
       }
@@ -60,10 +96,12 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
       // Reset circuit breaker on success
       this.lastFailure = null;
       return data.embeddings;
-    } catch {
-      this.lastFailure = Date.now();
-      return null;
     }
+
+    // Unreachable (loop always returns or falls through to a return above
+    // on its final attempt), but keeps the type checker happy.
+    this.lastFailure = Date.now();
+    return null;
   }
 
   async isAvailable(): Promise<boolean> {

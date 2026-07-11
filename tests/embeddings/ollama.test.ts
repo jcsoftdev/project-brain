@@ -226,3 +226,88 @@ describe("OllamaEmbeddingClient.dim", () => {
     expect(c.dim).toBe(768);
   });
 });
+
+describe("OllamaEmbeddingClient — transient failure retry", () => {
+  afterEach(() => {
+    stopMockServer();
+  });
+
+  it("retries a transient connection error and succeeds without tripping the breaker", async () => {
+    let attempt = 0;
+    const host = startMockServer((_req) => {
+      attempt++;
+      if (attempt === 1) {
+        // Simulate the Ollama subprocess crashing/restarting mid-request:
+        // the backing llama-server is briefly down and Ollama surfaces
+        // this as a 5xx (transient) rather than the socket itself dying —
+        // the listening port stays up for the retry.
+        return new Response("upstream llama-server crashed", { status: 502 });
+      }
+      return new Response(
+        JSON.stringify({ embeddings: [new Array(VECTOR_DIM).fill(0.5)] }),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    });
+
+    const client = new OllamaEmbeddingClient(host);
+    const result = await client.embed(["hello"]);
+
+    // Should have transparently retried past the transient crash.
+    expect(result).not.toBeNull();
+    expect(result![0].length).toBe(VECTOR_DIM);
+
+    // Breaker must NOT be tripped — a sibling call right after must still
+    // hit the network (not short-circuit to null from cooldown).
+    const isAvailable = await client.isAvailable();
+    expect(isAvailable).toBe(true);
+  });
+
+  it("does not cascade a single transient failure across concurrent sibling batches", async () => {
+    let requestCount = 0;
+    let firstRequestFailedOnce = false;
+    const host = startMockServer((_req) => {
+      requestCount++;
+      // Only the very first request across all concurrent batches fails once.
+      if (requestCount === 1 && !firstRequestFailedOnce) {
+        firstRequestFailedOnce = true;
+        return new Response("internal error", { status: 503 });
+      }
+      return new Response(
+        JSON.stringify({ embeddings: [new Array(VECTOR_DIM).fill(0.5)] }),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    });
+
+    const client = new OllamaEmbeddingClient(host);
+
+    // Simulate mapLimit(concurrency=3) firing sibling batch requests around
+    // the same time the first one hits its transient 503.
+    const results = await Promise.all([
+      client.embed(["batch-a"]),
+      client.embed(["batch-b"]),
+      client.embed(["batch-c"]),
+    ]);
+
+    // Every batch must succeed — none should be cascaded into failure by
+    // the breaker tripping from the one transient blip.
+    for (const r of results) {
+      expect(r).not.toBeNull();
+    }
+  });
+
+  it("still trips the breaker when failures are sustained (retries exhausted)", async () => {
+    const client = new OllamaEmbeddingClient("http://127.0.0.1:1", 30_000);
+
+    const r1 = await client.embed(["hello"]);
+    expect(r1).toBeNull();
+
+    // Immediately after: breaker should be open, short-circuiting to null
+    // without attempting the network (near-instant).
+    const start = Date.now();
+    const r2 = await client.embed(["world"]);
+    const elapsed = Date.now() - start;
+
+    expect(r2).toBeNull();
+    expect(elapsed).toBeLessThan(100);
+  });
+});
