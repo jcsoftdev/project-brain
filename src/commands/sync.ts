@@ -52,6 +52,54 @@ export interface SyncOptions {
   graph?: GraphStore;
 }
 
+/** Resolved embedding batch/concurrency configuration for a sync run. */
+export interface EmbedConfig {
+  batchSize: number;
+  concurrency: number;
+}
+
+const DEFAULT_EMBED_BATCH_SIZE = 64;
+const DEFAULT_EMBED_CONCURRENCY = 3;
+const MIN_EMBED_BATCH_SIZE = 1;
+const MAX_EMBED_BATCH_SIZE = 512;
+const MIN_EMBED_CONCURRENCY = 1;
+const MAX_EMBED_CONCURRENCY = 16;
+
+/** Parse a positive-integer env override, clamped to [min, max]. Falls back to `fallback` with a warning on non-numeric/empty/non-integer input. */
+function parseEnvInt(raw: string | undefined, name: string, fallback: number, min: number, max: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n)) {
+    console.warn(`[sync] ignoring invalid ${name}=${JSON.stringify(raw)} (must be an integer); using default ${fallback}`);
+    return fallback;
+  }
+  return Math.min(max, Math.max(min, n));
+}
+
+/**
+ * Resolve EMBED_BATCH_SIZE / EMBED_CONCURRENCY from env, with defaults
+ * unchanged (64 / 3) and sane clamping. Pure/DI-friendly: pass an env map in
+ * tests, defaults to `process.env` for real runs.
+ */
+export function resolveEmbedConfig(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env): EmbedConfig {
+  return {
+    batchSize: parseEnvInt(
+      env.BRAIN_EMBED_BATCH_SIZE,
+      "BRAIN_EMBED_BATCH_SIZE",
+      DEFAULT_EMBED_BATCH_SIZE,
+      MIN_EMBED_BATCH_SIZE,
+      MAX_EMBED_BATCH_SIZE
+    ),
+    concurrency: parseEnvInt(
+      env.BRAIN_EMBED_CONCURRENCY,
+      "BRAIN_EMBED_CONCURRENCY",
+      DEFAULT_EMBED_CONCURRENCY,
+      MIN_EMBED_CONCURRENCY,
+      MAX_EMBED_CONCURRENCY
+    ),
+  };
+}
+
 export interface SyncResult {
   /** Files indexed this run. */
   ingested: number;
@@ -240,7 +288,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // EMBED_BATCH_SIZE=200: fewer HTTP round-trips to Ollama.
     // SAVE_EVERY=10: batchReplace every 10 files → continuous progress.
     const READ_CONCURRENCY = 20;
-    const EMBED_BATCH_SIZE = 64;
+    const { batchSize: EMBED_BATCH_SIZE, concurrency: EMBED_CONCURRENCY } = resolveEmbedConfig();
     const SAVE_EVERY = 10;
     const MAX_FILE_BYTES = 512_000;
 
@@ -411,7 +459,6 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
     // Embed only the changed/new chunks in EMBED_BATCH_SIZE batches
     const embeddedVectors: (number[] | null)[] = new Array(textsToEmbed.length).fill(null);
-    const EMBED_CONCURRENCY = 3;
     const batches: Array<{ startIdx: number; texts: string[] }> = [];
     for (let i = 0; i < textsToEmbed.length; i += EMBED_BATCH_SIZE) {
       batches.push({ startIdx: i, texts: textsToEmbed.slice(i, i + EMBED_BATCH_SIZE) });
