@@ -34,7 +34,11 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
       ? await deps.store.ftsSearch(project, expandQuery(query), Math.max(limit * 3, 20))
       : [];
     const kept = applyThreshold(ftsResults, SCORE_THRESHOLD);
-    const results = fillBudget(kept, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES);
+    // mmr diversifies via lexical Jaccard on `content` and needs no vector
+    // field, so it runs unmodified on FTS results — mirrors the vector
+    // path's cap-and-diversify step instead of only capping by token budget.
+    const diverse = mmr(kept, limit, MMR_LAMBDA);
+    const results = fillBudget(diverse, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES);
     return jsonResult({
       results,
       degraded: true,

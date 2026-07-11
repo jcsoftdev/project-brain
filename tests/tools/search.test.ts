@@ -290,6 +290,51 @@ describe("handleSearch — lexical floor (embeddings unavailable)", () => {
 
     expect(hybridCalled).toBe(false);
   });
+
+  it("caps degraded results at `limit`, mirroring the vector path's mmr cap", async () => {
+    const manyResults: SearchResult[] = Array.from({ length: 8 }, (_, i) => ({
+      id: `r${i}::0`,
+      content: `distinct content block number ${i} about topic ${i}`,
+      source: `file${i}.ts`,
+      module: "mod",
+      score: 0.9 - i * 0.01,
+    }));
+    const store = makeMockStore();
+    store.ftsSearch = async () => manyResults;
+
+    const result = await handleSearch(
+      { project: "demo", query: "test", limit: 2 },
+      { store, embeddings: makeMockEmbeddings(false) }
+    );
+
+    const data = JSON.parse(result.content[0].text);
+    // Pre-fix: the lexical branch only capped by SEARCH_TOKEN_BUDGET,
+    // ignoring `limit` entirely — this would return more than 2 results.
+    expect(data.results.length).toBeLessThanOrEqual(2);
+  });
+
+  it("diversifies near-duplicate degraded results instead of letting them dominate", async () => {
+    const dupeHeavy: SearchResult[] = [
+      { id: "d0::0", content: "function handleAuth token validate session user login", source: "a.ts", module: "auth", score: 0.95 },
+      { id: "d1::0", content: "function handleAuth token validate session user login", source: "b.ts", module: "auth", score: 0.94 },
+      { id: "d2::0", content: "function handleAuth token validate session user login", source: "c.ts", module: "auth", score: 0.93 },
+      { id: "d3::0", content: "completely unrelated billing invoice stripe payment charge", source: "d.ts", module: "billing", score: 0.90 },
+    ];
+    const store = makeMockStore();
+    store.ftsSearch = async () => dupeHeavy;
+
+    const result = await handleSearch(
+      { project: "demo", query: "test", limit: 2 },
+      { store, embeddings: makeMockEmbeddings(false) }
+    );
+
+    const data = JSON.parse(result.content[0].text);
+    expect(data.results.length).toBeLessThanOrEqual(2);
+    // mmr should prefer diversity over piling on near-identical top hits —
+    // the distinct billing result should be surfaced over stacking dupes.
+    const sources = data.results.map((r: any) => r.source);
+    expect(sources).toContain("d.ts");
+  });
 });
 
 describe("handleSearch — happy (vector) path regression guard", () => {
