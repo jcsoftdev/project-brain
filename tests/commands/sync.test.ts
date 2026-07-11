@@ -208,13 +208,17 @@ describe("sync command", () => {
         await writeFile(join(tempDir, `file-${i}.md`), `Content of file ${i}`);
       }
 
-      let callCount = 0;
+      // Content-based (not call-count-based) failure: since sync now retries
+      // failed chunks sequentially before giving up (see
+      // sync-embed-fallback.test.ts), a purely call-count-keyed failure would
+      // get healed by the retry pass. Fail deterministically for one specific
+      // "poison" file's content instead — a failure that is genuinely
+      // permanent (survives sequential retry too), so this test still
+      // exercises the "some succeed, some genuinely fail" partial-failure path.
       const partialEmbeddings: EmbeddingClient = {
         dim: VECTOR_DIM,
         embed: async (texts) => {
-          callCount++;
-          // Second batch fails, first succeeds
-          if (callCount === 2) return null;
+          if (texts.some((t) => t.includes("file 42"))) return null;
           return texts.map(() => new Array(VECTOR_DIM).fill(0.1));
         },
         isAvailable: async () => true,
@@ -228,7 +232,7 @@ describe("sync command", () => {
         embeddings: partialEmbeddings,
       });
 
-      // Some ingested (first batch succeeded), some failed (second batch)
+      // Some ingested (most files succeeded), some failed (the poison file)
       expect(result.ingested).toBeGreaterThan(0);
       expect(result.embedFailed).toBeGreaterThan(0);
       // Partial failure: error should NOT be set (only total failure triggers it)

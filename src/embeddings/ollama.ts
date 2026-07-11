@@ -104,6 +104,16 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
     return null;
   }
 
+  /**
+   * Clear the circuit breaker so the next embed() call attempts the network
+   * immediately, ignoring any cooldown from a prior failure. Intended for a
+   * single deliberate recovery attempt (see EmbeddingClient.reset docs) —
+   * NOT for routine use, which would defeat the breaker's purpose.
+   */
+  reset(): void {
+    this.lastFailure = null;
+  }
+
   async isAvailable(): Promise<boolean> {
     try {
       const response = await fetch(`${this.host}/api/tags`, {

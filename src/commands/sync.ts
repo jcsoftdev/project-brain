@@ -477,6 +477,63 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       }
     });
 
+    // Resilience fallback: a concurrent embedding pass can fail wholesale
+    // when Ollama's backing llama-server crashes under concurrent load —
+    // even though single/sequential requests are reliable (confirmed live
+    // and in the engram spike/lexical-graph-quality side-findings). Rather
+    // than aborting the whole sync, retry ONLY the failed texts sequentially
+    // (concurrency=1, smaller batches) before giving up.
+    //
+    // Breaker interaction: OllamaEmbeddingClient opens its circuit breaker
+    // (HEALTH_COOLDOWN_MS = 30s) on failure, so a naive retry right after a
+    // concurrent-pass failure would hit an OPEN breaker and get an instant
+    // null with no network attempt. We call embeddings.reset() once, right
+    // before this one deliberate recovery pass, to bypass that cooldown.
+    // reset() is optional/duck-typed on EmbeddingClient — clients without a
+    // breaker (test fakes, future implementations) simply don't have it, and
+    // the fallback still runs (network calls are attempted either way; reset
+    // only matters for clients WITH a breaker). The breaker's normal-operation
+    // purpose (don't hammer a genuinely-down Ollama) stays intact: we only
+    // bypass it for this single explicit recovery attempt, never routinely.
+    if (embedFailed > 0) {
+      const failedIndices: number[] = [];
+      for (let i = 0; i < embeddedVectors.length; i++) {
+        if (embeddedVectors[i] === null) failedIndices.push(i);
+      }
+
+      if (failedIndices.length > 0) {
+        console.warn(
+          `[sync] Embedding under load failed at concurrency=${EMBED_CONCURRENCY}; retrying sequentially...`
+        );
+        embeddings.reset?.();
+
+        const SEQUENTIAL_BATCH_SIZE = Math.min(EMBED_BATCH_SIZE, 8);
+        const sequentialBatches: Array<{ indices: number[]; texts: string[] }> = [];
+        for (let i = 0; i < failedIndices.length; i += SEQUENTIAL_BATCH_SIZE) {
+          const idxSlice = failedIndices.slice(i, i + SEQUENTIAL_BATCH_SIZE);
+          sequentialBatches.push({
+            indices: idxSlice,
+            texts: idxSlice.map((idx) => textsToEmbed[idx]),
+          });
+        }
+
+        await mapLimit(sequentialBatches, 1, async ({ indices, texts }) => {
+          const vecs = await embeddings.embed(texts);
+          if (vecs) {
+            for (let j = 0; j < vecs.length; j++) {
+              embeddedVectors[indices[j]] = vecs[j];
+              embedFailed--;
+            }
+            embedDone = Math.min(embedDone + vecs.length, textsToEmbed.length);
+            onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
+          }
+          // On failure, the indices stay null / embedFailed stays counted —
+          // same "report real error, nothing partially corrupt" guarantee
+          // as the pre-fallback behavior (5beac8f).
+        });
+      }
+    }
+
     // Distribute embedded vectors back into reusedVectors
     for (let i = 0; i < changedChunkInfos.length; i++) {
       const { entryIdx, chunkIdx } = changedChunkInfos[i];

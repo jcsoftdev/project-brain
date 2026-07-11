@@ -44,6 +44,15 @@ export interface EmbeddingClient {
   readonly model?: string;
   embed(texts: string[]): Promise<number[][] | null>;
   isAvailable(): Promise<boolean>;
+  /**
+   * Optional: clear any internal circuit-breaker/failure state so the next
+   * embed() attempts the network again immediately, bypassing the cooldown.
+   * Intended for ONE deliberate recovery attempt (e.g. sync's sequential
+   * fallback after a concurrent-batch overload) — not for routine use, which
+   * would defeat the breaker's purpose of not hammering a down backend.
+   * Implementations without a breaker (e.g. test fakes) can omit this.
+   */
+  reset?(): void;
 }
 
 /** Per-table metadata (model name + vector dim). */
