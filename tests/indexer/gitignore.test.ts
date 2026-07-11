@@ -36,6 +36,12 @@ describe("gitignore filter", () => {
       expect(shouldIgnore("__pycache__/mod.pyc", [])).toBe(true);
     });
 
+    it("always ignores .claude/ (agent worktrees must not pollute the index)", () => {
+      expect(shouldIgnore(".claude/worktrees/agent-x/src/foo.ts", [])).toBe(true);
+      expect(shouldIgnore(".claude/settings.json", [])).toBe(true);
+      expect(shouldIgnore("src/foo.ts", [])).toBe(false);
+    });
+
     it("does not ignore normal files with no patterns", () => {
       expect(shouldIgnore("src/main.ts", [])).toBe(false);
       expect(shouldIgnore("README.md", [])).toBe(false);

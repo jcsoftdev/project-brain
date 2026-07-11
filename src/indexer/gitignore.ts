@@ -11,6 +11,7 @@ const ALWAYS_IGNORE = [
   "target/",
   "__pycache__/",
   ".project-brain/",
+  ".claude/",
 ];
 
 /**
