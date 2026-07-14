@@ -27,3 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
 CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_symbol_id);
 CREATE INDEX IF NOT EXISTS idx_edges_dst_symbol ON edges(dst_symbol_id);
 CREATE INDEX IF NOT EXISTS idx_edges_dst_name ON edges(dst_name);
+-- Serves resolveEdgesForFile's same-file-first candidate lookup
+-- (WHERE s.name = ? AND s.file_id = ?) with one composite probe instead of
+-- an idx_symbols_name scan filtered by file_id.
+CREATE INDEX IF NOT EXISTS idx_symbols_name_file ON symbols(name, file_id);

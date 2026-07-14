@@ -32,3 +32,10 @@ test("replaceFile inserts symbols+edges and is idempotent", () => {
   expect(edges.c).toBe(0); // second replace dropped the old edge
   db.close();
 });
+
+test("schema includes the composite (name, file_id) symbols index", () => {
+  const db = openGraphDb(":memory:");
+  const rows = db.query("PRAGMA index_list('symbols')").all() as Array<{ name: string }>;
+  expect(rows.some((r) => r.name === "idx_symbols_name_file")).toBe(true);
+  db.close();
+});
