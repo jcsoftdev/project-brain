@@ -65,6 +65,11 @@ afterEach(() => {
 });
 
 describe("partial embed failure and the hash manifest", () => {
+  // Explicit timeout: the poisoned chunk now also runs through the final
+  // one-by-one rescue pass (ladder step 3), which uses REAL exponential
+  // backoff (1s + 2s) between its 3 attempts since this test doesn't inject
+  // a fake sleep. runSync() is called twice below, so the real backoff cost
+  // alone is ~6s — well past bun's 5s default test timeout.
   it("does NOT record a file in the manifest when some of its chunks failed to embed", async () => {
     writeFileSync(join(tempDir, "clean.ts"), "export function clean(a: number){ return a; }");
     // Two functions so poisoned.ts produces >= 2 cAST chunks: one embeds
@@ -111,5 +116,5 @@ describe("partial embed failure and the hash manifest", () => {
     });
     expect(second.skipped).toBe(1); // clean.ts skipped (hash match)
     expect(second.embedFailed).toBeGreaterThan(0); // poisoned.ts retried, failed again — still visible
-  });
+  }, 15000);
 });

@@ -14,6 +14,7 @@ import { GraphStore } from "../graph/store.js";
 import { openGraphDb } from "../graph/db.js";
 import { ManifestStore } from "../indexer/manifest-store.js";
 import { detectEmbedTuning, type EmbedTuning } from "../embeddings/auto-tune.js";
+import { rescueEmbedPass } from "../embeddings/rescue.js";
 
 export interface ManifestEntry {
   hash: string;
@@ -617,6 +618,30 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           // same "report real error, nothing partially corrupt" guarantee
           // as the pre-fallback behavior (5beac8f).
         });
+
+        // Ladder step 3 (final rescue): chunks STILL null after the sequential
+        // pass above get one last shot, one text at a time (batch size 1,
+        // concurrency 1) with exponential backoff between consecutive
+        // failures. This is the smallest possible unit of work — on a
+        // memory-constrained Ollama host even an 8-text sequential batch can
+        // fail while a single-text request succeeds. See rescueEmbedPass for
+        // the backoff/breaker-bypass details.
+        const stillFailedIndices = failedIndices.filter((idx) => embeddedVectors[idx] === null);
+        if (stillFailedIndices.length > 0) {
+          await rescueEmbedPass(embeddings, textsToEmbed, stillFailedIndices, embeddedVectors);
+
+          for (const idx of stillFailedIndices) {
+            if (embeddedVectors[idx] !== null) {
+              embedDone = Math.min(embedDone + 1, textsToEmbed.length);
+            }
+          }
+          onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
+
+          // Only successfully embedded vectors are stored (unchanged
+          // invariant) — embedFailed reflects whatever is STILL null now,
+          // after every rung of the ladder has been tried.
+          embedFailed = failedIndices.filter((idx) => embeddedVectors[idx] === null).length;
+        }
       }
     }
 

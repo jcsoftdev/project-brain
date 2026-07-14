@@ -201,6 +201,10 @@ describe("sync command", () => {
   });
 
   describe("T-7.5: partial embed failure — only succeeded chunks stored, warning provided", () => {
+    // Explicit timeout: the permanently-poisoned chunk now also runs through
+    // the final one-by-one rescue pass (ladder step 3), which uses REAL
+    // exponential backoff (1s + 2s) between its 3 attempts since this test
+    // doesn't inject a fake sleep — past bun's 5s default test timeout.
     it("embedFailed tracks only the texts that returned null, not the whole run", async () => {
       const store = makeMemoryStore();
       // We need 2 batches. EMBED_BATCH_SIZE=64, so write 65 tiny files.
@@ -237,7 +241,7 @@ describe("sync command", () => {
       expect(result.embedFailed).toBeGreaterThan(0);
       // Partial failure: error should NOT be set (only total failure triggers it)
       expect(result.error).toBeUndefined();
-    });
+    }, 15000);
   });
 
   describe("T-7.6: embedDone progress reflects only successful embeds", () => {
