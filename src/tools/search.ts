@@ -6,9 +6,17 @@ import { fillBudget } from "../retrieval/budget.js";
 import { expandQuery } from "../retrieval/query-expand.js";
 import { SCORE_THRESHOLD, MMR_LAMBDA, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES, HARDNESS, toolAnnotations } from "../constants.js";
 import { jsonResult, type ToolResult } from "./format.js";
+import { QueryEmbedCache } from "../embeddings/query-cache.js";
 
 const LEXICAL_DEGRADED_NOTE =
   "Embeddings unavailable — showing keyword (BM25) results. Conceptual matches may be missed; start Ollama for full semantic search.";
+
+/**
+ * Module-level singleton: the serve process is long-lived, so identical
+ * repeat queries within its lifetime should not pay Ollama's ~900ms embed
+ * round-trip twice. Per-call instances would never hit.
+ */
+const queryCache = new QueryEmbedCache();
 
 interface SearchArgs {
   project: string;
@@ -24,7 +32,10 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
 
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(project) : deps.embeddings;
 
-  const vectors = await emb.embed([query]);
+  const modelKey = emb.model ?? "";
+  const cached = queryCache.get(modelKey, query);
+  const vectors = cached ? [cached] : await emb.embed([query]);
+  if (vectors && !cached) queryCache.set(modelKey, query, vectors[0]);
   if (!vectors) {
     // Lexical floor: no Ollama / embeddings available. Degrade to BM25 with
     // code-aware query expansion instead of hard-failing — same threshold/

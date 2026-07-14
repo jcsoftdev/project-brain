@@ -1,11 +1,7 @@
-import { join } from "node:path";
-import { writeFile, mkdir } from "node:fs/promises";
-import { runSync, resolveSyncModel } from "./sync.js";
+import { runSync, resolveSyncModel, syncExitCode } from "./sync.js";
+import { ManifestStore } from "../indexer/manifest-store.js";
 import type { SyncProgress, SyncResult } from "./sync.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
-
-const CONFIG_DIR = ".project-brain";
-const HASH_MANIFEST = "hashes.json";
 
 export interface ReindexOptions {
   /** Absolute path to the project root. */
@@ -29,16 +25,19 @@ export type ReindexResult = SyncResult;
 
 /**
  * Core reindex logic — DI-friendly.
- * Clears the hash manifest so all files are treated as new,
+ * Clears the manifest store so all files are treated as new,
  * then runs a full sync. This is equivalent to a "cold start" index.
  */
 export async function runReindex(options: ReindexOptions): Promise<ReindexResult> {
   const { root, projectId, store, embeddings, onProgress } = options;
 
-  // 1. Clear the hash manifest so runSync treats all files as new
-  const manifestDir = join(root, CONFIG_DIR);
-  await mkdir(manifestDir, { recursive: true });
-  await writeFile(join(manifestDir, HASH_MANIFEST), JSON.stringify({}));
+  // 1. Clear the manifest store so runSync treats all files as new
+  const manifest = new ManifestStore(root);
+  try {
+    manifest.clear();
+  } finally {
+    manifest.close();
+  }
 
   // 2. Run a full sync — no files will be skipped (all hashes are cleared)
   const result = await runSync({ root, projectId, store, embeddings, onProgress });
@@ -97,5 +96,12 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`  Scanned:  ${result.scanned} files`);
   console.log(`  Ingested: ${result.ingested} files`);
+
+  if (result.embedFailed > 0) {
+    console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);
+    console.log("\nReindex incomplete.");
+    process.exit(syncExitCode(result));
+  }
+
   console.log("\nReindex complete.");
 }

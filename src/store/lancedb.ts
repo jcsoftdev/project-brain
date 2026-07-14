@@ -1,6 +1,7 @@
 import * as lancedb from "@lancedb/lancedb";
 import { Index, rerankers } from "@lancedb/lancedb";
-import { EMBEDDING_MODEL, TABLE_SUFFIX, VECTOR_DIM } from "../constants.js";
+import type { IvfPqOptions } from "@lancedb/lancedb";
+import { ANN_INDEX_MIN_ROWS, EMBEDDING_MODEL, TABLE_SUFFIX, VECTOR_DIM } from "../constants.js";
 import { readTableMeta, writeTableMeta } from "./meta.js";
 import type { TableMeta } from "./meta.js";
 import type { Chunk, SearchResult, VectorStore, SymbolKind } from "../types.js";
@@ -354,13 +355,45 @@ export class LanceDbStore implements VectorStore {
     }
   }
 
-  async buildIndexes(project: string): Promise<void> {
+  async buildIndexes(
+    project: string,
+    opts?: { annMinRows?: number; ivfPqOptions?: Partial<IvfPqOptions> }
+  ): Promise<void> {
     const table = await this.getTable(project);
     if (!table) return;
     try {
       await table.createIndex("content", { config: Index.fts() });
     } catch {
       // Index may already exist or table has too few rows — non-fatal
+    }
+    // Vector ANN index: without it every query is an exact O(n) scan over
+    // all vectors — fine for small repos, linear-degrading for large ones.
+    // IVF_PQ defaults (numPartitions ≈ sqrt(rows), auto subvectors) are
+    // fine; we only gate on size so tiny tables keep exact search.
+    const annMinRows = opts?.annMinRows ?? ANN_INDEX_MIN_ROWS;
+    let hasVectorIndex = false;
+    try {
+      const indices = await table.listIndices();
+      hasVectorIndex = indices.some((ix) => ix.columns.includes("vector"));
+    } catch {
+      // listIndices() unavailable — fall through and let createIndex's own
+      // try/catch below handle the "already exists" case defensively.
+    }
+    try {
+      const rows = await table.countRows();
+      if (rows >= annMinRows && !hasVectorIndex) {
+        await table.createIndex("vector", { config: Index.ivfPq(opts?.ivfPqOptions) });
+        hasVectorIndex = true;
+      }
+    } catch {
+      // Non-fatal: brute-force vector scan still works without the index.
+    }
+    // Vectors added after the index was built aren't covered by it until the
+    // table is optimized — re-optimize whenever a vector index is present
+    // (freshly created or pre-existing) so index staleness doesn't silently
+    // degrade newly-added rows back to brute-force scan.
+    if (hasVectorIndex) {
+      await this.optimize(project);
     }
   }
 

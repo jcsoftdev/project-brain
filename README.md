@@ -219,6 +219,23 @@ BRAIN_HTTP_TOKEN=your-secret project-brain serve --http [--port 3000]
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL |
 | `BRAIN_NO_UPDATE_CHECK` | — | Set to `1` to disable the update-available notice |
 
+## Tuning (environment variables)
+
+`sync`/`reindex` throughput and resilience are tunable independently of the model:
+
+| Variable | Default | Range | Effect |
+|---|---|---|---|
+| `BRAIN_EMBED_BATCH_SIZE` | `64` | `1`–`512` | Texts per Ollama embed request. Lower it if Ollama times out under load. |
+| `BRAIN_EMBED_CONCURRENCY` | `3` | `1`–`16` | Concurrent embed requests. Set to `1` on shared/VRAM-constrained GPUs. |
+| `BRAIN_OLLAMA_HOSTS` | — | comma-separated URLs | Pool of Ollama hosts for round-robin embedding (e.g. `http://127.0.0.1:11434,http://127.0.0.1:11435`). Falls through to the next host on failure; only `null`s when every host fails. |
+| `BRAIN_EMBED_MODEL` | `qwen3-embedding:0.6b` | model name | Override the embedding model (see table above). |
+
+A partial or total embed failure makes `sync`/`reindex` exit non-zero (`1`) — check the exit code in automation (CI, git hooks), not just stderr text.
+
+Leaving `BRAIN_EMBED_BATCH_SIZE`/`BRAIN_EMBED_CONCURRENCY` unset does not mean "always use the defaults above" — each unset knob is auto-detected from machine resources at sync time (available cores/memory, and whether another model is already loaded in Ollama alongside the embed model, which risks VRAM contention). A log line like `[sync] auto-tuned embed config: concurrency=1 batchSize=16 (vram-contention)` explains why. Set either var explicitly to pin it — env values always win over auto-detection.
+
+`.project-brain/manifest.db` (plus its `-wal`/`-shm` sidecars) replaces the old `hashes.json` incremental-sync manifest. It is gitignored already — if you have a stale `hashes.json` around, it migrates automatically on first sync and is renamed to `hashes.json.bak`.
+
 ## Update notifications
 
 The CLI checks (at most once a day, in the background) whether a newer `project-brain` is published on npm and prints a one-line notice when one is available. It is fail-silent, adds zero latency (the check runs in a detached process; the current command reads only a cached result), and is skipped in CI. Disable it with `BRAIN_NO_UPDATE_CHECK=1`.

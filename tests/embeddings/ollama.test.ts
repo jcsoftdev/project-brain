@@ -143,20 +143,24 @@ describe("OllamaEmbeddingClient — circuit breaker cooldown", () => {
     stopMockServer();
   });
 
-  it("after failure, returns null immediately within cooldown (no network)", async () => {
+  it("after 2 consecutive failures, returns null immediately within cooldown (no network)", async () => {
     const client = new OllamaEmbeddingClient("http://127.0.0.1:1");
 
-    // First call: fails (network error)
+    // Two consecutive failed requests are needed to trip the breaker
+    // (BREAKER_THRESHOLD = 2) — one poisoned batch must not cut off healthy
+    // concurrent siblings.
     const r1 = await client.embed(["hello"]);
     expect(r1).toBeNull();
+    const r2 = await client.embed(["hello"]);
+    expect(r2).toBeNull();
 
-    // Second call within cooldown: should return null WITHOUT making a network call
+    // Third call within cooldown: should return null WITHOUT making a network call
     // We verify by timing — it should be near-instant (no connection timeout)
     const start = Date.now();
-    const r2 = await client.embed(["hello"]);
+    const r3 = await client.embed(["hello"]);
     const elapsed = Date.now() - start;
 
-    expect(r2).toBeNull();
+    expect(r3).toBeNull();
     expect(elapsed).toBeLessThan(100); // Should be instant, not waiting for timeout
   });
 
@@ -295,19 +299,70 @@ describe("OllamaEmbeddingClient — transient failure retry", () => {
     }
   });
 
-  it("still trips the breaker when failures are sustained (retries exhausted)", async () => {
+  it("still trips the breaker when failures are sustained across 2 consecutive requests (retries exhausted)", async () => {
     const client = new OllamaEmbeddingClient("http://127.0.0.1:1", 30_000);
 
     const r1 = await client.embed(["hello"]);
     expect(r1).toBeNull();
+    // Second consecutive failure — trips the breaker (BREAKER_THRESHOLD = 2).
+    const r2 = await client.embed(["world"]);
+    expect(r2).toBeNull();
 
     // Immediately after: breaker should be open, short-circuiting to null
     // without attempting the network (near-instant).
     const start = Date.now();
-    const r2 = await client.embed(["world"]);
+    const r3 = await client.embed(["!"]);
     const elapsed = Date.now() - start;
 
-    expect(r2).toBeNull();
+    expect(r3).toBeNull();
     expect(elapsed).toBeLessThan(100);
+  });
+});
+
+describe("OllamaEmbeddingClient — 4xx exemption and consecutive-failure isolation", () => {
+  afterEach(() => {
+    stopMockServer();
+  });
+
+  it("a 4xx response does NOT trip the circuit breaker", async () => {
+    let call = 0;
+    const host = startMockServer((_req) => {
+      call++;
+      if (call === 1) {
+        // 4xx is input-specific (bad request/model for THIS payload) — must
+        // not count toward the breaker.
+        return new Response("bad request", { status: 400 });
+      }
+      return new Response(
+        JSON.stringify({ embeddings: [new Array(VECTOR_DIM).fill(0.5)] }),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    });
+
+    const client = new OllamaEmbeddingClient(host);
+    expect(await client.embed(["bad chunk"])).toBeNull();
+    // A good chunk right after must NOT be breaker-blocked.
+    expect(await client.embed(["good chunk"])).not.toBeNull();
+  });
+
+  it("breaker trips only after 2 consecutive failed requests", async () => {
+    const client = new OllamaEmbeddingClient("http://127.0.0.1:1", 30_000);
+
+    // Failure 1 (all transient attempts exhausted against an unreachable host).
+    expect(await client.embed(["a"])).toBeNull();
+
+    // Breaker NOT open yet: this call must still attempt the network — a
+    // real retry-with-backoff attempt takes noticeably longer than a
+    // breaker short-circuit.
+    const start = Date.now();
+    expect(await client.embed(["b"])).toBeNull();
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeGreaterThan(100);
+
+    // That was the 2nd consecutive failure — breaker should now be open.
+    const start2 = Date.now();
+    expect(await client.embed(["c"])).toBeNull();
+    const elapsed2 = Date.now() - start2;
+    expect(elapsed2).toBeLessThan(100);
   });
 });

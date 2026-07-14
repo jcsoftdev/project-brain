@@ -2,7 +2,7 @@
  * Unit tests for createEmbeddingClient factory, ensureEmbeddingModel, detectDim.
  * All tests use injected deps — no real network calls.
  */
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, afterEach } from "bun:test";
 import { isModelInstalled } from "../../src/embeddings/factory.js";
 
 // Helper: build a fake embed fn returning vectors of given dimension
@@ -233,6 +233,89 @@ describe("isModelInstalled — tag-boundary matching", () => {
 
   it("matches an exact installed name with no tag suffix needed", () => {
     expect(isModelInstalled(["qwen3-embedding:0.6b"], "qwen3-embedding:0.6b")).toBe(true);
+  });
+});
+
+describe("createEmbeddingClient — BRAIN_OLLAMA_HOSTS pooling", () => {
+  const prevHosts = process.env.BRAIN_OLLAMA_HOSTS;
+
+  afterEach(() => {
+    if (prevHosts === undefined) delete process.env.BRAIN_OLLAMA_HOSTS;
+    else process.env.BRAIN_OLLAMA_HOSTS = prevHosts;
+  });
+
+  it("returns an EmbeddingPool when 2+ hosts are configured", async () => {
+    process.env.BRAIN_OLLAMA_HOSTS = "http://127.0.0.1:11434, http://127.0.0.1:11435";
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+    const { EmbeddingPool } = await import("../../src/embeddings/pool.js");
+
+    const client = await createEmbeddingClient("nomic-text", {
+      isModelAvailable: alwaysAvailable,
+      embed: makeEmbed(768),
+    });
+
+    expect(client).toBeInstanceOf(EmbeddingPool);
+    expect(client.model).toBe("nomic-embed-text");
+    expect(client.dim).toBe(768);
+  });
+
+  it("resolves model/autoPull/detectDim ONCE (against the first host), not once per host", async () => {
+    process.env.BRAIN_OLLAMA_HOSTS = "http://127.0.0.1:11434,http://127.0.0.1:11435,http://127.0.0.1:11436";
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+
+    let availabilityCalls = 0;
+    let embedCalls = 0;
+
+    const client = await createEmbeddingClient("nomic-text", {
+      isModelAvailable: async () => { availabilityCalls++; return true; },
+      embed: async (texts) => { embedCalls++; return makeEmbed(768)(texts); },
+    });
+
+    expect(availabilityCalls).toBe(1);
+    expect(embedCalls).toBe(1);
+    expect(client.dim).toBe(768);
+  });
+
+  it("keeps single-client behavior when only one host is configured", async () => {
+    process.env.BRAIN_OLLAMA_HOSTS = "http://127.0.0.1:11434";
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+    const { EmbeddingPool } = await import("../../src/embeddings/pool.js");
+
+    const client = await createEmbeddingClient("nomic-text", {
+      isModelAvailable: alwaysAvailable,
+      embed: makeEmbed(768),
+    });
+
+    expect(client).not.toBeInstanceOf(EmbeddingPool);
+  });
+
+  it("keeps single-client behavior when unset", async () => {
+    delete process.env.BRAIN_OLLAMA_HOSTS;
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+    const { EmbeddingPool } = await import("../../src/embeddings/pool.js");
+
+    const client = await createEmbeddingClient(undefined, {
+      isModelAvailable: alwaysAvailable,
+      host: "http://127.0.0.1:11434",
+    });
+
+    expect(client).not.toBeInstanceOf(EmbeddingPool);
+  });
+});
+
+describe("parseOllamaHosts", () => {
+  it("splits, trims, and drops empties", async () => {
+    const { parseOllamaHosts } = await import("../../src/embeddings/factory.js");
+    expect(parseOllamaHosts("http://a, http://b ,,  http://c")).toEqual([
+      "http://a", "http://b", "http://c",
+    ]);
+  });
+
+  it("returns empty array for unset/blank", async () => {
+    const { parseOllamaHosts } = await import("../../src/embeddings/factory.js");
+    expect(parseOllamaHosts(undefined)).toEqual([]);
+    expect(parseOllamaHosts("")).toEqual([]);
+    expect(parseOllamaHosts("   ")).toEqual([]);
   });
 });
 

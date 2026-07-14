@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { VECTOR_DIM } from "../../src/constants.js";
+import { ManifestStore } from "../../src/indexer/manifest-store.js";
 import type { EmbeddingClient, VectorStore, Chunk, SearchResult } from "../../src/types.js";
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -205,15 +206,17 @@ describe("T-8: per-chunk embedding hash", () => {
     const textsSync1 = calls.flatMap((c) => c).length;
     expect(textsSync1).toBeGreaterThanOrEqual(2); // ≥2 chunks
 
-    // Simulate old-format manifest: strip the chunks field from the persisted entry
-    const { readFile, writeFile: wf } = await import("node:fs/promises");
-    const { join: pjoin } = await import("node:path");
-    const manifestPath = pjoin(tempDir, ".project-brain", "hashes.json");
-    const raw = JSON.parse(await readFile(manifestPath, "utf-8"));
-    for (const key of Object.keys(raw)) {
-      delete raw[key].chunks;
-    }
-    await wf(manifestPath, JSON.stringify(raw, null, 2));
+    // Simulate an old-format manifest entry (no per-chunk hashes tracked):
+    // re-upsert with the SAME hash/mtime but an EMPTY chunks map. ManifestStore
+    // has no separate "chunks field absent" representation (chunks live in a
+    // side table, always queried as a — possibly empty — object), which is
+    // exactly equivalent to the legacy JSON's "no chunks key" shape: any
+    // per-chunk lookup misses either way, forcing a full re-embed.
+    const manifest = new ManifestStore(tempDir);
+    const entry = manifest.getEntry("legacy.md");
+    expect(entry).not.toBeNull();
+    manifest.upsertFile("legacy.md", entry!.hash, entry!.mtime, {});
+    manifest.close();
 
     const callsAfterStrip = calls.length;
 

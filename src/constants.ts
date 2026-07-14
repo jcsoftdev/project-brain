@@ -92,6 +92,13 @@ export const HARDNESS = process.env.PROJECT_BRAIN_HARDNESS === "1";
 /** Filename for the structural graph SQLite database (resolved under the .project-brain data dir). */
 export const GRAPH_DB_FILE = "graph.db";
 
+/**
+ * Row-count threshold above which buildIndexes() creates a vector ANN
+ * (IVF_PQ) index. Below it, LanceDB's exact brute-force scan is faster than
+ * index maintenance; above it, per-query latency grows linearly without one.
+ */
+export const ANN_INDEX_MIN_ROWS = 20_000;
+
 export const MAX_PARSE_BYTES = 512 * 1024;      // skip files > 512KB (minified/generated)
 export const MAX_LINE_LENGTH = 5000;            // skip files with pathological lines
 export const PARSER_TEARDOWN_EVERY = 500;       // recreate WASM instance every N files to reclaim linear memory

@@ -30,6 +30,11 @@ function makeMockStore(results: SearchResult[] = mockResults): VectorStore {
 function makeMockEmbeddings(available = true): EmbeddingClient {
   return {
     dim: VECTOR_DIM,
+    // Distinct model per variant: the query-embedding cache is keyed by
+    // (model, query) and shared as a module singleton across this whole
+    // test file — without a distinguishing model, available/unavailable
+    // mocks sharing the same query text (e.g. "test") would collide.
+    model: available ? "mock-available" : "mock-unavailable",
     embed: async (texts) =>
       available ? texts.map(() => new Array(VECTOR_DIM).fill(0.1)) : null,
     isAvailable: async () => available,
@@ -347,6 +352,23 @@ describe("handleSearch — happy (vector) path regression guard", () => {
     expect(data).not.toHaveProperty("degraded");
     expect(data).not.toHaveProperty("mode");
     expect(data).not.toHaveProperty("note");
+  });
+});
+
+describe("handleSearch — query embedding cache", () => {
+  it("second identical query does not call embed again (query cache)", async () => {
+    let embedCalls = 0;
+    const emb: EmbeddingClient = {
+      dim: 3,
+      model: "cache-test-model",
+      async embed(texts) { embedCalls++; return texts.map(() => [1, 2, 3]); },
+      isAvailable: async () => true,
+    };
+    const store = makeMockStore();
+    const deps = { store, embeddings: emb };
+    await handleSearch({ project: "p", query: "same question" }, deps);
+    await handleSearch({ project: "p", query: "same question" }, deps);
+    expect(embedCalls).toBe(1);
   });
 });
 

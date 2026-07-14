@@ -1,5 +1,7 @@
 import { resolveModel, DEFAULT_MODEL_KEY } from "./registry.js";
 import { OllamaEmbeddingClient } from "./ollama.js";
+import { EmbeddingPool } from "./pool.js";
+import type { EmbeddingClient } from "../types.js";
 
 // ── Injectable dependency types ────────────────────────────────────────────
 
@@ -102,6 +104,19 @@ export async function detectDim(
 // ── createEmbeddingClient ─────────────────────────────────────────────────
 
 /**
+ * Parse BRAIN_OLLAMA_HOSTS into a list of host URLs: comma-split, trim,
+ * drop empties. Returns an empty array when unset/blank (single/default
+ * host path — unaffected).
+ */
+export function parseOllamaHosts(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((h) => h.trim())
+    .filter((h) => h.length > 0);
+}
+
+/**
  * Resolve and construct an OllamaEmbeddingClient with auto-pull and dim detection.
  *
  * Resolution order:
@@ -110,13 +125,24 @@ export async function detectDim(
  *  2b. If autoPull=false/undefined: check availability; if absent → fall back to nomic-text (no pull).
  *  3. Detect dim via a real embed probe (injected or real). Fall back to spec.dim ?? 768.
  *  4. Construct and return OllamaEmbeddingClient.
+ *
+ * Multi-host pooling: when BRAIN_OLLAMA_HOSTS is set with 2+ comma-separated
+ * hosts, model resolution/autoPull/detectDim runs ONCE (against the first
+ * host) and the resolved model+dim are fanned out to one OllamaEmbeddingClient
+ * per host, wrapped in an EmbeddingPool for round-robin throughput. A single
+ * host (or the env var unset) preserves today's exact single-client behavior.
  */
 export async function createEmbeddingClient(
   modelKey?: string,
   options: FactoryOptions = {}
-): Promise<OllamaEmbeddingClient> {
+): Promise<EmbeddingClient> {
   const { OLLAMA_HOST } = await import("../constants.js");
-  const host = options.host ?? OLLAMA_HOST;
+  const pooledHosts = parseOllamaHosts(process.env.BRAIN_OLLAMA_HOSTS);
+  const usePool = pooledHosts.length >= 2;
+  // Multi-host pool: model resolution/autoPull/detectDim below runs ONCE,
+  // against the first pooled host; the resolved model+dim then fan out to
+  // one OllamaEmbeddingClient per host at the bottom of this function.
+  const host = usePool ? pooledHosts[0] : options.host ?? OLLAMA_HOST;
 
   const spec = resolveModel(modelKey);
   const checkAvailability = options.isModelAvailable ?? makeDefaultAvailabilityChecker(host);
@@ -165,6 +191,13 @@ export async function createEmbeddingClient(
 
   // Detect actual dim via a real embed probe
   const dim = (await detectDim(host, chosenModel, { embed: options.embed })) ?? chosenSpecDim ?? 768;
+
+  if (usePool) {
+    const clients = pooledHosts.map(
+      (h) => new OllamaEmbeddingClient(h, undefined, chosenModel, dim)
+    );
+    return new EmbeddingPool(clients);
+  }
 
   return new OllamaEmbeddingClient(host, undefined, chosenModel, dim);
 }

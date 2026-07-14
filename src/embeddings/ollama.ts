@@ -33,6 +33,12 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
   private readonly cooldownMs: number;
   readonly dim: number;
   private lastFailure: number | null = null;
+  /** Consecutive failed embed() requests needed to open the breaker. One
+   * failed request (itself 3 transient attempts) can be a poisoned batch —
+   * a huge minified blob, an encoding edge case — and must not cut off
+   * healthy concurrent siblings. Two in a row looks like Ollama is down. */
+  private static readonly BREAKER_THRESHOLD = 2;
+  private consecutiveFailures = 0;
 
   constructor(host: string, cooldownMs: number = HEALTH_COOLDOWN_MS, model: string = EMBEDDING_MODEL, dim: number = VECTOR_DIM) {
     this.host = host;
@@ -68,7 +74,7 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
           await sleep(TRANSIENT_RETRY_BASE_MS * 2 ** (attempt - 1));
           continue;
         }
-        this.lastFailure = Date.now();
+        this.recordFailure();
         return null;
       }
 
@@ -79,7 +85,13 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
           await sleep(TRANSIENT_RETRY_BASE_MS * 2 ** (attempt - 1));
           continue;
         }
-        this.lastFailure = Date.now();
+        if (response.status < 500) {
+          // 4xx is input-specific (bad request/model for THIS payload) —
+          // terminal for this call but says nothing about server health.
+          // Do not count it toward the breaker.
+          return null;
+        }
+        this.recordFailure();
         return null;
       }
 
@@ -90,18 +102,29 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
             Array.isArray(data.embeddings) ? data.embeddings.length : "non-array"
           }`
         );
-        this.lastFailure = Date.now();
+        this.recordFailure();
         return null;
       }
-      // Reset circuit breaker on success
+      // Reset circuit breaker + failure streak on success
+      this.consecutiveFailures = 0;
       this.lastFailure = null;
       return data.embeddings;
     }
 
     // Unreachable (loop always returns or falls through to a return above
     // on its final attempt), but keeps the type checker happy.
-    this.lastFailure = Date.now();
+    this.recordFailure();
     return null;
+  }
+
+  /** A whole embed() request (all transient attempts exhausted, or a
+   * genuine terminal 5xx/length-mismatch) counts as one failure toward the
+   * breaker. Only BREAKER_THRESHOLD consecutive failures open it. */
+  private recordFailure(): void {
+    this.consecutiveFailures++;
+    if (this.consecutiveFailures >= OllamaEmbeddingClient.BREAKER_THRESHOLD) {
+      this.lastFailure = Date.now();
+    }
   }
 
   /**
@@ -112,6 +135,7 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
    */
   reset(): void {
     this.lastFailure = null;
+    this.consecutiveFailures = 0;
   }
 
   async isAvailable(): Promise<boolean> {
