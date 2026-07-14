@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { writeFile, mkdir } from "node:fs/promises";
-import { runSync, resolveSyncModel } from "./sync.js";
+import { runSync, resolveSyncModel, syncExitCode } from "./sync.js";
 import type { SyncProgress, SyncResult } from "./sync.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
 
@@ -97,5 +97,12 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`  Scanned:  ${result.scanned} files`);
   console.log(`  Ingested: ${result.ingested} files`);
+
+  if (result.embedFailed > 0) {
+    console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);
+    console.log("\nReindex incomplete.");
+    process.exit(syncExitCode(result));
+  }
+
   console.log("\nReindex complete.");
 }

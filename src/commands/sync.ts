@@ -147,6 +147,15 @@ export interface SyncResult {
   error?: string;
 }
 
+/**
+ * Exit code contract for sync/reindex CLIs: any unembedded chunk is a
+ * failure (exit 1), not a warning. Automation (CI, git hooks) must be able
+ * to detect a partial index without parsing stderr.
+ */
+export function syncExitCode(result: Pick<SyncResult, "error" | "embedFailed">): number {
+  return result.error || result.embedFailed > 0 ? 1 : 0;
+}
+
 /** Load the persisted hash manifest. Supports both legacy (string) and new ({hash,mtime}) format. */
 async function loadHashManifest(root: string): Promise<Manifest> {
   const path = join(root, CONFIG_DIR, HASH_MANIFEST);
@@ -597,12 +606,22 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       storeBuf.sources.push(entry.relPath);
       storeBuf.chunks.push(...entryChunks);
 
-      // Build per-chunk hash map for the manifest
-      const chunkHashes: Record<string, string> = {};
-      for (const raw of entry.rawChunks) {
-        chunkHashes[raw.id] = raw.content_hash;
+      // Only mark this file "synced" in the manifest if EVERY one of its
+      // chunks actually embedded. Recording entry.hash unconditionally would
+      // make the top-level `entry.hash === hash` check (above) treat this
+      // file as unchanged forever, permanently skipping the chunks that
+      // failed — silent, undetectable data loss surviving even future
+      // reindexes. Leaving the manifest entry stale/absent forces this file
+      // to be reprocessed (and its missing chunks retried) next sync.
+      if (entryChunks.length === entry.rawChunks.length) {
+        const chunkHashes: Record<string, string> = {};
+        for (const raw of entry.rawChunks) {
+          chunkHashes[raw.id] = raw.content_hash;
+        }
+        newManifest[entry.relPath] = { hash: entry.hash, mtime: entry.mtime, chunks: chunkHashes };
+      } else {
+        delete newManifest[entry.relPath];
       }
-      newManifest[entry.relPath] = { hash: entry.hash, mtime: entry.mtime, chunks: chunkHashes };
       ingested++;
       onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
 
@@ -814,6 +833,8 @@ export async function execute(args: string[]): Promise<void> {
   }
   if (result.embedFailed > 0) {
     console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);
+    console.log("\nSync incomplete.");
+    process.exit(syncExitCode(result));
   }
   console.log("\nSync complete.");
 }
