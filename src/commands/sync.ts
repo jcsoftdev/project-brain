@@ -4,7 +4,7 @@ import type { Dirent } from "node:fs";
 import { computeHash } from "../indexer/hash.js";
 import { chunkContent } from "../indexer/parser.js";
 import { shouldIgnore, loadPatterns } from "../indexer/gitignore.js";
-import { WATCHER_ALWAYS_IGNORE, GRAPH_DB_FILE } from "../constants.js";
+import { WATCHER_ALWAYS_IGNORE, GRAPH_DB_FILE, OLLAMA_HOST, EMBEDDING_MODEL } from "../constants.js";
 import { mapLimit } from "../indexer/concurrency.js";
 import type { EmbeddingClient, VectorStore, Chunk, TableMeta } from "../types.js";
 import { WasmParser } from "../parser/wasm.js";
@@ -13,6 +13,7 @@ import { ParserPool, POOL_MIN_FILES } from "../parser/pool.js";
 import { GraphStore } from "../graph/store.js";
 import { openGraphDb } from "../graph/db.js";
 import { ManifestStore } from "../indexer/manifest-store.js";
+import { detectEmbedTuning, type EmbedTuning } from "../embeddings/auto-tune.js";
 
 export interface ManifestEntry {
   hash: string;
@@ -96,6 +97,49 @@ export function resolveEmbedConfig(env: NodeJS.ProcessEnv | Record<string, strin
       MAX_EMBED_CONCURRENCY
     ),
   };
+}
+
+/** True when the raw env value is present and non-blank (same "set" test parseEnvInt uses to skip its fallback). */
+function isEnvSet(raw: string | undefined): boolean {
+  return raw !== undefined && raw.trim() !== "";
+}
+
+/**
+ * Async variant of resolveEmbedConfig: env > runtime auto-detect > static
+ * defaults. Env vars ALWAYS win when set — zero behavior change for users
+ * who tune manually. Only when a knob is NOT set does auto-detection (or,
+ * failing that, the static default) fill it in.
+ *
+ * When BOTH env vars are set, detection is skipped entirely (no probe) —
+ * this keeps `sync` fast and network-free for the common pinned-config case.
+ *
+ * `detect` is injectable for tests; defaults to the real Ollama-probing
+ * `detectEmbedTuning`.
+ */
+export async function resolveEmbedConfigAsync(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+  host: string,
+  embedModel: string,
+  detect: (host: string, embedModel: string) => Promise<EmbedTuning> = detectEmbedTuning
+): Promise<EmbedConfig> {
+  const batchSizeSet = isEnvSet(env.BRAIN_EMBED_BATCH_SIZE);
+  const concurrencySet = isEnvSet(env.BRAIN_EMBED_CONCURRENCY);
+
+  // Both pinned — skip the Ollama probe entirely, no runtime detection needed.
+  if (batchSizeSet && concurrencySet) {
+    return resolveEmbedConfig(env);
+  }
+
+  const tuning = await detect(host, embedModel);
+  const envConfig = resolveEmbedConfig(env);
+
+  const batchSize = batchSizeSet ? envConfig.batchSize : tuning.batchSize;
+  const concurrency = concurrencySet ? envConfig.concurrency : tuning.concurrency;
+
+  // Users must be able to see WHY their sync is faster/slower than expected.
+  console.log(`[sync] auto-tuned embed config: concurrency=${concurrency} batchSize=${batchSize} (${tuning.reason})`);
+
+  return { batchSize, concurrency };
 }
 
 /** Inputs for resolving which embedding model key a sync/reindex run should use. */
@@ -310,7 +354,15 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // EMBED_BATCH_SIZE=200: fewer HTTP round-trips to Ollama.
     // SAVE_EVERY=10: batchReplace every 10 files → continuous progress.
     const READ_CONCURRENCY = 20;
-    const { batchSize: EMBED_BATCH_SIZE, concurrency: EMBED_CONCURRENCY } = resolveEmbedConfig();
+    // resolveEmbedConfigAsync: env > runtime auto-detect > static defaults.
+    // The host/model here are only used for the (fail-open, 500ms-capped)
+    // Ollama /api/ps contention probe when a knob is not pinned via env —
+    // they do not affect which embeddings client is used for the actual run.
+    const { batchSize: EMBED_BATCH_SIZE, concurrency: EMBED_CONCURRENCY } = await resolveEmbedConfigAsync(
+      process.env,
+      OLLAMA_HOST,
+      embeddings.model ?? EMBEDDING_MODEL
+    );
     const SAVE_EVERY = 10;
     const MAX_FILE_BYTES = 512_000;
 
