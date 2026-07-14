@@ -71,8 +71,11 @@ export interface VectorStore {
   countChunks(project: string): Promise<number>;
   /** Compact fragments and release memory. Call after bulk writes. */
   optimize(project: string): Promise<void>;
-  /** Create FTS + vector indexes. Safe to call on existing indexes (no-op). */
-  buildIndexes(project: string): Promise<void>;
+  /** Create FTS + vector indexes. Safe to call on existing indexes (no-op).
+   * `opts.annMinRows` overrides the row-count threshold that gates vector
+   * ANN index creation; `opts.ivfPqOptions` overrides IVF_PQ training params
+   * (e.g. for small-data tests where default PQ training would throw). */
+  buildIndexes(project: string, opts?: { annMinRows?: number; ivfPqOptions?: Record<string, unknown> }): Promise<void>;
   /** Hybrid lexical + vector search with RRF reranking. Falls back to vector-only on FTS miss. */
   hybridSearch(project: string, vector: number[], text: string, topK: number): Promise<SearchResult[]>;
   /** Fetch a single chunk by its id. Returns null if not found. */
