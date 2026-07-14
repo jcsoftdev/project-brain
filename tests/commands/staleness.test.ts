@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
-import { mkdtemp, rm, mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { VECTOR_DIM } from "../../src/constants.js";
+import { ManifestStore } from "../../src/indexer/manifest-store.js";
 import type { EmbeddingClient, VectorStore, Chunk, SearchResult } from "../../src/types.js";
 
 function makeMemoryStore(): VectorStore {
@@ -72,19 +73,16 @@ describe("Staleness Enhancement", () => {
   });
 
   describe("T-9.1: hash manifest persistence", () => {
-    it("hash manifest file is created after first sync", async () => {
+    it("manifest store records an entry after first sync", async () => {
       const store = makeMemoryStore();
       await writeFile(join(tempDir, "file.md"), "Content here.");
 
       const { runSync } = await import("../../src/commands/sync.js");
       await runSync({ root: tempDir, projectId: "p", store, embeddings: mockEmbeddings });
 
-      const manifestPath = join(tempDir, ".project-brain", "hashes.json");
-      const raw = await readFile(manifestPath, "utf-8");
-      const manifest = JSON.parse(raw);
-
-      expect(typeof manifest).toBe("object");
-      expect(Object.keys(manifest).length).toBeGreaterThan(0);
+      const manifest = new ManifestStore(tempDir);
+      expect(manifest.listPaths().length).toBeGreaterThan(0);
+      manifest.close();
     });
 
     it("manifest records the correct hash for indexed files", async () => {
@@ -95,14 +93,12 @@ describe("Staleness Enhancement", () => {
       const { runSync } = await import("../../src/commands/sync.js");
       await runSync({ root: tempDir, projectId: "p", store, embeddings: mockEmbeddings });
 
-      const manifestPath = join(tempDir, ".project-brain", "hashes.json");
-      const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
-
-      // Compute expected hash
       const { computeHash } = await import("../../src/indexer/hash.js");
       const expectedHash = computeHash(content);
 
-      expect(manifest["known.md"]?.hash ?? manifest["known.md"]).toBe(expectedHash);
+      const manifest = new ManifestStore(tempDir);
+      expect(manifest.getEntry("known.md")?.hash).toBe(expectedHash);
+      manifest.close();
     });
 
     it("manifest updates when file content changes", async () => {
@@ -116,12 +112,10 @@ describe("Staleness Enhancement", () => {
       await writeFile(join(tempDir, "evolving.md"), "Version 2 — completely different.");
       await runSync({ root: tempDir, projectId: "p", store, embeddings: mockEmbeddings });
 
-      const manifestPath = join(tempDir, ".project-brain", "hashes.json");
-      const manifest = JSON.parse(await readFile(manifestPath, "utf-8"));
-
       const { computeHash } = await import("../../src/indexer/hash.js");
-      const v = manifest["evolving.md"];
-      expect(v?.hash ?? v).toBe(computeHash("Version 2 — completely different."));
+      const manifest = new ManifestStore(tempDir);
+      expect(manifest.getEntry("evolving.md")?.hash).toBe(computeHash("Version 2 — completely different."));
+      manifest.close();
     });
   });
 

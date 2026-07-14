@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { tmpdir } from "node:os";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { ManifestStore } from "../../src/indexer/manifest-store.js";
 import type { EmbeddingClient, VectorStore, Chunk, SearchResult } from "../../src/types.js";
 
 /** Minimal no-op in-memory store (mirrors pattern in sync-graph.test.ts). */
@@ -97,11 +97,10 @@ describe("partial embed failure and the hash manifest", () => {
 
     expect(result.embedFailed).toBeGreaterThan(0);
 
-    const manifest = JSON.parse(
-      await readFile(join(tempDir, ".project-brain", "hashes.json"), "utf-8")
-    );
-    expect(manifest["clean.ts"]).toBeDefined(); // fully-embedded file IS recorded
-    expect(manifest["poisoned.ts"]).toBeUndefined(); // partially-failed file is NOT
+    const manifest = new ManifestStore(tempDir);
+    expect(manifest.getEntry("clean.ts")).not.toBeNull(); // fully-embedded file IS recorded
+    expect(manifest.getEntry("poisoned.ts")).toBeNull(); // partially-failed file is NOT
+    manifest.close();
 
     // act again: second sync must RETRY the poisoned file (not skip it)
     const second = await runSync({

@@ -163,10 +163,18 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
         embeddings = await createEmbeddingClient(process.env.BRAIN_EMBED_MODEL || undefined, { host: OLLAMA_HOST, autoPull: true });
       }
 
-      // If already indexed (manifest exists), use incremental sync — not full reindex
-      const manifestPath = join(root, CONFIG_DIR, "hashes.json");
+      // If already indexed (manifest exists), use incremental sync — not full
+      // reindex. Checks for the SQLite manifest store (manifest.db) — the
+      // legacy hashes.json is migrated into it on first ManifestStore open,
+      // so a fresh project has neither file, and a previously-indexed one
+      // (pre- or post-migration) has at least one of them.
+      const manifestDbPath = join(root, CONFIG_DIR, "manifest.db");
+      const legacyManifestPath = join(root, CONFIG_DIR, "hashes.json");
       let alreadyIndexed = false;
-      try { await readFile(manifestPath, "utf-8"); alreadyIndexed = true; } catch {}
+      try { await readFile(manifestDbPath); alreadyIndexed = true; } catch {}
+      if (!alreadyIndexed) {
+        try { await readFile(legacyManifestPath, "utf-8"); alreadyIndexed = true; } catch {}
+      }
 
       if (alreadyIndexed) {
         indexStats = await runSync({ root, projectId, store, embeddings, onProgress: options.onProgress });

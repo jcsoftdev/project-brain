@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { readFile, writeFile, readdir, mkdir } from "node:fs/promises";
+import { readFile, readdir, mkdir } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { computeHash } from "../indexer/hash.js";
 import { chunkContent } from "../indexer/parser.js";
@@ -12,17 +12,15 @@ import { extract, extractBoundaries } from "../parser/extract.js";
 import { ParserPool, POOL_MIN_FILES } from "../parser/pool.js";
 import { GraphStore } from "../graph/store.js";
 import { openGraphDb } from "../graph/db.js";
+import { ManifestStore } from "../indexer/manifest-store.js";
 
-const CONFIG_DIR = ".project-brain";
-const HASH_MANIFEST = "hashes.json";
-
-interface ManifestEntry {
+export interface ManifestEntry {
   hash: string;
   mtime: number;
   /** Per-chunk content hashes keyed by chunk id. Absent in old-format manifests. */
   chunks?: Record<string, string>;
 }
-type Manifest = Record<string, ManifestEntry>;
+export type Manifest = Record<string, ManifestEntry>;
 
 export interface SyncProgress {
   phase: "scanning" | "reading" | "embedding" | "storing";
@@ -156,30 +154,6 @@ export function syncExitCode(result: Pick<SyncResult, "error" | "embedFailed">):
   return result.error || result.embedFailed > 0 ? 1 : 0;
 }
 
-/** Load the persisted hash manifest. Supports both legacy (string) and new ({hash,mtime}) format. */
-async function loadHashManifest(root: string): Promise<Manifest> {
-  const path = join(root, CONFIG_DIR, HASH_MANIFEST);
-  try {
-    const raw = await readFile(path, "utf-8");
-    const parsed = JSON.parse(raw) as Record<string, string | ManifestEntry>;
-    const result: Manifest = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      result[k] = typeof v === "string" ? { hash: v, mtime: 0 } : v;
-    }
-    return result;
-  } catch {
-    return {};
-  }
-}
-
-/** Persist the hash manifest. */
-async function saveHashManifest(root: string, manifest: Manifest): Promise<void> {
-  const dir = join(root, CONFIG_DIR);
-  await mkdir(dir, { recursive: true });
-  const path = join(dir, HASH_MANIFEST);
-  await writeFile(path, JSON.stringify(manifest, null, 2));
-}
-
 /** Recursively list all files under a directory, skipping ignored ones. */
 async function listAllFiles(
   dir: string,
@@ -264,15 +238,29 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
   // known. Stays null for small syncs, which fall back to the sequential
   // in-process `parser` above.
   let pool: ParserPool | null = null;
+  // SQLite manifest store — always owned by runSync (never injected), closed
+  // in the sibling `finally` block below. Declared outside `try` so `finally`
+  // can close it even when something inside `try` throws after assignment.
+  let manifest: ManifestStore | null = null;
 
   try {
     const warmedExts = new Set<string>();
 
-    // 1. Load hash manifest. Gitignore patterns require a full recursive tree
-    // walk (loadPatterns) — only load them lazily, inside the full-walk branch
-    // below, so the incremental (changedFiles) path never pays for a tree walk
-    // whose result it would immediately discard.
-    const hashManifest = await loadHashManifest(root);
+    // 1. Open the SQLite manifest store (migrates any legacy hashes.json in
+    // its constructor). Replaces the old load-all-JSON-into-memory step —
+    // reads below are point lookups (manifest.getEntry), not an in-memory
+    // object built from a single monolithic parse.
+    manifest = new ManifestStore(root);
+    // `const` alias so closures below (flushStore, the Phase A read-batch
+    // callback) keep the narrowed non-null type — TS widens captured `let`s
+    // back to `T | null` inside closures since it can't prove they're never
+    // reassigned before the closure runs.
+    const manifestStore = manifest;
+    // R2: capture the pre-run path set BEFORE any manifest write this run —
+    // the deletion sweep below (full-walk only) must compare against this
+    // snapshot, never a live listPaths() call that could already reflect
+    // writes made earlier in this same run.
+    const priorPaths = new Set(manifestStore.listPaths());
 
     // 2. Collect files to process
     onProgress?.({ phase: "scanning", current: 0, total: 0 });
@@ -316,7 +304,6 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
     let ingested = 0;
     let skipped = 0;
-    const newManifest: Manifest = { ...hashManifest };
 
     // Pipeline: read all files → embed in large batches → store per mini-wave.
     // mtime fast-path: stat() is ~10x cheaper than file.text() + hash.
@@ -354,7 +341,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           const relPath = (filePath.startsWith(root + "/")
             ? filePath.slice(root.length + 1) : filePath).replace(/\\/g, "/");
 
-          const entry = hashManifest[relPath];
+          const entry = manifestStore.getEntry(relPath);
           if (entry && entry.mtime === mtime) return "skipped" as const; // mtime unchanged → skip
 
           // mtime changed → read content + verify hash
@@ -363,8 +350,13 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           const hash = computeHash(content);
 
           if (entry && entry.hash === hash) {
-            // Content identical despite mtime change — update mtime only
-            newManifest[relPath] = { hash, mtime };
+            // Content identical despite mtime change — update mtime only.
+            // Safe to write immediately (not gated behind flushStore): no
+            // chunks/vectors change for this file this run, so there is
+            // nothing in LanceDB this write could "lead". Matches the prior
+            // JSON behavior of not preserving per-chunk hashes on this path
+            // (chunks intentionally omitted here, same as before).
+            manifestStore.upsertFile(relPath, hash, mtime, {});
             return "skipped" as const;
           }
 
@@ -454,9 +446,16 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
     for (let ei = 0; ei < pendingEntries.length; ei++) {
       const entry = pendingEntries[ei];
-      const prevEntry = hashManifest[entry.relPath];
+      const prevEntry = manifestStore.getEntry(entry.relPath);
       const prevChunkHashes: Record<string, string> = prevEntry?.chunks ?? {};
-      const hasChunkManifest = !!prevEntry?.chunks;
+      // ManifestStore.getEntry always returns a (possibly empty) chunks
+      // object rather than undefined (unlike the old JSON shape, where an
+      // old-format entry had no `chunks` key at all). That distinction is
+      // moot here: when chunks is empty, every chunk id lookup below misses
+      // and prevHash is undefined, forcing chunkChanged=true regardless of
+      // this flag's value — so `!!prevEntry` is behaviorally equivalent to
+      // the old `!!prevEntry?.chunks` for every reachable case.
+      const hasChunkManifest = !!prevEntry;
 
       for (let ci = 0; ci < entry.rawChunks.length; ci++) {
         const raw = entry.rawChunks[ci];
@@ -578,10 +577,26 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // Phase C: store every SAVE_EVERY files → progress updates, few fragments
     let storeBuf: { sources: string[]; chunks: Chunk[] } = { sources: [], chunks: [] };
 
+    // R1: manifest writes for files in the current storeBuf are buffered
+    // here and applied ONLY after the covering flushStore()'s batchReplace()
+    // succeeds — the manifest must never lead LanceDB in durability. Every
+    // push into storeBuf.chunks below is paired 1:1 with a push here, so
+    // manifestBuf is empty exactly when storeBuf.chunks is empty.
+    type ManifestOp =
+      | { kind: "upsert"; path: string; hash: string; mtime: number; chunks: Record<string, string> }
+      | { kind: "delete"; path: string };
+    let manifestBuf: ManifestOp[] = [];
+
     async function flushStore() {
       if (storeBuf.chunks.length === 0) return;
       await store.batchReplace(projectId, storeBuf.sources, storeBuf.chunks);
+      // Only reached once the store write above has succeeded.
+      for (const op of manifestBuf) {
+        if (op.kind === "upsert") manifestStore.upsertFile(op.path, op.hash, op.mtime, op.chunks);
+        else manifestStore.deleteFile(op.path);
+      }
       storeBuf = { sources: [], chunks: [] };
+      manifestBuf = [];
     }
 
     for (let ei = 0; ei < pendingEntries.length; ei++) {
@@ -613,14 +628,18 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       // failed — silent, undetectable data loss surviving even future
       // reindexes. Leaving the manifest entry stale/absent forces this file
       // to be reprocessed (and its missing chunks retried) next sync.
+      // Both branches are buffered into manifestBuf — applied by flushStore()
+      // only after THIS file's chunks are durably stored (R1); the delete
+      // branch is gated the same way even though its file was never fully
+      // stored, for a single consistent apply-after-flush rule.
       if (entryChunks.length === entry.rawChunks.length) {
         const chunkHashes: Record<string, string> = {};
         for (const raw of entry.rawChunks) {
           chunkHashes[raw.id] = raw.content_hash;
         }
-        newManifest[entry.relPath] = { hash: entry.hash, mtime: entry.mtime, chunks: chunkHashes };
+        manifestBuf.push({ kind: "upsert", path: entry.relPath, hash: entry.hash, mtime: entry.mtime, chunks: chunkHashes });
       } else {
-        delete newManifest[entry.relPath];
+        manifestBuf.push({ kind: "delete", path: entry.relPath });
       }
       ingested++;
       onProgress?.({ phase: "storing", current: ingested, total: totalChanged });
@@ -657,11 +676,11 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           (f.startsWith(root + "/") ? f.slice(root.length + 1) : f).replace(/\\/g, "/")
         )
       );
-      for (const relPath of Object.keys(hashManifest)) {
+      for (const relPath of priorPaths) {
         if (!currentRels.has(relPath)) {
           await store.deleteBySource(projectId, relPath);
           graph.deleteFile(relPath);
-          delete newManifest[relPath];
+          manifestStore.deleteFile(relPath);
           deleted++;
         }
       }
@@ -682,8 +701,10 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // 6. Build FTS + vector indexes so hybridSearch works
     await store.buildIndexes(projectId);
 
-    // 7. Persist updated manifest
-    await saveHashManifest(root, newManifest);
+    // 7. Manifest is already durable — every write above (Phase A mtime
+    // refresh, Phase C per-file upsert/delete, the deletion sweep) commits
+    // directly via ManifestStore's own transactions. No wholesale rewrite
+    // step needed anymore.
 
     // Detect total embed failure: had texts to embed but every vector is null
     const totalEmbedFailure = textsToEmbed.length > 0 && embedFailed === textsToEmbed.length;
@@ -703,10 +724,11 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // 8. Dispose structural graph resources. The WASM parser and worker pool
     // are always ephemeral. The graph is closed ONLY when runSync opened it —
     // an injected graph belongs to the caller (the MCP server) and must stay
-    // open.
+    // open. The manifest store is always owned by runSync (never injected).
     if (parser) { try { parser.dispose(); } catch {} }
     if (pool) { try { pool.dispose(); } catch {} }
     if (ownsGraph) { try { graph.close(); } catch {} }
+    if (manifest) { try { manifest.close(); } catch {} }
   }
 }
 
@@ -731,38 +753,39 @@ export interface StalenessReport {
 export async function checkStaleness(options: StalenessOptions): Promise<StalenessReport> {
   const { root } = options;
 
-  const [hashManifest, gitignorePatterns] = await Promise.all([
-    loadHashManifest(root),
-    loadPatterns(root),
-  ]);
+  const manifest = new ManifestStore(root);
+  try {
+    const gitignorePatterns = await loadPatterns(root);
+    const filePaths = await listAllFiles(root, root, gitignorePatterns);
 
-  const filePaths = await listAllFiles(root, root, gitignorePatterns);
+    let stale = 0;
+    let current = 0;
 
-  let stale = 0;
-  let current = 0;
+    for (const filePath of filePaths) {
+      let content: string;
+      try {
+        content = await Bun.file(filePath).text();
+      } catch {
+        continue;
+      }
 
-  for (const filePath of filePaths) {
-    let content: string;
-    try {
-      content = await Bun.file(filePath).text();
-    } catch {
-      continue;
+      const relPath = (filePath.startsWith(root + "/")
+        ? filePath.slice(root.length + 1)
+        : filePath).replace(/\\/g, "/");
+      const hash = computeHash(content);
+
+      const entry = manifest.getEntry(relPath);
+      if (entry && entry.hash === hash) {
+        current++;
+      } else {
+        stale++;
+      }
     }
 
-    const relPath = (filePath.startsWith(root + "/")
-      ? filePath.slice(root.length + 1)
-      : filePath).replace(/\\/g, "/");
-    const hash = computeHash(content);
-
-    const entry = hashManifest[relPath];
-    if (entry && entry.hash === hash) {
-      current++;
-    } else {
-      stale++;
-    }
+    return { stale, current, total: filePaths.length };
+  } finally {
+    manifest.close();
   }
-
-  return { stale, current, total: filePaths.length };
 }
 
 /** CLI entry point for the sync command. */
