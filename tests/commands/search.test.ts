@@ -39,7 +39,11 @@ function makeStore(results: SearchResult[] = []): VectorStore {
 function makeEmbeddings(available: boolean, dim = 768): EmbeddingClient {
   return {
     dim,
-    model: "nomic-embed-text",
+    // Distinct model per availability: the query-embedding cache is keyed by
+    // (model, query) and shared as a module singleton — without this, an
+    // "unavailable" instance sharing a query text with an "available" one
+    // under the same model name would incorrectly get a cache hit.
+    model: available ? "nomic-embed-text" : "nomic-embed-text-unavailable",
     embed: async (texts: string[]) =>
       available ? texts.map(() => Array(dim).fill(0.1)) : null,
     isAvailable: async () => available,
