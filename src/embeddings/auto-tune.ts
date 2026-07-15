@@ -17,7 +17,6 @@ export interface MachineSnapshot {
 
 const GIB = 1024 ** 3;
 const LOW_MEMORY_THRESHOLD_BYTES = 4 * GIB;
-const MAX_DEFAULT_CONCURRENCY = 3;
 
 /**
  * Pure heuristic — fully unit-testable, no I/O. Decides batch size and
@@ -42,14 +41,18 @@ export function computeEmbedTuning(snap: MachineSnapshot): EmbedTuning {
     return { batchSize: 32, concurrency: 1, reason: "low-memory" };
   }
 
-  // Rule 3: default/healthy host. Embed batches are Ollama-bound, not
-  // CPU-bound — this process just waits on HTTP round-trips to the model
-  // server, so scaling with all available cores would not help. cores/4 is
-  // a conservative scale-up for larger machines, but capped at 3: more than
-  // 3 concurrent requests destabilizes a single llama-server instance
-  // backing Ollama (the same instability rule 1 avoids under contention).
-  const concurrency = Math.min(MAX_DEFAULT_CONCURRENCY, Math.max(1, Math.floor(snap.cores / 4)));
-  return { batchSize: 64, concurrency, reason: `default cores=${snap.cores}` };
+  // Rule 3: default/healthy host. Embedding inference against a single
+  // local Ollama instance is GPU-compute-bound, not I/O-bound — there is
+  // no idle time between concurrent requests for the runtime to overlap
+  // into (verified live: 3 concurrent /api/embed calls finish in 2.82s
+  // serialized vs 3.3s with true parallelism forced via
+  // OLLAMA_NUM_PARALLEL=4 — concurrency>1 has no throughput upside here,
+  // only the downside of false timeouts under queuing and circuit-breaker
+  // churn, which is what caused "[sync] Embedding under load failed at
+  // concurrency=3" to fire reliably on any 12+ core machine). Scaling by
+  // core count was the wrong model for this workload — cores are no
+  // longer a factor.
+  return { batchSize: 64, concurrency: 1, reason: `default cores=${snap.cores}` };
 }
 
 /** Timeout for the Ollama /api/ps contention probe — must never stall a sync run. */

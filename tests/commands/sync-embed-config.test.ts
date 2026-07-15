@@ -16,10 +16,10 @@ describe("resolveEmbedConfig", () => {
   });
 
   describe("defaults", () => {
-    it("returns batchSize=64, concurrency=3 when env vars are unset", () => {
+    it("returns batchSize=64, concurrency=1 when env vars are unset", () => {
       const config = resolveEmbedConfig({});
       expect(config.batchSize).toBe(64);
-      expect(config.concurrency).toBe(3);
+      expect(config.concurrency).toBe(1);
     });
   });
 
@@ -85,7 +85,7 @@ describe("resolveEmbedConfig", () => {
 
     it("falls back on non-numeric BRAIN_EMBED_CONCURRENCY", () => {
       const config = resolveEmbedConfig({ BRAIN_EMBED_CONCURRENCY: "xyz" });
-      expect(config.concurrency).toBe(3);
+      expect(config.concurrency).toBe(1);
       expect(warnSpy).toHaveBeenCalled();
     });
 
