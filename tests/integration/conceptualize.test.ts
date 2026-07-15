@@ -74,4 +74,26 @@ describe("Integration: conceptualize", () => {
     );
     expect(JSON.stringify(searchResult)).toContain("Handles authentication");
   });
+
+  it("processes onlyModule even when the latest commit didn't touch it", async () => {
+    // Add a second module (billing/) in its own commit, then a follow-up commit
+    // that only touches auth/ — so the latest commit's changed-files set never
+    // includes billing/, mimicking a module logged as "pending" from an earlier run.
+    await mkdir(join(root, "billing"), { recursive: true });
+    await writeFile(join(root, "billing", "invoice.ts"), "export function invoice() {}\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "feat(billing): add invoice"]);
+
+    await writeFile(join(root, "auth", "login.ts"), "export function login() { return true; }\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "fix(auth): tweak login"]);
+
+    const result = await runConceptualize(
+      { root, projectId: "testproj", onlyModule: "billing" },
+      { store, embeddings: mockEmbeddings, llm: mockLlm }
+    );
+
+    expect(result.processed).toContain("billing");
+    expect(result.skipped).toEqual([]);
+  });
 });

@@ -38,7 +38,7 @@ export async function runConceptualize(
   const buckets = bucketChangedFilesByModule(changedFiles, modules);
   const touched = [...buckets.keys()].sort();
 
-  const selected = onlyModule ? touched.filter((m) => m === onlyModule) : touched.slice(0, CONCEPT_MODULE_CAP);
+  const selected = onlyModule ? [onlyModule] : touched.slice(0, CONCEPT_MODULE_CAP);
   const overflow = onlyModule ? [] : touched.slice(CONCEPT_MODULE_CAP);
 
   const commitMessage = getCommitMessage(root);
@@ -83,6 +83,16 @@ export async function runConceptualize(
   return { processed, skipped };
 }
 
+/** Parses CLI args for the conceptualize command into a root path and optional module filter. */
+export function parseConceptualizeArgs(args: string[]): { root: string; onlyModule?: string } {
+  const moduleFlagIndex = args.indexOf("--module");
+  const onlyModule = moduleFlagIndex !== -1 ? args[moduleFlagIndex + 1] : undefined;
+  const root =
+    args.find((a, i) => !a.startsWith("--") && (moduleFlagIndex === -1 || i !== moduleFlagIndex + 1)) ??
+    process.cwd();
+  return { root, onlyModule };
+}
+
 /** CLI entry point for the conceptualize command. */
 export async function execute(args: string[]): Promise<void> {
   const { LanceDbStore } = await import("../store/lancedb.js");
@@ -91,9 +101,7 @@ export async function execute(args: string[]): Promise<void> {
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
   const { readTableMeta } = await import("../store/meta.js");
 
-  const root = args.find((a) => !a.startsWith("--")) ?? process.cwd();
-  const moduleFlagIndex = args.indexOf("--module");
-  const onlyModule = moduleFlagIndex !== -1 ? args[moduleFlagIndex + 1] : undefined;
+  const { root, onlyModule } = parseConceptualizeArgs(args);
 
   const configPath = join(root, ".project-brain", "project.json");
   let projectId: string;
