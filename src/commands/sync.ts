@@ -932,6 +932,7 @@ export async function execute(args: string[]): Promise<void> {
   if (result.deleted > 0) {
     console.log(`  Deleted:  ${result.deleted} files (removed from disk)`);
   }
+  console.log(`  Model:    ${embeddings.model ?? "unknown"}`);
   console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
   if (result.embedFailed > 0) {
     console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);

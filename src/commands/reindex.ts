@@ -97,6 +97,7 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`  Scanned:  ${result.scanned} files`);
   console.log(`  Ingested: ${result.ingested} files`);
+  console.log(`  Model:    ${embeddings.model ?? "unknown"}`);
   console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
 
   if (result.embedFailed > 0) {

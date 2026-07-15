@@ -35,7 +35,15 @@ const ext = process.platform === "win32" ? ".exe" : "";
 // Propagate the child's exit code/signal quietly instead of letting Node
 // print a stack trace that buries the child's own error message.
 try {
-  execFileSync(join(pkgDir, "bin", `project-brain-native${ext}`), process.argv.slice(2), { stdio: "inherit" });
+  execFileSync(join(pkgDir, "bin", `project-brain-native${ext}`), process.argv.slice(2), {
+    stdio: "inherit",
+    // lancedb's native addon reads this once at process start, not lazily —
+    // it must already be in the CHILD's OS environment before it boots.
+    // Setting process.env mid-process (in this parent, or inside cli.ts)
+    // is too late and the "vector index statistics include centroids" WARN
+    // still fires.
+    env: { ...process.env, LANCE_INCLUDE_VECTOR_CENTROIDS: process.env.LANCE_INCLUDE_VECTOR_CENTROIDS ?? "false" },
+  });
 } catch (err) {
   if (err && typeof err.status === "number") process.exit(err.status);
   if (err && err.signal) process.exit(1);
