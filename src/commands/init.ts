@@ -206,6 +206,27 @@ export async function execute(args: string[]): Promise<void> {
   const skipClaudeHook = args.includes("--no-hook");
   const root = args.find((a) => !a.startsWith("--")) ?? process.cwd();
 
+  if (!process.env.BRAIN_EMBED_MODEL) {
+    if (args.includes("--no-embed")) {
+      process.env.BRAIN_EMBED_MODEL = "none";
+    } else {
+      const embedModelFlag = args.find((a) => a.startsWith("--embed-model="));
+      if (embedModelFlag) {
+        process.env.BRAIN_EMBED_MODEL = embedModelFlag.slice("--embed-model=".length);
+      }
+    }
+  }
+
+  // Interactive model choice — only when we're about to actually index
+  // (skipIndex means nothing gets persisted this run) and stdin is a TTY.
+  // promptEmbedModel itself no-ops if BRAIN_EMBED_MODEL is already set
+  // (from a flag above, or the caller's environment).
+  if (!skipIndex) {
+    const { promptEmbedModel, isOllamaAvailable } = await import("../embeddings/model-prompt.js");
+    const choice = await promptEmbedModel({ ollamaAvailable: await isOllamaAvailable() });
+    if (choice) process.env.BRAIN_EMBED_MODEL = choice;
+  }
+
   console.log(`Initializing project-brain in: ${root}\n`);
 
   const { makeProgressPrinter } = await import("../indexer/progress.js");
