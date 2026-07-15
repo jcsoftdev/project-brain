@@ -26,6 +26,7 @@ describe("installGitHook", () => {
     const content = await readFile(hookPath, "utf-8");
     expect(content).toContain("#!/bin/sh");
     expect(content).toContain("project-brain sync --changed-only");
+    expect(content).toContain("project-brain conceptualize");
     expect(content).toContain("> /dev/null 2>&1 &");
   });
 
@@ -50,6 +51,7 @@ describe("installGitHook", () => {
     const content = await readFile(hookPath, "utf-8");
     expect(content).toContain("echo 'existing hook'");
     expect(content).toContain("project-brain sync --changed-only");
+    expect(content).toContain("project-brain conceptualize");
   });
 
   it("skips if project-brain already in hook", async () => {
