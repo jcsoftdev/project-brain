@@ -80,9 +80,10 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`Re-indexing project: ${projectId} (full scan)\n`);
 
-  const { makeProgressPrinter } = await import("../indexer/progress.js");
+  const { makeProgressPrinter, formatDuration } = await import("../indexer/progress.js");
   const { onProgress, clear } = makeProgressPrinter();
 
+  const startedAt = Date.now();
   const result = await runReindex({ root, projectId, store, embeddings, onProgress });
 
   clear();
@@ -96,6 +97,7 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`  Scanned:  ${result.scanned} files`);
   console.log(`  Ingested: ${result.ingested} files`);
+  console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
 
   if (result.embedFailed > 0) {
     console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);
