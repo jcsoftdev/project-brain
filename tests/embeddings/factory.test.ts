@@ -340,3 +340,26 @@ describe("detectDim", () => {
     expect(dim).toBeNull();
   });
 });
+
+describe('createEmbeddingClient — "none" sentinel (lexical-only)', () => {
+  it("returns a NullEmbeddingClient without any network calls", async () => {
+    const { NullEmbeddingClient } = await import("../../src/embeddings/null.js");
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+    const client = await createEmbeddingClient("none");
+    expect(client).toBeInstanceOf(NullEmbeddingClient);
+    expect(client.model).toBe("none");
+    expect(client.dim).toBe(1);
+  });
+
+  it("never calls isModelAvailable/pull/embed injectables for \"none\"", async () => {
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+    let called = false;
+    const client = await createEmbeddingClient("none", {
+      isModelAvailable: async () => { called = true; return true; },
+      pull: async () => { called = true; return true; },
+      embed: async () => { called = true; return [[1]]; },
+    });
+    expect(called).toBe(false);
+    expect(await client.embed(["x"])).toBeNull();
+  });
+});
