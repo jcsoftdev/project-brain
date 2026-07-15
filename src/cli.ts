@@ -26,6 +26,7 @@ Commands:
   setup              One-time global setup (detect env, register in AI tools)
   init               Initialize project (detect stack, index, install hook)
   sync               Incremental sync (re-index changed files)
+  conceptualize      Update conceptual module docs from the latest commit
   reindex            Full re-index (drop + rebuild)
   health             Check system health and staleness
   search "<query>"   Search indexed context (used by hooks); prints compact results
@@ -102,6 +103,11 @@ switch (command) {
     await execute(args);
     break;
   }
+  case "conceptualize": {
+    const { execute } = await import("./commands/conceptualize.js");
+    await execute(args);
+    break;
+  }
   case "reindex": {
     const { execute } = await import("./commands/reindex.js");
     await execute(args);
@@ -140,7 +146,7 @@ switch (command) {
   default:
     console.error(`Unknown command: ${command}`);
     console.error(
-      "Usage: project-brain [setup|init|sync|reindex|health|search|serve]"
+      "Usage: project-brain [setup|init|sync|conceptualize|reindex|health|search|serve]"
     );
     process.exit(1);
 }

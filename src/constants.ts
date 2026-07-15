@@ -11,6 +11,12 @@ export const VECTOR_DIM = 768;
 /** Default embedding model name. */
 export const EMBEDDING_MODEL = "nomic-embed-text";
 
+/** Anthropic model used to generate commit-time conceptual summaries. */
+export const CONCEPT_LLM_MODEL = "claude-haiku-4-5";
+
+/** Max modules conceptualized per commit; the rest are logged as pending. */
+export const CONCEPT_MODULE_CAP = 5;
+
 /** Default LanceDB data directory. */
 export const DB_PATH = join(homedir(), ".project-brain", "data");
 

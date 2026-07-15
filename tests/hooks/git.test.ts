@@ -26,7 +26,14 @@ describe("installGitHook", () => {
     const content = await readFile(hookPath, "utf-8");
     expect(content).toContain("#!/bin/sh");
     expect(content).toContain("project-brain sync --changed-only");
+    expect(content).toContain("project-brain conceptualize");
     expect(content).toContain("> /dev/null 2>&1 &");
+    // The redirect must wrap the WHOLE && chain (brace group), not just the
+    // last command — otherwise sync's own stdout/stderr leaks to the
+    // terminal on every commit.
+    expect(content).toContain(
+      "{ project-brain sync --changed-only && project-brain conceptualize; } > /dev/null 2>&1 &",
+    );
   });
 
   it("sets permissions to 0o755", async () => {
@@ -50,6 +57,7 @@ describe("installGitHook", () => {
     const content = await readFile(hookPath, "utf-8");
     expect(content).toContain("echo 'existing hook'");
     expect(content).toContain("project-brain sync --changed-only");
+    expect(content).toContain("project-brain conceptualize");
   });
 
   it("skips if project-brain already in hook", async () => {

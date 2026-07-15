@@ -2,7 +2,8 @@ import { join } from "node:path";
 import { chmod, readFile, writeFile } from "node:fs/promises";
 
 const HOOK_MARKER = "# project-brain: auto-sync on commit";
-const HOOK_LINE = "project-brain sync --changed-only > /dev/null 2>&1 &";
+const HOOK_LINE =
+  "{ project-brain sync --changed-only && project-brain conceptualize; } > /dev/null 2>&1 &";
 
 /**
  * Installs (or appends) a post-commit hook that triggers an incremental sync
