@@ -39,6 +39,8 @@ describe("concept store", () => {
     const doc = await readConceptDoc("testproj", "auth", store);
     expect(doc).toContain("Handles login");
     expect(doc).toContain("auth/login.ts");
+    // Verify heading order is preserved during reassembly
+    expect(doc.indexOf("Handles login")).toBeLessThan(doc.indexOf("auth/login.ts"));
   });
 
   it("replaces the previous doc for the same module on rewrite", async () => {
