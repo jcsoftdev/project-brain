@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { formatDuration } from "../../src/indexer/progress.js";
+import { formatDuration, formatModelLabel } from "../../src/indexer/progress.js";
 
 describe("formatDuration", () => {
   it("formats 0ms as 0.0s", () => {
@@ -22,5 +22,19 @@ describe("formatDuration", () => {
     expect(formatDuration(60000)).toBe("1m 0s");
     expect(formatDuration(102000)).toBe("1m 42s");
     expect(formatDuration(725000)).toBe("12m 5s");
+  });
+});
+
+describe("formatModelLabel", () => {
+  it("returns the model name as-is for a real model", () => {
+    expect(formatModelLabel("qwen3-embedding:0.6b")).toBe("qwen3-embedding:0.6b");
+  });
+
+  it("returns a descriptive label for \"none\" (lexical-only mode)", () => {
+    expect(formatModelLabel("none")).toBe("none (lexical-only — keyword search only)");
+  });
+
+  it("returns \"unknown\" for undefined", () => {
+    expect(formatModelLabel(undefined)).toBe("unknown");
   });
 });

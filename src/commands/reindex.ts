@@ -80,7 +80,7 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`Re-indexing project: ${projectId} (full scan)\n`);
 
-  const { makeProgressPrinter, formatDuration } = await import("../indexer/progress.js");
+  const { makeProgressPrinter, formatDuration, formatModelLabel } = await import("../indexer/progress.js");
   const { onProgress, clear } = makeProgressPrinter();
 
   const startedAt = Date.now();
@@ -97,7 +97,7 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`  Scanned:  ${result.scanned} files`);
   console.log(`  Ingested: ${result.ingested} files`);
-  console.log(`  Model:    ${embeddings.model ?? "unknown"}`);
+  console.log(`  Model:    ${formatModelLabel(embeddings.model)}`);
   console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
 
   if (result.embedFailed > 0) {

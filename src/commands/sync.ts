@@ -905,7 +905,7 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`Syncing project: ${projectId}\n`);
 
-  const { makeProgressPrinter, formatDuration } = await import("../indexer/progress.js");
+  const { makeProgressPrinter, formatDuration, formatModelLabel } = await import("../indexer/progress.js");
   const { onProgress, clear } = makeProgressPrinter();
 
   const startedAt = Date.now();
@@ -932,7 +932,7 @@ export async function execute(args: string[]): Promise<void> {
   if (result.deleted > 0) {
     console.log(`  Deleted:  ${result.deleted} files (removed from disk)`);
   }
-  console.log(`  Model:    ${embeddings.model ?? "unknown"}`);
+  console.log(`  Model:    ${formatModelLabel(embeddings.model)}`);
   console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
   if (result.embedFailed > 0) {
     console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);

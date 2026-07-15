@@ -23,6 +23,12 @@ export function formatDuration(ms: number): string {
   return `${minutes}m ${seconds}s`;
 }
 
+/** Human-readable label for the `Model:` line in sync/reindex CLI output. */
+export function formatModelLabel(model: string | undefined): string {
+  if (model === "none") return "none (lexical-only — keyword search only)";
+  return model ?? "unknown";
+}
+
 export function makeProgressPrinter() {
   const isTTY = process.stdout.isTTY;
   const clear = () => isTTY && process.stdout.write("\r\x1b[K");
