@@ -120,4 +120,38 @@ describe("makeEmbeddingResolver", () => {
     await resolver("proj-a");
     expect(constructArgs).toEqual([["mxbai-embed", 1024]]);
   });
+
+  it("routes meta.model === \"none\" to a NullEmbeddingClient, never calling construct", async () => {
+    const { makeEmbeddingResolver } = await import("../../src/embeddings/resolver.js");
+    const { NullEmbeddingClient } = await import("../../src/embeddings/null.js");
+
+    const defaultClient = makeClient("qwen3", 2048);
+    const resolver = makeEmbeddingResolver({
+      dbPath: "/fake/db",
+      host: "http://localhost:11434",
+      defaultClient,
+      readMeta: async () => ({ model: "none", dim: 1 }),
+      construct: (_model, _dim) => { throw new Error("should not be called for \"none\""); },
+    });
+
+    const result = await resolver("lexical-only-project");
+    expect(result).toBeInstanceOf(NullEmbeddingClient);
+  });
+
+  it("caches the NullEmbeddingClient instance across calls for different \"none\" projects", async () => {
+    const { makeEmbeddingResolver } = await import("../../src/embeddings/resolver.js");
+
+    const defaultClient = makeClient("qwen3", 2048);
+    const resolver = makeEmbeddingResolver({
+      dbPath: "/fake/db",
+      host: "http://localhost:11434",
+      defaultClient,
+      readMeta: async () => ({ model: "none", dim: 1 }),
+      construct: (_model, _dim) => { throw new Error("should not be called for \"none\""); },
+    });
+
+    const r1 = await resolver("project-a");
+    const r2 = await resolver("project-b");
+    expect(r1).toBe(r2);
+  });
 });

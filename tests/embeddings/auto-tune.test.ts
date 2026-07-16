@@ -22,26 +22,20 @@ describe("computeEmbedTuning", () => {
     expect(tuning.reason).toBe("low-memory");
   });
 
-  it("default: cores=12, no contention, plenty of memory → concurrency=3, batchSize=64", () => {
+  it("default: cores=12, no contention, plenty of memory → concurrency=1, batchSize=64 (local Ollama is GPU-compute-bound, not I/O-bound — see auto-tune.ts rule 3 comment)", () => {
     const snap: MachineSnapshot = { cores: 12, freeMemBytes: 16 * 1024 ** 3, ollamaBusy: false };
-    const tuning = computeEmbedTuning(snap);
-    expect(tuning.concurrency).toBe(3);
-    expect(tuning.batchSize).toBe(64);
-    expect(tuning.reason).toBe("default cores=12");
-  });
-
-  it("clamps floor: cores=2 → concurrency=1 (floor(2/4)=0, clamped up to 1)", () => {
-    const snap: MachineSnapshot = { cores: 2, freeMemBytes: 16 * 1024 ** 3, ollamaBusy: false };
     const tuning = computeEmbedTuning(snap);
     expect(tuning.concurrency).toBe(1);
     expect(tuning.batchSize).toBe(64);
   });
 
-  it("clamps ceiling: cores=16 → concurrency=3 (floor(16/4)=4, clamped down to 3)", () => {
-    const snap: MachineSnapshot = { cores: 16, freeMemBytes: 16 * 1024 ** 3, ollamaBusy: false };
-    const tuning = computeEmbedTuning(snap);
-    expect(tuning.concurrency).toBe(3);
-    expect(tuning.batchSize).toBe(64);
+  it("cores no longer affect concurrency: cores=2 and cores=16 both → concurrency=1", () => {
+    const low: MachineSnapshot = { cores: 2, freeMemBytes: 16 * 1024 ** 3, ollamaBusy: false };
+    const high: MachineSnapshot = { cores: 16, freeMemBytes: 16 * 1024 ** 3, ollamaBusy: false };
+    expect(computeEmbedTuning(low).concurrency).toBe(1);
+    expect(computeEmbedTuning(high).concurrency).toBe(1);
+    expect(computeEmbedTuning(low).batchSize).toBe(64);
+    expect(computeEmbedTuning(high).batchSize).toBe(64);
   });
 
   it("ollamaBusy takes priority over low-memory (contention check runs first)", () => {

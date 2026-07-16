@@ -67,6 +67,17 @@ export async function execute(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  if (!process.env.BRAIN_EMBED_MODEL) {
+    if (args.includes("--no-embed")) {
+      process.env.BRAIN_EMBED_MODEL = "none";
+    } else {
+      const embedModelFlag = args.find((a) => a.startsWith("--embed-model="));
+      if (embedModelFlag) {
+        process.env.BRAIN_EMBED_MODEL = embedModelFlag.slice("--embed-model=".length);
+      }
+    }
+  }
+
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
   const { createEmbeddingClient } = await import("../embeddings/factory.js");
   const { readTableMeta } = await import("../store/meta.js");
@@ -76,11 +87,22 @@ export async function execute(args: string[]): Promise<void> {
   // index was already built with (stored table meta) over the registry
   // default, unless BRAIN_EMBED_MODEL explicitly overrides it.
   const storedMeta = await readTableMeta(DB_PATH, projectId);
+
+  // Interactive model choice — reindex is a deliberate full rebuild, so a
+  // TTY prompt makes sense here too (unlike sync, which runs unattended).
+  // Defaults to the CURRENTLY stored model on Enter, not always option 1.
+  const { promptEmbedModel, isOllamaAvailable } = await import("../embeddings/model-prompt.js");
+  const choice = await promptEmbedModel({
+    ollamaAvailable: await isOllamaAvailable(),
+    currentModel: storedMeta?.model,
+  });
+  if (choice) process.env.BRAIN_EMBED_MODEL = choice;
+
   const embeddings = await createEmbeddingClient(resolveSyncModel({ envModel: process.env.BRAIN_EMBED_MODEL || undefined, storedMeta }), { host: OLLAMA_HOST, autoPull: true });
 
   console.log(`Re-indexing project: ${projectId} (full scan)\n`);
 
-  const { makeProgressPrinter, formatDuration } = await import("../indexer/progress.js");
+  const { makeProgressPrinter, formatDuration, formatModelLabel } = await import("../indexer/progress.js");
   const { onProgress, clear } = makeProgressPrinter();
 
   const startedAt = Date.now();
@@ -97,7 +119,7 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`  Scanned:  ${result.scanned} files`);
   console.log(`  Ingested: ${result.ingested} files`);
-  console.log(`  Model:    ${embeddings.model ?? "unknown"}`);
+  console.log(`  Model:    ${formatModelLabel(embeddings.model)}`);
   console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
 
   if (result.embedFailed > 0) {

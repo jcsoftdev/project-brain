@@ -178,9 +178,16 @@ export async function execute(
       const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
       const { LanceDbStore } = await import("../store/lancedb.js");
       const { createEmbeddingClient } = await import("../embeddings/factory.js");
+      const { readTableMeta } = await import("../store/meta.js");
 
       const store = new LanceDbStore(DB_PATH);
-      const embeddings = await createEmbeddingClient(undefined, {
+      // Read the project's actual indexed model — the registry default
+      // (dim 1024) is only correct for projects that happen to use it.
+      // A stale/wrong dim here defeats handleSearch's null-check-triggered
+      // lexical-floor degradation entirely (a wrong-dim vector is not
+      // null, so it proceeds to a doomed vector search instead).
+      const storedMeta = await readTableMeta(DB_PATH, project);
+      const embeddings = await createEmbeddingClient(storedMeta?.model, {
         host: OLLAMA_HOST,
         autoPull: false, // Never download models in hook path
       });

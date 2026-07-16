@@ -1,5 +1,6 @@
 import { resolveModel, DEFAULT_MODEL_KEY } from "./registry.js";
 import { OllamaEmbeddingClient } from "./ollama.js";
+import { NullEmbeddingClient } from "./null.js";
 import { EmbeddingPool } from "./pool.js";
 import type { EmbeddingClient } from "../types.js";
 
@@ -136,6 +137,10 @@ export async function createEmbeddingClient(
   modelKey?: string,
   options: FactoryOptions = {}
 ): Promise<EmbeddingClient> {
+  if (modelKey === "none") {
+    return new NullEmbeddingClient();
+  }
+
   const { OLLAMA_HOST } = await import("../constants.js");
   const pooledHosts = parseOllamaHosts(process.env.BRAIN_OLLAMA_HOSTS);
   const usePool = pooledHosts.length >= 2;

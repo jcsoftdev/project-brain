@@ -154,10 +154,14 @@ project-brain setup
 Initialize a project. Detects the stack, writes a `CLAUDE.md` with MCP instructions, installs a git hook, scaffolds module stubs in `docs/modules/`, and indexes the project.
 
 ```bash
-project-brain init [--skip-index]
+project-brain init [--skip-index] [--no-embed] [--embed-model=<key>]
 ```
 
 - `--skip-index` — skip the initial index pass (useful when Ollama is not yet running)
+- `--no-embed` — index for keyword search only, no embedding model (equivalent to `BRAIN_EMBED_MODEL=none`)
+- `--embed-model=<key>` — pin the embedding model non-interactively (registry key or raw Ollama model name)
+
+When run in a terminal (and neither flag nor `BRAIN_EMBED_MODEL` is set), `init` interactively asks which embedding model to use — including the option to skip embeddings entirely for a lexical-only project. Non-interactive runs (CI, scripts, non-TTY) skip the prompt and fall back to the registry default.
 
 ### `sync`
 
@@ -172,8 +176,10 @@ project-brain sync
 Full re-index — drops and rebuilds the entire vector index for the current project.
 
 ```bash
-project-brain reindex
+project-brain reindex [--no-embed] [--embed-model=<key>]
 ```
+
+Same `--no-embed`/`--embed-model=<key>` flags as `init` (see above). Since a full rebuild is already a deliberate action, `reindex` also interactively asks which model to use when run in a terminal without a flag/env override — defaulting to whatever model the project is currently indexed with.
 
 ### `health`
 
@@ -215,7 +221,7 @@ BRAIN_HTTP_TOKEN=your-secret project-brain serve --http [--port 3000]
 | `BRAIN_HTTP_PORT` | `3000` | Port for HTTP server mode |
 | `BRAIN_HTTP_TOKEN` | — | **Required** for `serve --http`. Bearer secret. |
 | `BRAIN_DATA_DIR` | `~/.project-brain/data` | LanceDB + structural graph data directory |
-| `BRAIN_EMBED_MODEL` | `qwen3-embedding:0.6b` | Ollama embedding model (registry keys: `qwen3-embedding`, `nomic-text`; or any raw Ollama model name) |
+| `BRAIN_EMBED_MODEL` | `qwen3-embedding:0.6b` | Ollama embedding model (registry keys: `qwen3-embedding`, `nomic-text`; or any raw Ollama model name; `none` disables embeddings — lexical/keyword search only, no Ollama needed) |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL |
 | `BRAIN_NO_UPDATE_CHECK` | — | Set to `1` to disable the update-available notice |
 
@@ -226,13 +232,13 @@ BRAIN_HTTP_TOKEN=your-secret project-brain serve --http [--port 3000]
 | Variable | Default | Range | Effect |
 |---|---|---|---|
 | `BRAIN_EMBED_BATCH_SIZE` | `64` | `1`–`512` | Texts per Ollama embed request. Lower it if Ollama times out under load. |
-| `BRAIN_EMBED_CONCURRENCY` | `3` | `1`–`16` | Concurrent embed requests. Set to `1` on shared/VRAM-constrained GPUs. |
+| `BRAIN_EMBED_CONCURRENCY` | `1` | `1`–`16` | Concurrent embed requests. Defaults to `1` — a single local Ollama instance is GPU-compute-bound, so concurrency>1 adds no throughput, only false-timeout risk. Raise it only against a genuine multi-host pool (`BRAIN_OLLAMA_HOSTS`) or remote inference API where separate hardware actually runs requests in parallel. |
 | `BRAIN_OLLAMA_HOSTS` | — | comma-separated URLs | Pool of Ollama hosts for round-robin embedding (e.g. `http://127.0.0.1:11434,http://127.0.0.1:11435`). Falls through to the next host on failure; only `null`s when every host fails. |
 | `BRAIN_EMBED_MODEL` | `qwen3-embedding:0.6b` | model name | Override the embedding model (see table above). |
 
 A partial or total embed failure makes `sync`/`reindex` exit non-zero (`1`) — check the exit code in automation (CI, git hooks), not just stderr text.
 
-Leaving `BRAIN_EMBED_BATCH_SIZE`/`BRAIN_EMBED_CONCURRENCY` unset does not mean "always use the defaults above" — each unset knob is auto-detected from machine resources at sync time (available cores/memory, and whether another model is already loaded in Ollama alongside the embed model, which risks VRAM contention). A log line like `[sync] auto-tuned embed config: concurrency=1 batchSize=16 (vram-contention)` explains why. Set either var explicitly to pin it — env values always win over auto-detection.
+Leaving `BRAIN_EMBED_BATCH_SIZE`/`BRAIN_EMBED_CONCURRENCY` unset does not mean "always use the defaults above" — each unset knob is auto-detected from machine resources at sync time (available free memory, and whether another model is already loaded in Ollama alongside the embed model, which risks VRAM contention). A log line like `[sync] auto-tuned embed config: concurrency=1 batchSize=16 (vram-contention)` explains why. Set either var explicitly to pin it — env values always win over auto-detection.
 
 `.project-brain/manifest.db` (plus its `-wal`/`-shm` sidecars) replaces the old `hashes.json` incremental-sync manifest. It is gitignored already — if you have a stale `hashes.json` around, it migrates automatically on first sync and is renamed to `hashes.json.bak`.
 

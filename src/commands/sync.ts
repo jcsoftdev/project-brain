@@ -59,7 +59,7 @@ export interface EmbedConfig {
 }
 
 const DEFAULT_EMBED_BATCH_SIZE = 64;
-const DEFAULT_EMBED_CONCURRENCY = 3;
+const DEFAULT_EMBED_CONCURRENCY = 1;
 const MIN_EMBED_BATCH_SIZE = 1;
 const MAX_EMBED_BATCH_SIZE = 512;
 const MIN_EMBED_CONCURRENCY = 1;
@@ -359,11 +359,15 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // The host/model here are only used for the (fail-open, 500ms-capped)
     // Ollama /api/ps contention probe when a knob is not pinned via env —
     // they do not affect which embeddings client is used for the actual run.
-    const { batchSize: EMBED_BATCH_SIZE, concurrency: EMBED_CONCURRENCY } = await resolveEmbedConfigAsync(
-      process.env,
-      OLLAMA_HOST,
-      embeddings.model ?? EMBEDDING_MODEL
-    );
+    // Lexical-only mode (embeddings.model === "none", src/embeddings/null.ts):
+    // no real embed calls happen below, so batch/concurrency tuning is
+    // irrelevant — skip the Ollama /api/ps auto-tune probe entirely (avoids
+    // a pointless network call and a confusing "auto-tuned embed config"
+    // log line for a run that embeds nothing for real).
+    const { batchSize: EMBED_BATCH_SIZE, concurrency: EMBED_CONCURRENCY } =
+      embeddings.model === "none"
+        ? { batchSize: 1, concurrency: 1 }
+        : await resolveEmbedConfigAsync(process.env, OLLAMA_HOST, embeddings.model ?? EMBEDDING_MODEL);
     const SAVE_EVERY = 10;
     const MAX_FILE_BYTES = 512_000;
 
@@ -546,101 +550,114 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
     // Embed only the changed/new chunks in EMBED_BATCH_SIZE batches
     const embeddedVectors: (number[] | null)[] = new Array(textsToEmbed.length).fill(null);
-    const batches: Array<{ startIdx: number; texts: string[] }> = [];
-    for (let i = 0; i < textsToEmbed.length; i += EMBED_BATCH_SIZE) {
-      batches.push({ startIdx: i, texts: textsToEmbed.slice(i, i + EMBED_BATCH_SIZE) });
-    }
     let embedDone = 0;
     let embedFailed = 0;
     onProgress?.({ phase: "embedding", current: 0, total: textsToEmbed.length });
-    await mapLimit(batches, EMBED_CONCURRENCY, async ({ startIdx, texts }) => {
-      const vecs = await embeddings.embed(texts);
-      if (vecs) {
-        for (let j = 0; j < vecs.length; j++) embeddedVectors[startIdx + j] = vecs[j];
-        embedDone = Math.min(embedDone + vecs.length, textsToEmbed.length);
-        onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
-      } else {
-        embedFailed += texts.length;
+
+    if (embeddings.model === "none") {
+      // Lexical-only mode: no embedding model configured (see
+      // src/embeddings/null.ts). Every chunk gets NullEmbeddingClient's
+      // placeholder vector directly — there is nothing to call, nothing
+      // that can fail, and nothing to retry. Chunks still get stored and
+      // are fully searchable via search_code (FTS); search_context degrades
+      // to its existing lexical floor at query time (embed(query) → null).
+      for (let i = 0; i < embeddedVectors.length; i++) embeddedVectors[i] = [0];
+      embedDone = textsToEmbed.length;
+      onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
+    } else {
+      const batches: Array<{ startIdx: number; texts: string[] }> = [];
+      for (let i = 0; i < textsToEmbed.length; i += EMBED_BATCH_SIZE) {
+        batches.push({ startIdx: i, texts: textsToEmbed.slice(i, i + EMBED_BATCH_SIZE) });
       }
-    });
+      await mapLimit(batches, EMBED_CONCURRENCY, async ({ startIdx, texts }) => {
+        const vecs = await embeddings.embed(texts);
+        if (vecs) {
+          for (let j = 0; j < vecs.length; j++) embeddedVectors[startIdx + j] = vecs[j];
+          embedDone = Math.min(embedDone + vecs.length, textsToEmbed.length);
+          onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
+        } else {
+          embedFailed += texts.length;
+        }
+      });
 
-    // Resilience fallback: a concurrent embedding pass can fail wholesale
-    // when Ollama's backing llama-server crashes under concurrent load —
-    // even though single/sequential requests are reliable (confirmed live
-    // and in the engram spike/lexical-graph-quality side-findings). Rather
-    // than aborting the whole sync, retry ONLY the failed texts sequentially
-    // (concurrency=1, smaller batches) before giving up.
-    //
-    // Breaker interaction: OllamaEmbeddingClient opens its circuit breaker
-    // (HEALTH_COOLDOWN_MS = 30s) on failure, so a naive retry right after a
-    // concurrent-pass failure would hit an OPEN breaker and get an instant
-    // null with no network attempt. We call embeddings.reset() once, right
-    // before this one deliberate recovery pass, to bypass that cooldown.
-    // reset() is optional/duck-typed on EmbeddingClient — clients without a
-    // breaker (test fakes, future implementations) simply don't have it, and
-    // the fallback still runs (network calls are attempted either way; reset
-    // only matters for clients WITH a breaker). The breaker's normal-operation
-    // purpose (don't hammer a genuinely-down Ollama) stays intact: we only
-    // bypass it for this single explicit recovery attempt, never routinely.
-    if (embedFailed > 0) {
-      const failedIndices: number[] = [];
-      for (let i = 0; i < embeddedVectors.length; i++) {
-        if (embeddedVectors[i] === null) failedIndices.push(i);
-      }
-
-      if (failedIndices.length > 0) {
-        console.warn(
-          `[sync] Embedding under load failed at concurrency=${EMBED_CONCURRENCY}; retrying sequentially...`
-        );
-        embeddings.reset?.();
-
-        const SEQUENTIAL_BATCH_SIZE = Math.min(EMBED_BATCH_SIZE, 8);
-        const sequentialBatches: Array<{ indices: number[]; texts: string[] }> = [];
-        for (let i = 0; i < failedIndices.length; i += SEQUENTIAL_BATCH_SIZE) {
-          const idxSlice = failedIndices.slice(i, i + SEQUENTIAL_BATCH_SIZE);
-          sequentialBatches.push({
-            indices: idxSlice,
-            texts: idxSlice.map((idx) => textsToEmbed[idx]),
-          });
+      // Resilience fallback: a concurrent embedding pass can fail wholesale
+      // when Ollama's backing llama-server crashes under concurrent load —
+      // even though single/sequential requests are reliable (confirmed live
+      // and in the engram spike/lexical-graph-quality side-findings). Rather
+      // than aborting the whole sync, retry ONLY the failed texts sequentially
+      // (concurrency=1, smaller batches) before giving up.
+      //
+      // Breaker interaction: OllamaEmbeddingClient opens its circuit breaker
+      // (HEALTH_COOLDOWN_MS = 30s) on failure, so a naive retry right after a
+      // concurrent-pass failure would hit an OPEN breaker and get an instant
+      // null with no network attempt. We call embeddings.reset() once, right
+      // before this one deliberate recovery pass, to bypass that cooldown.
+      // reset() is optional/duck-typed on EmbeddingClient — clients without a
+      // breaker (test fakes, future implementations) simply don't have it, and
+      // the fallback still runs (network calls are attempted either way; reset
+      // only matters for clients WITH a breaker). The breaker's normal-operation
+      // purpose (don't hammer a genuinely-down Ollama) stays intact: we only
+      // bypass it for this single explicit recovery attempt, never routinely.
+      if (embedFailed > 0) {
+        const failedIndices: number[] = [];
+        for (let i = 0; i < embeddedVectors.length; i++) {
+          if (embeddedVectors[i] === null) failedIndices.push(i);
         }
 
-        await mapLimit(sequentialBatches, 1, async ({ indices, texts }) => {
-          const vecs = await embeddings.embed(texts);
-          if (vecs) {
-            for (let j = 0; j < vecs.length; j++) {
-              embeddedVectors[indices[j]] = vecs[j];
-              embedFailed--;
+        if (failedIndices.length > 0) {
+          console.warn(
+            `[sync] Embedding under load failed at concurrency=${EMBED_CONCURRENCY}; retrying sequentially...`
+          );
+          embeddings.reset?.();
+
+          const SEQUENTIAL_BATCH_SIZE = Math.min(EMBED_BATCH_SIZE, 8);
+          const sequentialBatches: Array<{ indices: number[]; texts: string[] }> = [];
+          for (let i = 0; i < failedIndices.length; i += SEQUENTIAL_BATCH_SIZE) {
+            const idxSlice = failedIndices.slice(i, i + SEQUENTIAL_BATCH_SIZE);
+            sequentialBatches.push({
+              indices: idxSlice,
+              texts: idxSlice.map((idx) => textsToEmbed[idx]),
+            });
+          }
+
+          await mapLimit(sequentialBatches, 1, async ({ indices, texts }) => {
+            const vecs = await embeddings.embed(texts);
+            if (vecs) {
+              for (let j = 0; j < vecs.length; j++) {
+                embeddedVectors[indices[j]] = vecs[j];
+                embedFailed--;
+              }
+              embedDone = Math.min(embedDone + vecs.length, textsToEmbed.length);
+              onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
             }
-            embedDone = Math.min(embedDone + vecs.length, textsToEmbed.length);
+            // On failure, the indices stay null / embedFailed stays counted —
+            // same "report real error, nothing partially corrupt" guarantee
+            // as the pre-fallback behavior (5beac8f).
+          });
+
+          // Ladder step 3 (final rescue): chunks STILL null after the sequential
+          // pass above get one last shot, one text at a time (batch size 1,
+          // concurrency 1) with exponential backoff between consecutive
+          // failures. This is the smallest possible unit of work — on a
+          // memory-constrained Ollama host even an 8-text sequential batch can
+          // fail while a single-text request succeeds. See rescueEmbedPass for
+          // the backoff/breaker-bypass details.
+          const stillFailedIndices = failedIndices.filter((idx) => embeddedVectors[idx] === null);
+          if (stillFailedIndices.length > 0) {
+            await rescueEmbedPass(embeddings, textsToEmbed, stillFailedIndices, embeddedVectors);
+
+            for (const idx of stillFailedIndices) {
+              if (embeddedVectors[idx] !== null) {
+                embedDone = Math.min(embedDone + 1, textsToEmbed.length);
+              }
+            }
             onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
+
+            // Only successfully embedded vectors are stored (unchanged
+            // invariant) — embedFailed reflects whatever is STILL null now,
+            // after every rung of the ladder has been tried.
+            embedFailed = failedIndices.filter((idx) => embeddedVectors[idx] === null).length;
           }
-          // On failure, the indices stay null / embedFailed stays counted —
-          // same "report real error, nothing partially corrupt" guarantee
-          // as the pre-fallback behavior (5beac8f).
-        });
-
-        // Ladder step 3 (final rescue): chunks STILL null after the sequential
-        // pass above get one last shot, one text at a time (batch size 1,
-        // concurrency 1) with exponential backoff between consecutive
-        // failures. This is the smallest possible unit of work — on a
-        // memory-constrained Ollama host even an 8-text sequential batch can
-        // fail while a single-text request succeeds. See rescueEmbedPass for
-        // the backoff/breaker-bypass details.
-        const stillFailedIndices = failedIndices.filter((idx) => embeddedVectors[idx] === null);
-        if (stillFailedIndices.length > 0) {
-          await rescueEmbedPass(embeddings, textsToEmbed, stillFailedIndices, embeddedVectors);
-
-          for (const idx of stillFailedIndices) {
-            if (embeddedVectors[idx] !== null) {
-              embedDone = Math.min(embedDone + 1, textsToEmbed.length);
-            }
-          }
-          onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
-
-          // Only successfully embedded vectors are stored (unchanged
-          // invariant) — embedFailed reflects whatever is STILL null now,
-          // after every rung of the ladder has been tried.
-          embedFailed = failedIndices.filter((idx) => embeddedVectors[idx] === null).length;
         }
       }
     }
@@ -905,7 +922,7 @@ export async function execute(args: string[]): Promise<void> {
 
   console.log(`Syncing project: ${projectId}\n`);
 
-  const { makeProgressPrinter, formatDuration } = await import("../indexer/progress.js");
+  const { makeProgressPrinter, formatDuration, formatModelLabel } = await import("../indexer/progress.js");
   const { onProgress, clear } = makeProgressPrinter();
 
   const startedAt = Date.now();
@@ -932,7 +949,7 @@ export async function execute(args: string[]): Promise<void> {
   if (result.deleted > 0) {
     console.log(`  Deleted:  ${result.deleted} files (removed from disk)`);
   }
-  console.log(`  Model:    ${embeddings.model ?? "unknown"}`);
+  console.log(`  Model:    ${formatModelLabel(embeddings.model)}`);
   console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
   if (result.embedFailed > 0) {
     console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);

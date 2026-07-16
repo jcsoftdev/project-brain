@@ -50,6 +50,23 @@ export function makeEmbeddingResolver(opts: EmbeddingResolverOptions): (project:
     const readMeta = await getReadMeta();
     const meta = await readMeta(dbPath, project);
 
+    // Lexical-only project (see src/embeddings/null.ts) — route directly to
+    // NullEmbeddingClient, bypassing Ollama entirely. Must be checked before
+    // the defaultClient-reuse branch below: "none" never equals a real
+    // default model name, but this makes the intent explicit and avoids
+    // ever constructing a real OllamaEmbeddingClient("none", ...) that would
+    // pay a doomed network round-trip (or retry/backoff delay when Ollama is
+    // down) on every query.
+    if (meta?.model === "none") {
+      const cacheKey = "none";
+      const cached = cache.get(cacheKey);
+      if (cached) return cached;
+      const { NullEmbeddingClient } = await import("./null.js");
+      const client = new NullEmbeddingClient();
+      cache.set(cacheKey, client);
+      return client;
+    }
+
     // No meta or same model as the default → reuse default (no allocation)
     if (!meta || meta.model === defaultClient.model) {
       return defaultClient;
