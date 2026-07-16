@@ -1,4 +1,5 @@
-import { createInterface } from "node:readline/promises";
+import { emitKeypressEvents, moveCursor, cursorTo, clearScreenDown } from "node:readline";
+import type { Key } from "node:readline";
 
 export interface PromptEmbedModelOptions {
   /** Whether Ollama responded to a quick probe — drives the default choice when no current model is stored. */
@@ -26,13 +27,68 @@ function defaultChoiceFor(opts: { ollamaAvailable: boolean; currentModel?: strin
   return opts.ollamaAvailable ? "1" : "3";
 }
 
-async function realAsk(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return await rl.question(question);
-  } finally {
-    rl.close();
-  }
+/**
+ * Real-terminal picker: highlight one menu item at a time, move the
+ * highlight with the up/down arrows (or j/k), confirm with Enter. Renders
+ * its own lines instead of going through the generic `ask(question)` string
+ * prompt, since it needs to redraw in place on every keypress. Only used
+ * when the caller hasn't injected a custom `ask` (i.e. real usage, never
+ * tests — see promptEmbedModel below).
+ */
+function interactiveMenuSelect(defaultIndex: number, currentModel?: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let index = defaultIndex;
+
+    const lines = () => [
+      "Which embedding model should project-brain use?",
+      ...MENU.map((m, i) => `  ${i === index ? "❯" : " "} ${m.label}`),
+      currentModel ? `Currently: ${currentModel}` : null,
+      "(↑/↓ to move, Enter to select)",
+    ].filter((line): line is string => line !== null);
+
+    let rendered = 0;
+    const render = () => {
+      if (rendered > 0) {
+        moveCursor(process.stdout, 0, -rendered);
+        cursorTo(process.stdout, 0);
+        clearScreenDown(process.stdout);
+      }
+      const out = lines();
+      process.stdout.write(out.join("\n") + "\n");
+      rendered = out.length;
+    };
+
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw ?? false;
+    emitKeypressEvents(stdin);
+    stdin.setRawMode?.(true);
+    stdin.resume();
+
+    const cleanup = () => {
+      stdin.removeListener("keypress", onKeypress);
+      stdin.setRawMode?.(wasRaw);
+      stdin.pause();
+    };
+
+    const onKeypress = (_str: string, key: Key) => {
+      if (key.name === "up" || key.name === "k") {
+        index = (index - 1 + MENU.length) % MENU.length;
+        render();
+      } else if (key.name === "down" || key.name === "j") {
+        index = (index + 1) % MENU.length;
+        render();
+      } else if (key.name === "return") {
+        cleanup();
+        resolve(MENU[index].num);
+      } else if (key.ctrl && key.name === "c") {
+        cleanup();
+        reject(new Error("aborted"));
+      }
+    };
+
+    stdin.on("keypress", onKeypress);
+    render();
+  });
 }
 
 /**
@@ -46,8 +102,18 @@ export async function promptEmbedModel(options: PromptEmbedModelOptions): Promis
   if (process.env.BRAIN_EMBED_MODEL) return null;
   if (!process.stdin.isTTY) return null;
 
-  const ask = options.ask ?? realAsk;
   const defaultChoice = defaultChoiceFor(options);
+
+  // Real terminal usage (no injected `ask`): arrow-key picker, can't produce
+  // an invalid answer, so there's no re-prompt path to worry about.
+  if (!options.ask) {
+    const defaultIndex = MENU.findIndex((m) => m.num === defaultChoice);
+    const num = await interactiveMenuSelect(defaultIndex, options.currentModel);
+    return keyFor(num)!;
+  }
+
+  // Test-injected `ask`: keep the old text-based numeric-answer contract.
+  const ask = options.ask;
   const menuText = [
     "Which embedding model should project-brain use?",
     ...MENU.map((m) => `  ${m.num}) ${m.label}`),
