@@ -14,7 +14,7 @@ export class NullEmbeddingClient implements EmbeddingClient {
   readonly dim = 1;
   readonly model = "none";
 
-  async embed(): Promise<null> {
+  async embed(_texts: string[]): Promise<null> {
     return null;
   }
 
