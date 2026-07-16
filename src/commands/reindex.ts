@@ -124,6 +124,7 @@ export async function execute(args: string[]): Promise<void> {
 
   if (result.embedFailed > 0) {
     console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);
+    for (const source of result.embedFailedSources) console.warn(`            - ${source}`);
     console.log("\nReindex incomplete.");
     process.exit(syncExitCode(result));
   }

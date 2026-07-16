@@ -101,6 +101,7 @@ describe("partial embed failure and the hash manifest", () => {
     });
 
     expect(result.embedFailed).toBeGreaterThan(0);
+    expect(result.embedFailedSources.some((s) => s.startsWith("poisoned.ts:"))).toBe(true);
 
     const manifest = new ManifestStore(tempDir);
     expect(manifest.getEntry("clean.ts")).not.toBeNull(); // fully-embedded file IS recorded

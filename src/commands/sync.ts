@@ -184,6 +184,13 @@ export interface SyncResult {
    */
   embedFailed: number;
   /**
+   * "source:startLine-endLine" for every chunk still null after the full
+   * retry ladder (concurrent -> sequential -> one-by-one rescue) — lets the
+   * user find and fix the actual chunk instead of just seeing a count.
+   * Empty when embedFailed is 0.
+   */
+  embedFailedSources: string[];
+  /**
    * Set when ALL embeds failed (total embed failure, nothing stored).
    * Undefined on success or partial failure.
    */
@@ -806,12 +813,33 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       ? `Embedding failed: 0/${textsToEmbed.length} vectors produced (Ollama timeout or model unavailable). Nothing was stored.`
       : undefined;
 
+    // Map every still-null vector back to its source chunk so the CLI can
+    // report WHICH chunk failed, not just how many — the retry ladder
+    // (concurrent -> sequential -> one-by-one rescue) already ruled out
+    // transient blips, so a chunk that's still null here is a genuine,
+    // reproducible-on-every-sync failure (e.g. a request Ollama rejects for
+    // that specific content) worth surfacing to fix at the source.
+    const embedFailedSources: string[] = [];
+    if (embedFailed > 0) {
+      for (let i = 0; i < embeddedVectors.length; i++) {
+        if (embeddedVectors[i] !== null) continue;
+        const { entryIdx, chunkIdx } = changedChunkInfos[i];
+        const entry = pendingEntries[entryIdx];
+        const chunk = entry.rawChunks[chunkIdx];
+        const lines = chunk.start_line
+          ? `:${chunk.start_line}-${chunk.end_line ?? chunk.start_line}`
+          : "";
+        embedFailedSources.push(`${entry.relPath}${lines}`);
+      }
+    }
+
     return {
       ingested,
       skipped,
       deleted,
       scanned: filePaths.length,
       embedFailed,
+      embedFailedSources,
       error,
     };
   } finally {
@@ -953,6 +981,7 @@ export async function execute(args: string[]): Promise<void> {
   console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
   if (result.embedFailed > 0) {
     console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);
+    for (const source of result.embedFailedSources) console.warn(`            - ${source}`);
     console.log("\nSync incomplete.");
     process.exit(syncExitCode(result));
   }

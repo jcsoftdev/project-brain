@@ -65,6 +65,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
         deleted: z.number(),
         scanned: z.number(),
         embedFailed: z.number(),
+        embedFailedSources: z.array(z.string()).optional(),
         error: z.string().optional(),
       },
       annotations: toolAnnotations("sync_project"),
