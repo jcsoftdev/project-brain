@@ -22,6 +22,7 @@ export async function getRegistrars(): Promise<AIToolRegistrar[]> {
   const { WindsurfRegistrar } = await import("./windsurf.js");
   const { ZedRegistrar } = await import("./zed.js");
   const { VSCodeRegistrar } = await import("./vscode.js");
+  const { OpencodeRegistrar } = await import("./opencode.js");
 
   return [
     new ClaudeRegistrar(),
@@ -31,5 +32,6 @@ export async function getRegistrars(): Promise<AIToolRegistrar[]> {
     new WindsurfRegistrar(),
     new ZedRegistrar(),
     new VSCodeRegistrar(),
+    new OpencodeRegistrar(),
   ];
 }
