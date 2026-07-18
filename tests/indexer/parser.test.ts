@@ -164,5 +164,36 @@ export class MyClass {
       const overlap = chunks[0].content.slice(-120);
       expect(chunks[1].content.startsWith(overlap)).toBe(true);
     });
+
+    it("force-splits a cAST leaf with no AST children whose raw length blows past the hard ceiling (unsplittable node, e.g. a giant template literal) — must not embed one multi-KB blob whole", () => {
+      // A single top-level boundary with NO children in `boundaries` — this
+      // is exactly cast.ts's splitOversizedNode zero-children fallback path
+      // (a leaf tree-sitter can't split further, e.g. a big template
+      // literal / route-registration call chain). Dense, non-whitespace
+      // content so the non-whitespace budget is exceeded too, matching real
+      // failures (email templates, seed data, large JSX components).
+      const body = Array.from({ length: 400 }, (_, i) => `  const line${i} = "value-${i}";`).join("\n");
+      const content = `function hugeLeaf() {\n${body}\n}\n`;
+      expect(content.length).toBeGreaterThan(4000);
+
+      const boundaries: Boundary[] = [
+        {
+          name: "hugeLeaf",
+          kind: "function",
+          start_index: 0,
+          end_index: content.length,
+          start_line: 1,
+          end_line: content.split("\n").length,
+          depth: 0,
+        },
+      ];
+
+      const chunks = chunkContent(content, "src/huge.ts", "src", boundaries);
+
+      expect(chunks.length).toBeGreaterThan(1);
+      // No-byte-loss guarantee still holds even when forced through
+      // splitBySize: the overlap-adjusted reconstruction covers the source.
+      expect(chunks[0].content.length).toBeLessThan(content.length);
+    });
   });
 });

@@ -1,10 +1,25 @@
 import { computeHash } from "./hash.js";
-import { castChunk } from "./cast.js";
+import { castChunk, CAST_MAX_NON_WHITESPACE_CHARS } from "./cast.js";
 import type { Boundary } from "../parser/extract.js";
 import type { SymbolKind } from "../types.js";
 
 const MAX_CHUNK_SIZE = 1600;
 const OVERLAP_SIZE = 120;
+
+/**
+ * A cAST leaf with no AST children to split by (cast.ts splitOversizedNode's
+ * zero-children fallback — a giant template literal, a route-registration
+ * call chain, a big data literal) is emitted whole regardless of the
+ * non-whitespace budget, since there is nothing smaller in the AST to split
+ * it by. That whole-leaf can still be many KB — well past what a local
+ * embedding model's context window accepts, and the failure was previously
+ * silent (see ollama.ts). Raw length is an independent safety net: only
+ * force a blind re-slice once raw length is more than double the
+ * non-whitespace budget — comfortably above any legitimate
+ * whitespace-padded chunk that already respects CAST_MAX_NON_WHITESPACE_CHARS,
+ * but well below the multi-KB leaves observed failing to embed in practice.
+ */
+const CAST_HARD_CEILING = CAST_MAX_NON_WHITESPACE_CHARS * 2;
 
 interface RawChunk {
   id: string;
@@ -68,9 +83,13 @@ export function chunkContent(
     // boundaries. Their raw byte length can legitimately exceed MAX_CHUNK_SIZE
     // (e.g. whitespace-heavy code) without exceeding that budget — re-slicing
     // them here with the legacy blind splitBySize would destroy the clean AST
-    // boundary cAST already produced. Only legacy (splitCode/splitMarkdown)
-    // sections get the raw-length re-split.
-    if (!isCastPath && sectionContent.length > MAX_CHUNK_SIZE) {
+    // boundary cAST already produced, so ordinary cAST sections skip it.
+    // The one exception: a cAST leaf with no AST children to split by (see
+    // CAST_HARD_CEILING above) can still be pathologically large — that
+    // still needs the blind re-slice as a last resort.
+    const exceedsLegacyBudget = !isCastPath && sectionContent.length > MAX_CHUNK_SIZE;
+    const exceedsCastHardCeiling = isCastPath && sectionContent.length > CAST_HARD_CEILING;
+    if (exceedsLegacyBudget || exceedsCastHardCeiling) {
       const subChunks = splitBySize(sectionContent);
       for (let j = 0; j < subChunks.length; j++) {
         chunks.push(makeChunk(subChunks[j], source, module, now, i, j, section));
