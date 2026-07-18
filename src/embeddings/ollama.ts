@@ -65,11 +65,16 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
           body: JSON.stringify({ model: this.model, input: texts }),
           signal: AbortSignal.timeout(embedTimeoutMs(texts.length)),
         });
-      } catch {
+      } catch (err) {
         // Thrown errors (ECONNRESET, socket hang up, fetch failure, abort)
         // are treated as TRANSIENT: a crashed/restarting llama-server
         // subprocess looks exactly like this on a single request. Retry
-        // with backoff before giving up and tripping the breaker.
+        // with backoff before giving up and tripping the breaker. Log the
+        // real cause either way — a bare `null` return gives the caller no
+        // way to tell a timeout from a DNS failure from a refused connection.
+        console.warn(
+          `[project-brain] embed request errored (attempt ${attempt}/${TRANSIENT_RETRY_ATTEMPTS}): ${err instanceof Error ? err.message : String(err)}`
+        );
         if (attempt < TRANSIENT_RETRY_ATTEMPTS) {
           await sleep(TRANSIENT_RETRY_BASE_MS * 2 ** (attempt - 1));
           continue;
@@ -79,9 +84,16 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
       }
 
       if (!response.ok) {
+        const body = await response.text().catch(() => "");
         // 5xx is treated as TRANSIENT (server-side blip); 4xx is terminal
-        // immediately (retrying a bad request/model won't help).
+        // immediately (retrying a bad request/model won't help). Log the
+        // status + body in both cases — e.g. Ollama's 400 on an
+        // over-length input (context window exceeded) was previously
+        // indistinguishable from any other failure.
         if (response.status >= 500 && attempt < TRANSIENT_RETRY_ATTEMPTS) {
+          console.warn(
+            `[project-brain] embed request got ${response.status} (attempt ${attempt}/${TRANSIENT_RETRY_ATTEMPTS}), retrying: ${body.slice(0, 300)}`
+          );
           await sleep(TRANSIENT_RETRY_BASE_MS * 2 ** (attempt - 1));
           continue;
         }
@@ -89,8 +101,10 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
           // 4xx is input-specific (bad request/model for THIS payload) —
           // terminal for this call but says nothing about server health.
           // Do not count it toward the breaker.
+          console.warn(`[project-brain] embed request rejected with ${response.status}: ${body.slice(0, 300)}`);
           return null;
         }
+        console.warn(`[project-brain] embed request failed with ${response.status} (retries exhausted): ${body.slice(0, 300)}`);
         this.recordFailure();
         return null;
       }

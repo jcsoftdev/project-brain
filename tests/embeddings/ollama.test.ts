@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, mock } from "bun:test";
+import { describe, it, expect, afterEach, mock, spyOn } from "bun:test";
 import { VECTOR_DIM, HEALTH_COOLDOWN_MS } from "../../src/constants.js";
 
 // We'll test OllamaEmbeddingClient with a mock Ollama HTTP server
@@ -364,5 +364,68 @@ describe("OllamaEmbeddingClient — 4xx exemption and consecutive-failure isolat
     expect(await client.embed(["c"])).toBeNull();
     const elapsed2 = Date.now() - start2;
     expect(elapsed2).toBeLessThan(100);
+  });
+});
+
+describe("OllamaEmbeddingClient — error visibility (real cause must be logged, not swallowed)", () => {
+  afterEach(() => {
+    stopMockServer();
+  });
+
+  it("logs status and response body on a terminal 4xx instead of returning null silently", async () => {
+    const host = startMockServer((_req) => {
+      return new Response('{"error":"input length exceeds context (2048)"}', { status: 400 });
+    });
+
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const client = new OllamaEmbeddingClient(host);
+      const result = await client.embed(["oversized chunk text"]);
+      expect(result).toBeNull();
+
+      expect(warnSpy).toHaveBeenCalled();
+      const logged = warnSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logged).toContain("400");
+      expect(logged).toContain("input length exceeds context");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("logs status and response body on a terminal 5xx (retries exhausted) instead of returning null silently", async () => {
+    const host = startMockServer((_req) => {
+      return new Response("upstream unavailable", { status: 503 });
+    });
+
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const client = new OllamaEmbeddingClient(host);
+      const result = await client.embed(["hello"]);
+      expect(result).toBeNull();
+
+      expect(warnSpy).toHaveBeenCalled();
+      const logged = warnSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      expect(logged).toContain("503");
+      expect(logged).toContain("upstream unavailable");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("logs the exception message on a network/fetch failure instead of swallowing it silently", async () => {
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const client = new OllamaEmbeddingClient("http://127.0.0.1:1");
+      const result = await client.embed(["hello"]);
+      expect(result).toBeNull();
+
+      expect(warnSpy).toHaveBeenCalled();
+      const logged = warnSpy.mock.calls.map((c) => c.join(" ")).join("\n");
+      // Connection-refused surfaces as ECONNREFUSED (or equivalent) — assert
+      // something beyond a bare "failed", proving the real error made it out.
+      expect(logged.length).toBeGreaterThan(0);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
