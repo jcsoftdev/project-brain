@@ -198,6 +198,16 @@ project-brain search "how does auth work"
 echo "how does auth work" | project-brain search --stdin
 ```
 
+### `update`
+
+Update project-brain to the latest published version, using whichever install manager (bun, pnpm, yarn, or npm) it was originally installed with.
+
+```bash
+project-brain update
+```
+
+Every other command already prints an `update available` notice (current → latest, with the exact command to run) once a day when a newer version is published — `update` runs that command for you instead of requiring a copy-paste.
+
 ### `serve`
 
 Start the MCP server. Default mode uses stdio (for local AI tool connections).
@@ -244,7 +254,7 @@ Leaving `BRAIN_EMBED_BATCH_SIZE`/`BRAIN_EMBED_CONCURRENCY` unset does not mean "
 
 ## Update notifications
 
-The CLI checks (at most once a day, in the background) whether a newer `project-brain` is published on npm and prints a one-line notice when one is available. It is fail-silent, adds zero latency (the check runs in a detached process; the current command reads only a cached result), and is skipped in CI. Disable it with `BRAIN_NO_UPDATE_CHECK=1`.
+The CLI checks (at most once a day, in the background) whether a newer `project-brain` is published on npm and prints a one-line notice when one is available. It is fail-silent, adds zero latency (the check runs in a detached process; the current command reads only a cached result), and is skipped in CI. Disable it with `BRAIN_NO_UPDATE_CHECK=1`. Run `project-brain update` to apply it.
 
 ## Troubleshooting
 

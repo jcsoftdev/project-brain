@@ -30,6 +30,7 @@ Commands:
   reindex            Full re-index (drop + rebuild)
   health             Check system health and staleness
   search "<query>"   Search indexed context (used by hooks); prints compact results
+  update             Update project-brain to the latest published version
 
 Options for serve --http:
   --port <n>         HTTP listen port (default: 3000; env: BRAIN_HTTP_PORT)
@@ -123,6 +124,11 @@ switch (command) {
     await execute(args);
     break;
   }
+  case "update": {
+    const { execute } = await import("./commands/update.js");
+    await execute(args);
+    break;
+  }
   case "__parse-selftest": {
     // Hidden build-smoke hook (not in --help). Ollama-free: proves the
     // cross-compiled binary loaded the embedded WASM grammar + produced
@@ -146,7 +152,7 @@ switch (command) {
   default:
     console.error(`Unknown command: ${command}`);
     console.error(
-      "Usage: project-brain [setup|init|sync|conceptualize|reindex|health|search|serve]"
+      "Usage: project-brain [setup|init|sync|conceptualize|reindex|health|search|update|serve]"
     );
     process.exit(1);
 }

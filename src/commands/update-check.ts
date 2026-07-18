@@ -13,7 +13,8 @@ import { UPDATE_CACHE_FILE, type UpdateCache } from "../notifier.js";
 const REGISTRY_URL = "https://registry.npmjs.org/project-brain/latest";
 const FETCH_TIMEOUT_MS = 3000;
 
-async function defaultFetchLatest(): Promise<string | null> {
+/** Fetch the latest published version from the npm registry. Shared with the `update` command. */
+export async function fetchLatestVersion(): Promise<string | null> {
   const res = await fetch(REGISTRY_URL, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!res.ok) return null;
   const json = (await res.json()) as { version?: unknown };
@@ -33,7 +34,7 @@ export interface UpdateCheckDeps {
 
 /** Fetch the latest version and persist it to the cache. Never throws. */
 export async function runUpdateCheck(deps: UpdateCheckDeps = {}): Promise<void> {
-  const fetchLatest = deps.fetchLatest ?? defaultFetchLatest;
+  const fetchLatest = deps.fetchLatest ?? fetchLatestVersion;
   const writeCache = deps.writeCache ?? defaultWriteCache;
   const now = deps.now ?? (() => Date.now());
   try {

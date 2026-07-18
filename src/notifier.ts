@@ -153,7 +153,7 @@ function spawnRefresh(): void {
 }
 
 /** Resolve the true install location of the running binary, fail-silent to the raw path. */
-function resolveBinPath(): string {
+export function resolveBinPath(): string {
   try {
     return realpathSync(process.execPath);
   } catch {
