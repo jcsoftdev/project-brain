@@ -218,6 +218,49 @@ describe("search command", () => {
       expect(joined).toContain("src/tools/search.ts");
       expect(joined).toContain("0.87");
     });
+
+    it("records a last-error entry when store.hybridSearch throws, given a dbPath", async () => {
+      const { runSearch } = await import("../../src/commands/search.js");
+      const { readLastError } = await import("../../src/store/error-state.js");
+      const { mkdtemp, rm } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+
+      const dir = await mkdtemp(join(tmpdir(), "pb-search-err-"));
+      try {
+        const throwingStore = makeStore();
+        throwingStore.hybridSearch = async () => {
+          throw new Error("DB connection failed");
+        };
+
+        await runSearch(
+          { query: "handleSearch", project: "test-project", limit: 8 },
+          { store: throwingStore, embeddings: makeEmbeddings(true), dbPath: dir }
+        );
+
+        const err = await readLastError(dir, "test-project");
+        expect(err?.phase).toBe("search");
+        expect(err?.message).toBe("DB connection failed");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not throw or write anything when dbPath is omitted", async () => {
+      const { runSearch } = await import("../../src/commands/search.js");
+
+      const throwingStore = makeStore();
+      throwingStore.hybridSearch = async () => {
+        throw new Error("DB connection failed");
+      };
+
+      await expect(
+        runSearch(
+          { query: "handleSearch", project: "test-project", limit: 8 },
+          { store: throwingStore, embeddings: makeEmbeddings(true) }
+        )
+      ).resolves.toBeUndefined();
+    });
   });
 
   describe("argument parsing", () => {

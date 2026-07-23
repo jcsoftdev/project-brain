@@ -38,6 +38,8 @@ export interface SearchArgs {
 export interface SearchDeps {
   store: VectorStore;
   embeddings: EmbeddingClient;
+  /** When present, infra-level failures are recorded for `project-brain health`. */
+  dbPath?: string;
 }
 
 /**
@@ -101,8 +103,17 @@ export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<voi
 
     lines.push("</project-brain>");
     console.log(lines.join("\n"));
-  } catch {
+
+    if (deps.dbPath) {
+      const { clearLastError } = await import("../store/error-state.js");
+      await clearLastError(deps.dbPath, project, "search");
+    }
+  } catch (err) {
     // Any error (store failure, JSON parse, etc.) → print nothing
+    if (deps.dbPath) {
+      const { writeLastError } = await import("../store/error-state.js");
+      await writeLastError(deps.dbPath, project, "search", err);
+    }
     return;
   }
 }
@@ -119,11 +130,15 @@ export async function execute(
   });
 
   const workPromise = (async (): Promise<void> => {
+    // Declared outside `try` so the outer `catch` below can read it — a
+    // `let`/`const` declared inside a `try` block is scoped to that block
+    // only and is not visible from its `catch`.
+    let project: string | undefined;
+
     try {
       const useStdin = args.includes("--stdin");
 
       // Parse args: collect positional words as query, --project <id>, --limit <n>
-      let project: string | undefined;
       let limit = 8;
       const queryParts: string[] = [];
 
@@ -192,9 +207,20 @@ export async function execute(
         autoPull: false, // Never download models in hook path
       });
 
-      await runSearch({ query, project, limit }, { store, embeddings });
-    } catch {
+      // `project` is narrowed to `string` here by the `if (!project) return;`
+      // check above (line 177) — no guard needed in this branch, unlike the
+      // outer catch below where the throw point (and thus narrowing) is unknown.
+      const { clearLastError } = await import("../store/error-state.js");
+      await clearLastError(DB_PATH, project, "search-setup");
+
+      await runSearch({ query, project, limit }, { store, embeddings, dbPath: DB_PATH });
+    } catch (err) {
       // Any setup error → print nothing
+      if (project) {
+        const { DB_PATH } = await import("../constants.js");
+        const { writeLastError } = await import("../store/error-state.js");
+        await writeLastError(DB_PATH, project, "search-setup", err);
+      }
     }
   })();
 
