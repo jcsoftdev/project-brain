@@ -50,6 +50,8 @@ export interface SyncOptions {
    * graph at .project-brain/graph.db and closes it before returning.
    */
   graph?: GraphStore;
+  /** When present, infra-level setup failures (e.g. parser init) are recorded for `project-brain health`. */
+  dbPath?: string;
 }
 
 /** Resolved embedding batch/concurrency configuration for a sync run. */
@@ -264,7 +266,7 @@ async function listAllFiles(
  * Scans the project, ingests new/changed files, skips unchanged ones.
  */
 export async function runSync(options: SyncOptions): Promise<SyncResult> {
-  const { root, projectId, store, embeddings, onProgress } = options;
+  const { root, projectId, store, embeddings, onProgress, dbPath } = options;
 
   // Structural graph: one WasmParser + one GraphStore per run.
   // When the caller injects a graph (e.g. the long-lived MCP server's shared
@@ -343,8 +345,16 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       parser = new WasmParser();
       try {
         await parser.init();
-      } catch {
+        if (dbPath) {
+          const { clearLastError } = await import("../store/error-state.js");
+          await clearLastError(dbPath, projectId, "sync-parser-init");
+        }
+      } catch (err) {
         parser = null;
+        if (dbPath) {
+          const { writeLastError } = await import("../store/error-state.js");
+          await writeLastError(dbPath, projectId, "sync-parser-init", err);
+        }
       }
     }
 
@@ -961,6 +971,7 @@ export async function execute(args: string[]): Promise<void> {
     embeddings,
     changedFiles: changedOnly ? [] : undefined,
     onProgress,
+    dbPath: DB_PATH,
   });
 
   clear();

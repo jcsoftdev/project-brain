@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -272,5 +272,38 @@ describe("sync command", () => {
       const embedEvents = progressEvents.filter((e) => e.phase === "embedding" && e.current > 0);
       expect(embedEvents.length).toBe(0);
     });
+  });
+
+  it("records a sync-parser-init error when WasmParser.init() throws, given a dbPath", async () => {
+    const { runSync } = await import("../../src/commands/sync.js");
+    const { readLastError } = await import("../../src/store/error-state.js");
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const wasmModule = await import("../../src/parser/wasm.js");
+
+    const dir = await mkdtemp(join(tmpdir(), "pb-sync-err-"));
+    const projectDir = await mkdtemp(join(tmpdir(), "pb-sync-proj-"));
+    const initSpy = spyOn(wasmModule.WasmParser.prototype, "init").mockImplementation(async () => {
+      throw new Error("wasm asset missing");
+    });
+
+    try {
+      await runSync({
+        root: projectDir,
+        projectId: "sync-err-project",
+        store: makeMemoryStore(),
+        embeddings: mockEmbeddings,
+        dbPath: dir,
+      });
+
+      const err = await readLastError(dir, "sync-err-project");
+      expect(err?.phase).toBe("sync-parser-init");
+      expect(err?.message).toBe("wasm asset missing");
+    } finally {
+      initSpy.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 });
