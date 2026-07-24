@@ -116,6 +116,7 @@ describe("health command", () => {
       });
 
       expect(result.lastError).toBeUndefined();
+      expect("lastError" in result).toBe(false);
     });
 
     it("includes lastError when one is recorded for the project", async () => {
