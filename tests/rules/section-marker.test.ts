@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { writeSection, removeSection } from "../../src/rules/section-marker.js";
+import {
+  writeSection,
+  removeSection,
+  hasSection,
+} from "../../src/rules/section-marker.js";
 
 describe("section-marker", () => {
   let tempDir: string;
@@ -91,6 +95,78 @@ describe("section-marker", () => {
     it("returns false if file does not exist", async () => {
       const removed = await removeSection(join(tempDir, "nonexistent.md"));
       expect(removed).toBe(false);
+    });
+  });
+
+  describe("sectionId param (multiple independent sections per file)", () => {
+    it("writes two independent sections into the same file, each under its own markers", async () => {
+      await writeSection(filePath, "Default section content");
+      await writeSection(filePath, "Model routing content", "project-brain-model-routing");
+
+      const content = await Bun.file(filePath).text();
+      expect(content).toContain("<!-- project-brain:start -->");
+      expect(content).toContain("Default section content");
+      expect(content).toContain("<!-- project-brain:end -->");
+      expect(content).toContain("<!-- project-brain-model-routing:start -->");
+      expect(content).toContain("Model routing content");
+      expect(content).toContain("<!-- project-brain-model-routing:end -->");
+    });
+
+    it("replacing one section leaves the other section untouched", async () => {
+      await writeSection(filePath, "Default v1");
+      await writeSection(filePath, "Routing v1", "project-brain-model-routing");
+      await writeSection(filePath, "Default v2");
+
+      const content = await Bun.file(filePath).text();
+      expect(content).not.toContain("Default v1");
+      expect(content).toContain("Default v2");
+      expect(content).toContain("Routing v1");
+    });
+
+    it("removing one section by id leaves the other section untouched", async () => {
+      await writeSection(filePath, "Default content");
+      await writeSection(filePath, "Routing content", "project-brain-model-routing");
+
+      const removed = await removeSection(filePath, "project-brain-model-routing");
+      expect(removed).toBe(true);
+
+      const content = await Bun.file(filePath).text();
+      expect(content).not.toContain("<!-- project-brain-model-routing:start -->");
+      expect(content).not.toContain("Routing content");
+      expect(content).toContain("<!-- project-brain:start -->");
+      expect(content).toContain("Default content");
+    });
+  });
+
+  describe("hasSection", () => {
+    it("returns false if the file does not exist", async () => {
+      const result = await hasSection(join(tempDir, "nonexistent.md"));
+      expect(result).toBe(false);
+    });
+
+    it("returns false if the marker is absent", async () => {
+      await Bun.write(filePath, "No markers here.\n");
+      const result = await hasSection(filePath);
+      expect(result).toBe(false);
+    });
+
+    it("returns true if the default section marker is present", async () => {
+      await writeSection(filePath, "Some content");
+      const result = await hasSection(filePath);
+      expect(result).toBe(true);
+    });
+
+    it("is independent per sectionId — one section present does not count as another", async () => {
+      await writeSection(filePath, "Default content");
+
+      expect(await hasSection(filePath)).toBe(true);
+      expect(await hasSection(filePath, "project-brain-model-routing")).toBe(false);
+    });
+
+    it("returns true for a custom sectionId once written", async () => {
+      await writeSection(filePath, "Routing content", "project-brain-model-routing");
+      const result = await hasSection(filePath, "project-brain-model-routing");
+      expect(result).toBe(true);
     });
   });
 });

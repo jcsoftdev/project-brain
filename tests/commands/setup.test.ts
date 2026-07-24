@@ -150,4 +150,149 @@ describe("setup command", () => {
     expect(result.manualInstructions[0]).toContain("command");
     expect(result.manualInstructions[0]).toContain("stdio");
   });
+
+  describe("model-routing opt-in", () => {
+    function makeFakeClaudeRegistrar() {
+      let hasSection = false;
+      const calls = { hasModelRouting: 0, writeModelRouting: 0 };
+      const registrar: AIToolRegistrar & {
+        calls: typeof calls;
+        setHasSection(v: boolean): void;
+      } = {
+        name: "Claude Code",
+        isInstalled: async () => true,
+        register: async () => {},
+        writeRules: async () => {},
+        hasModelRouting: async () => {
+          calls.hasModelRouting++;
+          return hasSection;
+        },
+        writeModelRouting: async () => {
+          calls.writeModelRouting++;
+          hasSection = true;
+        },
+        calls,
+        setHasSection: (v: boolean) => {
+          hasSection = v;
+        },
+      };
+      return registrar;
+    }
+
+    it('modelRouting: "no" never calls hasModelRouting or writeModelRouting', async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const dataDir = join(tempDir, "data");
+      const fake = makeFakeClaudeRegistrar();
+
+      await runSetup({
+        dataDir,
+        skipOllama: true,
+        registrars: [fake],
+        modelRouting: "no",
+      });
+
+      expect(fake.calls.hasModelRouting).toBe(0);
+      expect(fake.calls.writeModelRouting).toBe(0);
+    });
+
+    it('modelRouting: "yes" calls writeModelRouting without calling promptModelRouting', async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const dataDir = join(tempDir, "data");
+      const fake = makeFakeClaudeRegistrar();
+      let promptCalled = false;
+
+      await runSetup({
+        dataDir,
+        skipOllama: true,
+        registrars: [fake],
+        modelRouting: "yes",
+        promptModelRouting: async () => {
+          promptCalled = true;
+          return true;
+        },
+      });
+
+      expect(fake.calls.writeModelRouting).toBe(1);
+      expect(promptCalled).toBe(false);
+    });
+
+    it('modelRouting: "ask" with hasModelRouting resolving true skips prompting entirely', async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const dataDir = join(tempDir, "data");
+      const fake = makeFakeClaudeRegistrar();
+      fake.setHasSection(true);
+      let promptCalled = false;
+
+      await runSetup({
+        dataDir,
+        skipOllama: true,
+        registrars: [fake],
+        modelRouting: "ask",
+        promptModelRouting: async () => {
+          promptCalled = true;
+          return true;
+        },
+      });
+
+      expect(fake.calls.hasModelRouting).toBe(1);
+      expect(promptCalled).toBe(false);
+      expect(fake.calls.writeModelRouting).toBe(0);
+    });
+
+    it('modelRouting: "ask" with hasModelRouting resolving false calls the injected promptModelRouting, and writeModelRouting only if it resolves true', async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const dataDir = join(tempDir, "data");
+
+      const declineFake = makeFakeClaudeRegistrar();
+      let declinePromptCalled = false;
+      await runSetup({
+        dataDir: join(tempDir, "decline"),
+        skipOllama: true,
+        registrars: [declineFake],
+        modelRouting: "ask",
+        promptModelRouting: async () => {
+          declinePromptCalled = true;
+          return false;
+        },
+      });
+      expect(declinePromptCalled).toBe(true);
+      expect(declineFake.calls.writeModelRouting).toBe(0);
+
+      const acceptFake = makeFakeClaudeRegistrar();
+      let acceptPromptCalled = false;
+      await runSetup({
+        dataDir: join(tempDir, "accept"),
+        skipOllama: true,
+        registrars: [acceptFake],
+        modelRouting: "ask",
+        promptModelRouting: async () => {
+          acceptPromptCalled = true;
+          return true;
+        },
+      });
+      expect(acceptPromptCalled).toBe(true);
+      expect(acceptFake.calls.writeModelRouting).toBe(1);
+    });
+
+    it("registrars without hasModelRouting/writeModelRouting (non-Claude) are skipped without error", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const dataDir = join(tempDir, "data");
+
+      const plainRegistrar: AIToolRegistrar = {
+        name: "Codex",
+        isInstalled: async () => true,
+        register: async () => {},
+        writeRules: async () => {},
+      };
+
+      const result = await runSetup({
+        dataDir,
+        skipOllama: true,
+        registrars: [plainRegistrar],
+        modelRouting: "yes",
+      });
+
+      expect(result.registeredTools).toEqual(["Codex"]);
+    });
+  });
 });

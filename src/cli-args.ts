@@ -20,3 +20,13 @@ export function parsePort(
   const value = idx !== -1 ? args[idx + 1] : undefined;
   return Number(value ?? env.BRAIN_HTTP_PORT ?? 3000);
 }
+
+/**
+ * Resolve the non-interactive override for the opt-in model-routing prompt.
+ * "ask" (the default) defers to the interactive TTY confirm at setup time.
+ */
+export function parseModelRoutingFlag(args: string[]): "ask" | "yes" | "no" {
+  if (args.includes("--model-routing")) return "yes";
+  if (args.includes("--no-model-routing")) return "no";
+  return "ask";
+}

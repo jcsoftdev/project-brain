@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
+    "@clack/prompts": "^1.7.0",
     "@lancedb/lancedb": "^0.30.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "ollama": "^0.6.3",

@@ -5,6 +5,7 @@ import { detectEnvironment, type Environment } from "../env/detect.js";
 import { getRegistrars, type AIToolRegistrar } from "../registrars/types.js";
 import { UnparseableConfigError, standardServerEntry } from "../registrars/json-config.js";
 import { getGlobalRules } from "../rules/global.js";
+import { parseModelRoutingFlag } from "../cli-args.js";
 
 export interface SetupOptions {
   dataDir?: string;
@@ -12,6 +13,10 @@ export interface SetupOptions {
   skipRegistration?: boolean;
   /** Injectable for testing; defaults to the real getRegistrars(). */
   registrars?: AIToolRegistrar[];
+  /** Non-interactive override for the opt-in model-routing prompt. Defaults to "ask". */
+  modelRouting?: "ask" | "yes" | "no";
+  /** Injectable for testing; defaults to the real promptModelRouting from src/interactive.js. */
+  promptModelRouting?: () => Promise<boolean>;
 }
 
 export interface SetupResult {
@@ -91,6 +96,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
       const installed = await registrar.isInstalled();
       if (!installed) continue;
 
+      let registered = false;
       try {
         await registrar.register(serverPath);
 
@@ -102,13 +108,38 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
           .replace("geminicli", "gemini");
         const rules = await getGlobalRules(toolKey);
         await registrar.writeRules(rules);
-
         registeredTools.push(registrar.name);
+        registered = true;
       } catch (e: any) {
         if (e instanceof UnparseableConfigError) {
           manualInstructions.push(buildManualInstructions(registrar.name, e));
         } else {
           console.warn(`Warning: Failed to register in ${registrar.name}: ${e.message}`);
+        }
+      }
+
+      if (registered && registrar.hasModelRouting && registrar.writeModelRouting) {
+        try {
+          const mode = options.modelRouting ?? "ask";
+          if (mode === "no") {
+            // skip entirely
+          } else if (mode === "yes") {
+            const { getModelRoutingSection } = await import("../rules/model-routing.js");
+            await registrar.writeModelRouting(await getModelRoutingSection());
+          } else {
+            const already = await registrar.hasModelRouting();
+            if (!already) {
+              const prompt =
+                options.promptModelRouting ?? (await import("../interactive.js")).promptModelRouting;
+              const accepted = await prompt();
+              if (accepted) {
+                const { getModelRoutingSection } = await import("../rules/model-routing.js");
+                await registrar.writeModelRouting(await getModelRoutingSection());
+              }
+            }
+          }
+        } catch (e: any) {
+          console.warn(`Warning: Failed to write model-routing guidance for ${registrar.name}: ${e.message}`);
         }
       }
     }
@@ -118,10 +149,11 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
 }
 
 /** CLI entry point for the setup command. */
-export async function execute(_args: string[]): Promise<void> {
+export async function execute(args: string[]): Promise<void> {
   console.log("project-brain setup\n");
 
-  const result = await runSetup();
+  const modelRouting = parseModelRoutingFlag(args);
+  const result = await runSetup({ modelRouting });
 
   console.log(`Environment:`);
   console.log(`  Bun: ${result.env.bun}`);

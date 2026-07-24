@@ -1,5 +1,9 @@
-const START_MARKER = "<!-- project-brain:start -->";
-const END_MARKER = "<!-- project-brain:end -->";
+function markers(sectionId: string): { start: string; end: string } {
+  return {
+    start: `<!-- ${sectionId}:start -->`,
+    end: `<!-- ${sectionId}:end -->`,
+  };
+}
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -8,11 +12,14 @@ function escapeRegex(str: string): string {
 /**
  * Write content between section markers in a file.
  * If markers already exist, replace the section. Otherwise append.
+ * Independent sections (different sectionId) coexist in the same file.
  */
 export async function writeSection(
   filePath: string,
-  content: string
+  content: string,
+  sectionId = "project-brain"
 ): Promise<void> {
+  const { start: START_MARKER, end: END_MARKER } = markers(sectionId);
   const section = `${START_MARKER}\n${content}\n${END_MARKER}`;
   let existing = "";
 
@@ -39,10 +46,14 @@ export async function writeSection(
 }
 
 /**
- * Remove the project-brain section from a file.
+ * Remove the section identified by sectionId from a file.
  * Returns true if a section was found and removed, false otherwise.
  */
-export async function removeSection(filePath: string): Promise<boolean> {
+export async function removeSection(
+  filePath: string,
+  sectionId = "project-brain"
+): Promise<boolean> {
+  const { start: START_MARKER, end: END_MARKER } = markers(sectionId);
   let existing = "";
   try {
     existing = await Bun.file(filePath).text();
@@ -59,4 +70,18 @@ export async function removeSection(filePath: string): Promise<boolean> {
   );
   await Bun.write(filePath, existing.replace(regex, "\n"));
   return true;
+}
+
+/** Returns true if the section identified by sectionId is present in the file. */
+export async function hasSection(
+  filePath: string,
+  sectionId = "project-brain"
+): Promise<boolean> {
+  const { start: START_MARKER } = markers(sectionId);
+  try {
+    const existing = await Bun.file(filePath).text();
+    return existing.includes(START_MARKER);
+  } catch {
+    return false;
+  }
 }

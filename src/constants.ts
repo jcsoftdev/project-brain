@@ -195,6 +195,36 @@ Call \`search_context\` first for fuzzy/conceptual questions → it returns rank
 }
 
 /**
+ * Model-routing guidance for delegated sub-agents (Claude Code only — the
+ * `model` param on the Agent/Task tool has no equivalent in other registrars).
+ * Data-driven, same pattern as TOOL_ROUTING, so the markdown table rendered
+ * into templates/model-routing.claude.md never drifts from this source.
+ */
+export const MODEL_ROUTING: ReadonlyArray<{
+  task: string;
+  model: "haiku" | "sonnet" | "opus";
+  why: string;
+}> = [
+  { task: "Read-only web/MCP/grep lookup", model: "haiku", why: "no synthesis, just fetch" },
+  { task: 'Codebase exploration — locate ("where is X")', model: "haiku", why: "no analysis needed" },
+  { task: 'Codebase exploration — explain ("how does X work")', model: "sonnet", why: "needs synthesis across files" },
+  { task: "Write or edit code", model: "sonnet", why: "multi-file logic, implementation" },
+  { task: "Review a diff/PR for obvious issues", model: "sonnet", why: "pattern matching against conventions" },
+  { task: "Adversarial / blind verification review", model: "opus", why: "must genuinely try to refute, not rubber-stamp" },
+  { task: "Architecture or design decision", model: "opus", why: "weighs competing tradeoffs" },
+  { task: "Mechanical compact/archive/copy", model: "haiku", why: "no analysis, just transcription" },
+  { task: "Resolve a git conflict", model: "sonnet", why: "needs surrounding context + logic" },
+];
+
+/** Markdown table (header + separator + one row per entry) for MODEL_ROUTING. */
+export function renderModelRoutingTable(): string {
+  const header = "| Task | Model | Why |";
+  const separator = "| --- | --- | --- |";
+  const rows = MODEL_ROUTING.map((r) => `| ${r.task} | ${r.model} | ${r.why} |`);
+  return [header, separator, ...rows].join("\n");
+}
+
+/**
  * Server-level instructions injected into MCP clients so AI agents understand
  * when and how to use project-brain vs structural/AST tools. Composed from the
  * single TOOL_CATALOG/TOOL_ROUTING source above.

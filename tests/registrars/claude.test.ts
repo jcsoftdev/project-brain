@@ -74,4 +74,37 @@ describe("ClaudeRegistrar", () => {
     expect(content).toContain("Use project-brain for context.");
     expect(content).toContain("<!-- project-brain:end -->");
   });
+
+  describe("model routing section", () => {
+    it("hasModelRouting returns false before writeModelRouting is called", async () => {
+      expect(await registrar.hasModelRouting?.()).toBe(false);
+    });
+
+    it("writeModelRouting writes to CLAUDE.md under the project-brain-model-routing marker", async () => {
+      await registrar.writeModelRouting?.("Route sub-agents by task type.");
+
+      const rulesPath = join(tempDir, "CLAUDE.md");
+      const content = await Bun.file(rulesPath).text();
+
+      expect(content).toContain("<!-- project-brain-model-routing:start -->");
+      expect(content).toContain("Route sub-agents by task type.");
+      expect(content).toContain("<!-- project-brain-model-routing:end -->");
+    });
+
+    it("hasModelRouting returns true after writeModelRouting is called (round-trip)", async () => {
+      await registrar.writeModelRouting?.("Route sub-agents by task type.");
+      expect(await registrar.hasModelRouting?.()).toBe(true);
+    });
+
+    it("writeModelRouting does not clobber a pre-existing writeRules section", async () => {
+      await registrar.writeRules("Use project-brain for context.");
+      await registrar.writeModelRouting?.("Route sub-agents by task type.");
+
+      const rulesPath = join(tempDir, "CLAUDE.md");
+      const content = await Bun.file(rulesPath).text();
+
+      expect(content).toContain("Use project-brain for context.");
+      expect(content).toContain("Route sub-agents by task type.");
+    });
+  });
 });

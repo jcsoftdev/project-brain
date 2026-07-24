@@ -11,6 +11,12 @@ export interface AIToolRegistrar {
 
   /** Write global rules to this tool's instruction file. */
   writeRules(rulesContent: string): Promise<void>;
+
+  /** Whether the opt-in model-routing section is already present. Claude Code only. */
+  hasModelRouting?(): Promise<boolean>;
+
+  /** Write the opt-in model-routing section. Claude Code only. */
+  writeModelRouting?(content: string): Promise<void>;
 }
 
 /** Returns all known registrar implementations. */

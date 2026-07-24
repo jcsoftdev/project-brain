@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { parsePort } from "../src/cli-args.js";
+import { parsePort, parseModelRoutingFlag } from "../src/cli-args.js";
 
 describe("parsePort", () => {
   it("returns the value after --port when present", () => {
@@ -25,5 +25,23 @@ describe("parsePort", () => {
 
   it("falls through to default when --port is the last argument with no value", () => {
     expect(parsePort(["--http", "--port"], {})).toBe(3000);
+  });
+});
+
+describe("parseModelRoutingFlag", () => {
+  it('returns "yes" when --model-routing is present', () => {
+    expect(parseModelRoutingFlag(["--model-routing"])).toBe("yes");
+  });
+
+  it('returns "no" when --no-model-routing is present', () => {
+    expect(parseModelRoutingFlag(["--no-model-routing"])).toBe("no");
+  });
+
+  it('returns "ask" when neither flag is present', () => {
+    expect(parseModelRoutingFlag([])).toBe("ask");
+  });
+
+  it('returns "yes" when both flags are present (--model-routing checked first)', () => {
+    expect(parseModelRoutingFlag(["--model-routing", "--no-model-routing"])).toBe("yes");
   });
 });

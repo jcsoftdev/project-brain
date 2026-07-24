@@ -24,6 +24,7 @@ Commands:
   serve              Start MCP server over stdio (default)
   serve --http       Start MCP server over HTTP with bearer auth
   setup              One-time global setup (detect env, register in AI tools)
+                       --model-routing / --no-model-routing  force the model-routing prompt answer
   init               Initialize project (detect stack, index, install hook)
   sync               Incremental sync (re-index changed files)
   conceptualize      Update conceptual module docs from the latest commit

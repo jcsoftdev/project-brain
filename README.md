@@ -149,6 +149,8 @@ One-time global setup. Detects your environment and registers project-brain with
 project-brain setup
 ```
 
+On Claude Code, an interactive prompt (skipped outside a TTY/CI) offers to add opt-in model-routing guidance to `CLAUDE.md` — which model (`haiku`/`sonnet`/`opus`) to pass when spawning sub-agents. Force the answer non-interactively with `--model-routing` / `--no-model-routing`.
+
 ### `init`
 
 Initialize a project. Detects the stack, writes a `CLAUDE.md` with MCP instructions, installs a git hook, scaffolds module stubs in `docs/modules/`, and indexes the project.

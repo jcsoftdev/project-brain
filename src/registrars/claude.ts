@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { writeSection } from "../rules/section-marker.js";
+import { writeSection, hasSection } from "../rules/section-marker.js";
 import type { AIToolRegistrar } from "./types.js";
 import { upsertJsonConfig, standardServerEntry } from "./json-config.js";
 
@@ -34,6 +34,16 @@ export class ClaudeRegistrar implements AIToolRegistrar {
   async writeRules(rulesContent: string): Promise<void> {
     const rulesPath = join(this.baseDir, "CLAUDE.md");
     await writeSection(rulesPath, rulesContent);
+  }
+
+  async hasModelRouting(): Promise<boolean> {
+    const rulesPath = join(this.baseDir, "CLAUDE.md");
+    return hasSection(rulesPath, "project-brain-model-routing");
+  }
+
+  async writeModelRouting(content: string): Promise<void> {
+    const rulesPath = join(this.baseDir, "CLAUDE.md");
+    await writeSection(rulesPath, content, "project-brain-model-routing");
   }
 
   private async fallbackJsonWrite(serverPath: string): Promise<void> {
