@@ -3,6 +3,7 @@ import { z } from "zod";
 import { EMBEDDING_MODEL, VERSION, toolAnnotations } from "../constants.js";
 import type { ToolDeps } from "../types.js";
 import { jsonResult, type ToolResult } from "./format.js";
+import { readLastError } from "../store/error-state.js";
 
 /** Handle check_health logic (exported for testing). */
 export async function handleHealth(
@@ -11,9 +12,10 @@ export async function handleHealth(
 ): Promise<ToolResult> {
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(args.project) : deps.embeddings;
 
-  const [embeddingsAvailable, chunks] = await Promise.all([
+  const [embeddingsAvailable, chunks, lastError] = await Promise.all([
     emb.isAvailable(),
     deps.store.countChunks(args.project),
+    deps.dbPath ? readLastError(deps.dbPath, args.project) : Promise.resolve(null),
   ]);
 
   const report = {
@@ -22,6 +24,7 @@ export async function handleHealth(
     model: emb.model ?? EMBEDDING_MODEL,
     chunks,
     version: VERSION,
+    ...(lastError ? { lastError } : {}),
   };
 
   return jsonResult(report);
@@ -42,6 +45,9 @@ export function register(server: McpServer, deps: ToolDeps): void {
         model: z.string(),
         chunks: z.number(),
         version: z.string(),
+        lastError: z
+          .object({ phase: z.string(), message: z.string(), timestamp: z.number() })
+          .optional(),
       },
       annotations: toolAnnotations("check_health"),
     },

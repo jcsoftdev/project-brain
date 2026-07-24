@@ -138,4 +138,6 @@ export interface ToolDeps {
    * sync_project) return a PROJECT_ROOT_UNAVAILABLE error result when missing.
    */
   projectRoot?: string;
+  /** Base path to look up per-project last-error state (check_health). Absent → lastError omitted. */
+  dbPath?: string;
 }

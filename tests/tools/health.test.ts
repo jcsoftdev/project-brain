@@ -1,7 +1,11 @@
 import { describe, it, expect } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { handleHealth } from "../../src/tools/health.js";
 import { VECTOR_DIM } from "../../src/constants.js";
 import type { VectorStore, EmbeddingClient } from "../../src/types.js";
+import { writeLastError } from "../../src/store/error-state.js";
 
 function makeMockStore(count = 42): VectorStore {
   return {
@@ -99,5 +103,31 @@ describe("check_health tool", () => {
     const data = JSON.parse(result.content[0].text);
     expect(data.model).toBe("nomic-embed-text");
     expect(data.embeddings).toBe("available");
+  });
+
+  it("omits lastError when dbPath is not provided", async () => {
+    const result = await handleHealth(
+      { project: "demo" },
+      { store: makeMockStore(1), embeddings: makeMockEmbeddings(true) }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.lastError).toBeUndefined();
+  });
+
+  it("includes lastError when dbPath is provided and an error is recorded", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pb-tool-health-"));
+    try {
+      await writeLastError(dir, "demo", "sync-parser-init", new Error("wasm load failed"));
+
+      const result = await handleHealth(
+        { project: "demo" },
+        { store: makeMockStore(1), embeddings: makeMockEmbeddings(true), dbPath: dir }
+      );
+      const data = JSON.parse(result.content[0].text);
+      expect(data.lastError.phase).toBe("sync-parser-init");
+      expect(data.lastError.message).toBe("wasm load failed");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

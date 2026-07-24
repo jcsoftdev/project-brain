@@ -87,7 +87,7 @@ export async function createServer(options: ServerOptions = {}) {
     return res.action === "accept" && res.content?.confirm === true;
   };
 
-  const deps: ToolDeps = { store, embeddings, embeddingsFor, graph, confirmDestructive, projectRoot };
+  const deps: ToolDeps = { store, embeddings, embeddingsFor, graph, confirmDestructive, projectRoot, dbPath };
 
   // Register all tools
   registerSearch(server, deps);
