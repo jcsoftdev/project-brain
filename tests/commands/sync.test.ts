@@ -306,4 +306,34 @@ describe("sync command", () => {
       await rm(projectDir, { recursive: true, force: true });
     }
   });
+
+  it("clears a prior sync-parser-init error when WasmParser.init() succeeds, given a dbPath", async () => {
+    const { runSync } = await import("../../src/commands/sync.js");
+    const { writeLastError, readLastError } = await import("../../src/store/error-state.js");
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+
+    const dir = await mkdtemp(join(tmpdir(), "pb-sync-clear-"));
+    const projectDir = await mkdtemp(join(tmpdir(), "pb-sync-proj-"));
+
+    try {
+      await writeLastError(dir, "sync-clear-project", "sync-parser-init", new Error("wasm asset missing"));
+
+      // No spy on WasmParser.prototype.init here — it runs for real and succeeds.
+      await runSync({
+        root: projectDir,
+        projectId: "sync-clear-project",
+        store: makeMemoryStore(),
+        embeddings: mockEmbeddings,
+        dbPath: dir,
+      });
+
+      const err = await readLastError(dir, "sync-clear-project");
+      expect(err).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
 });

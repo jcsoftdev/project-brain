@@ -246,6 +246,32 @@ describe("search command", () => {
       }
     });
 
+    it("clears a prior search-phase error on a successful run, given a dbPath", async () => {
+      const { runSearch } = await import("../../src/commands/search.js");
+      const { writeLastError, readLastError } = await import("../../src/store/error-state.js");
+      const { mkdtemp, rm } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+
+      const dir = await mkdtemp(join(tmpdir(), "pb-search-clear-"));
+      try {
+        await writeLastError(dir, "test-project", "search", new Error("ollama down"));
+
+        await runSearch(
+          { query: "handleSearch", project: "test-project", limit: 8 },
+          {
+            store: makeStore([makeSearchResult()]),
+            embeddings: makeEmbeddings(true),
+            dbPath: dir,
+          }
+        );
+
+        expect(await readLastError(dir, "test-project")).toBeNull();
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
     it("does not throw or write anything when dbPath is omitted", async () => {
       const { runSearch } = await import("../../src/commands/search.js");
 
