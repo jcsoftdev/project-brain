@@ -10,7 +10,11 @@ const HOOK_COMMAND = "project-brain search --stdin";
 const HOOK_COMMAND_ENTRY = {
   type: "command",
   command: HOOK_COMMAND,
-  timeout: 8,
+  // Measured baseline is ~4-4.1s per invocation (the internal 4000ms
+  // safety race in commands/search.ts execute() + process exit overhead)
+  // even with a warm Ollama — 8s left too little margin under real-world
+  // hook-spawn overhead and concurrent-invocation contention.
+  timeout: 15,
   statusMessage: "project-brain: injecting context",
 } as const;
 
