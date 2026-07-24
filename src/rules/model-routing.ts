@@ -1,15 +1,16 @@
-import { join } from "node:path";
+import template from "../../templates/model-routing.claude.md" with { type: "text" };
 import { renderModelRoutingTable } from "../constants.js";
-
-const TEMPLATES_DIR = join(import.meta.dir, "../../templates");
 
 /**
  * Load the Claude-only model-routing guidance section, with the
  * {{modelRoutingTable}} placeholder filled from the single MODEL_ROUTING
  * source in constants.ts.
+ *
+ * The template is embedded at build time (`with { type: "text" }`), not read
+ * from disk at runtime — `import.meta.dir`-relative reads break under
+ * `bun build --compile`, where the compiled binary has no real filesystem
+ * path back to a sibling `templates/` directory.
  */
 export async function getModelRoutingSection(): Promise<string> {
-  const templatePath = join(TEMPLATES_DIR, "model-routing.claude.md");
-  const template = await Bun.file(templatePath).text();
   return template.replace(/\{\{modelRoutingTable\}\}/g, renderModelRoutingTable());
 }

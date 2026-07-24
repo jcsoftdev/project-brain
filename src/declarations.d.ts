@@ -1,9 +1,10 @@
 // Ambient module declarations for Bun's `with { type: "..." }` import attributes.
 // TypeScript's module resolution does not model Bun-specific import attributes,
-// so `.wasm with { type: "file" }` and `.sql with { type: "text" }` imports are
-// otherwise unresolvable (TS2307). Both attributes make Bun resolve the import
-// to a string at runtime (a filesystem path for "file", the file's contents for
-// "text") — see src/parser/languages.ts, src/parser/wasm.ts, src/graph/db.ts.
+// so `.wasm with { type: "file" }` and `.sql`/`.md with { type: "text" }` imports
+// are otherwise unresolvable (TS2307). Both attributes make Bun resolve the
+// import to a string at runtime (a filesystem path for "file", the file's
+// contents for "text") — see src/parser/languages.ts, src/parser/wasm.ts,
+// src/graph/db.ts, src/rules/model-routing.ts, src/rules/project.ts, src/rules/global.ts.
 
 declare module "*.wasm" {
   const path: string;
@@ -11,6 +12,11 @@ declare module "*.wasm" {
 }
 
 declare module "*.sql" {
+  const text: string;
+  export default text;
+}
+
+declare module "*.md" {
   const text: string;
   export default text;
 }

@@ -1,27 +1,8 @@
 import { join } from "node:path";
+import template from "../../templates/project.claude.md" with { type: "text" };
 import { writeSection } from "./section-marker.js";
 import { renderToolDocs } from "../constants.js";
 import type { StackInfo } from "../indexer/stack.js";
-
-const TEMPLATES_DIR = join(import.meta.dir, "../../templates");
-
-// {{tools}} is filled from the single TOOL_CATALOG source in constants.ts, so the
-// per-project tool list can never drift from the tools the server registers.
-const FALLBACK_TEMPLATE = `# Project: {{projectId}}
-
-This project is indexed with project-brain.
-
-## project-brain MCP
-
-You have access to the \`project-brain\` MCP server for codebase knowledge retrieval.
-
-{{tools}}
-
-### Project Context
-
-- **Project ID**: {{projectId}}
-- **Stack**: {{stack}}
-{{modules}}`;
 
 export interface ProjectRulesInfo {
   projectId: string;
@@ -83,15 +64,6 @@ export async function writeProjectRules(
   root: string,
   info: ProjectRulesInfo
 ): Promise<void> {
-  const templatePath = join(TEMPLATES_DIR, "project.claude.md");
-
-  let template: string;
-  try {
-    template = await Bun.file(templatePath).text();
-  } catch {
-    template = FALLBACK_TEMPLATE;
-  }
-
   const modulesSection = renderModulesSection(info.modules ?? []);
 
   const rendered = template
