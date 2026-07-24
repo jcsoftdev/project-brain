@@ -68,6 +68,12 @@ describe("last error state", () => {
     expect(await readLastError(dir, "proj")).toBeNull();
   });
 
+  it("readLastError returns null on valid JSON with a missing/wrong-typed field", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(join(dir, "proj.error.json"), JSON.stringify({ phase: "search", message: "x" }));
+    expect(await readLastError(dir, "proj")).toBeNull();
+  });
+
   it("different projects stay isolated", async () => {
     await writeLastError(dir, "proj-a", "search", new Error("a failed"));
     await writeLastError(dir, "proj-b", "search", new Error("b failed"));

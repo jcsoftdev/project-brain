@@ -38,12 +38,24 @@ export async function writeLastError(
   }
 }
 
-/** Read the last recorded failure for a project, or null if none / unreadable. */
+/** True when `value` has the exact shape of `LastError` (phase/message strings, numeric timestamp). */
+function isLastError(value: unknown): value is LastError {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.phase === "string" &&
+    typeof v.message === "string" &&
+    typeof v.timestamp === "number"
+  );
+}
+
+/** Read the last recorded failure for a project, or null if none / unreadable / malformed. */
 export async function readLastError(dbPath: string, project: string): Promise<LastError | null> {
   try {
     const f = Bun.file(errorStatePath(dbPath, project));
     if (!(await f.exists())) return null;
-    return (await f.json()) as LastError;
+    const parsed: unknown = await f.json();
+    return isLastError(parsed) ? parsed : null;
   } catch {
     return null;
   }
