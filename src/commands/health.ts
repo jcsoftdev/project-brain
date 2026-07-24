@@ -1,5 +1,6 @@
 import { EMBEDDING_MODEL, VERSION } from "../constants.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
+import { readLastError, type LastError } from "../store/error-state.js";
 
 export interface HealthOptions {
   /** Project identifier for chunk count lookup. */
@@ -8,6 +9,8 @@ export interface HealthOptions {
   store: VectorStore;
   /** Injected embedding client (for DI / testing). */
   embeddings: EmbeddingClient;
+  /** Base path to look up per-project last-error state. */
+  dbPath: string;
 }
 
 export interface HealthResult {
@@ -16,6 +19,7 @@ export interface HealthResult {
   model: string;
   chunks: number;
   version: string;
+  lastError?: LastError;
 }
 
 /**
@@ -23,11 +27,12 @@ export interface HealthResult {
  * Mirrors the check_health MCP tool but operates as a CLI command.
  */
 export async function runHealth(options: HealthOptions): Promise<HealthResult> {
-  const { projectId, store, embeddings } = options;
+  const { projectId, store, embeddings, dbPath } = options;
 
-  const [embeddingsAvailable, chunks] = await Promise.all([
+  const [embeddingsAvailable, chunks, lastError] = await Promise.all([
     embeddings.isAvailable(),
     store.countChunks(projectId),
+    readLastError(dbPath, projectId),
   ]);
 
   return {
@@ -36,6 +41,7 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
     model: EMBEDDING_MODEL,
     chunks,
     version: VERSION,
+    ...(lastError ? { lastError } : {}),
   };
 }
 
@@ -63,7 +69,7 @@ export async function execute(args: string[]): Promise<void> {
   const store = new LanceDbStore(DB_PATH);
   const embeddings = await createEmbeddingClient(process.env.BRAIN_EMBED_MODEL || undefined, { host: OLLAMA_HOST, autoPull: false });
 
-  const result = await runHealth({ projectId, store, embeddings });
+  const result = await runHealth({ projectId, store, embeddings, dbPath: DB_PATH });
 
   const storeIcon = result.store === "connected" ? "✓" : "✗";
   const embIcon = result.embeddings === "available" ? "✓" : "✗";
@@ -73,4 +79,8 @@ export async function execute(args: string[]): Promise<void> {
   console.log(`  ${embIcon} Embeddings: ${result.embeddings} (${result.model})`);
   console.log(`  Chunks:     ${result.chunks}`);
   console.log(`  Version:    ${result.version}`);
+  if (result.lastError) {
+    const when = new Date(result.lastError.timestamp).toISOString();
+    console.log(`  ⚠ Last error: [${result.lastError.phase}] ${result.lastError.message} (${when})`);
+  }
 }

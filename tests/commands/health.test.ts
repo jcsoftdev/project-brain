@@ -45,12 +45,17 @@ describe("health command", () => {
   });
 
   describe("runHealth core logic", () => {
+    let dir: string;
+    beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "pb-health-")); });
+    afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
     it("returns connected store status and available embeddings", async () => {
       const { runHealth } = await import("../../src/commands/health.js");
       const result = await runHealth({
         projectId: "demo",
         store: makeStore(42),
         embeddings: makeEmbeddings(true),
+        dbPath: dir,
       });
 
       expect(result.store).toBe("connected");
@@ -65,6 +70,7 @@ describe("health command", () => {
         projectId: "demo",
         store: makeStore(0),
         embeddings: makeEmbeddings(false),
+        dbPath: dir,
       });
 
       expect(result.store).toBe("connected");
@@ -78,6 +84,7 @@ describe("health command", () => {
         projectId: "ghost",
         store: makeStore(0),
         embeddings: makeEmbeddings(true),
+        dbPath: dir,
       });
 
       expect(result.chunks).toBe(0);
@@ -93,9 +100,39 @@ describe("health command", () => {
         projectId: "p",
         store: makeStore(0),
         embeddings: makeEmbeddings(true),
+        dbPath: dir,
       });
 
       expect(result.version).toBe(pkg.default.version);
+    });
+
+    it("omits lastError when none is recorded", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo",
+        store: makeStore(0),
+        embeddings: makeEmbeddings(true),
+        dbPath: dir,
+      });
+
+      expect(result.lastError).toBeUndefined();
+    });
+
+    it("includes lastError when one is recorded for the project", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const { writeLastError } = await import("../../src/store/error-state.js");
+
+      await writeLastError(dir, "demo", "search", new Error("ollama unreachable"));
+
+      const result = await runHealth({
+        projectId: "demo",
+        store: makeStore(0),
+        embeddings: makeEmbeddings(true),
+        dbPath: dir,
+      });
+
+      expect(result.lastError?.phase).toBe("search");
+      expect(result.lastError?.message).toBe("ollama unreachable");
     });
   });
 });

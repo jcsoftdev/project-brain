@@ -109,6 +109,7 @@ describe("Integration: command lifecycle", () => {
         projectId: initResult.projectId,
         store,
         embeddings: mockEmbeddings,
+        dbPath: tempDir,
       });
       expect(health.store).toBe("connected");
       expect(health.chunks).toBeGreaterThan(0);
@@ -125,6 +126,7 @@ describe("Integration: command lifecycle", () => {
         projectId: initResult.projectId,
         store,
         embeddings: mockEmbeddings,
+        dbPath: tempDir,
       });
 
       expect(health.store).toBe("connected");
