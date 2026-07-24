@@ -123,6 +123,13 @@ switch (command) {
   case "search": {
     const { execute } = await import("./commands/search.js");
     await execute(args);
+    // search.ts's internal 4000ms race only decides what execute()'s own
+    // promise resolves to — it does NOT cancel the losing side or kill the
+    // process. Without forcing exit here, a slow/hung Ollama call left
+    // running in the background keeps this process alive well past the
+    // race (observed: 10s+ in createEmbeddingClient alone), defeating the
+    // whole point of the hook's "must never hang a prompt" guarantee.
+    process.exit(0);
     break;
   }
   case "update": {
