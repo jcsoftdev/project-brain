@@ -1,5 +1,11 @@
 import { describe, it, expect } from "bun:test";
-import { parsePort, parseModelRoutingFlag } from "../src/cli-args.js";
+import {
+  parsePort,
+  parseModelRoutingFlag,
+  collectPositionals,
+  parseIntFlag,
+  parseListFlag,
+} from "../src/cli-args.js";
 
 describe("parsePort", () => {
   it("returns the value after --port when present", () => {
@@ -43,5 +49,82 @@ describe("parseModelRoutingFlag", () => {
 
   it('returns "yes" when both flags are present (--model-routing checked first)', () => {
     expect(parseModelRoutingFlag(["--model-routing", "--no-model-routing"])).toBe("yes");
+  });
+});
+
+describe("collectPositionals", () => {
+  it("returns positional args, skipping a valued flag and its following value", () => {
+    expect(collectPositionals(["foo", "--max-depth", "5"], ["--max-depth"])).toEqual(["foo"]);
+  });
+
+  it("returns multiple positionals in order when no flags are present", () => {
+    expect(collectPositionals(["from", "to"], ["--max-depth"])).toEqual(["from", "to"]);
+  });
+
+  it("skips multiple different valued flags and their values", () => {
+    expect(
+      collectPositionals(
+        ["query", "--limit", "5", "--budget", "200"],
+        ["--limit", "--budget"]
+      )
+    ).toEqual(["query"]);
+  });
+
+  it("treats an unlisted flag as non-positional but does NOT consume the next token as its value", () => {
+    // Only flags in valuedFlags consume a following value; unknown flags are
+    // simply excluded from positionals themselves (not treated as valued).
+    expect(collectPositionals(["foo", "--verbose", "bar"], [])).toEqual(["foo", "bar"]);
+  });
+
+  it("returns an empty array when there are no positionals", () => {
+    expect(collectPositionals(["--max-depth", "5"], ["--max-depth"])).toEqual([]);
+  });
+
+  it("handles a valued flag with no following value gracefully (does not throw)", () => {
+    expect(collectPositionals(["foo", "--max-depth"], ["--max-depth"])).toEqual(["foo"]);
+  });
+});
+
+describe("parseIntFlag", () => {
+  it("returns the parsed value when the flag is present and valid", () => {
+    expect(parseIntFlag(["--max-depth", "5"], "--max-depth", { def: 6, min: 1, max: 20 })).toBe(5);
+  });
+
+  it("clamps to max when the value exceeds the max", () => {
+    expect(parseIntFlag(["--max-depth", "100"], "--max-depth", { def: 6, min: 1, max: 20 })).toBe(20);
+  });
+
+  it("clamps to min when the value is below the min", () => {
+    expect(parseIntFlag(["--max-depth", "0"], "--max-depth", { def: 6, min: 1, max: 20 })).toBe(1);
+  });
+
+  it("falls back to def when the flag is absent", () => {
+    expect(parseIntFlag([], "--max-depth", { def: 6, min: 1, max: 20 })).toBe(6);
+  });
+
+  it("falls back to def when the value is not a valid integer", () => {
+    expect(parseIntFlag(["--max-depth", "abc"], "--max-depth", { def: 6, min: 1, max: 20 })).toBe(6);
+  });
+
+  it("falls back to def when the flag is the last argument with no value", () => {
+    expect(parseIntFlag(["--max-depth"], "--max-depth", { def: 6, min: 1, max: 20 })).toBe(6);
+  });
+});
+
+describe("parseListFlag", () => {
+  it("comma-splits and trims the flag's value", () => {
+    expect(parseListFlag(["--focus", "a, b ,c"], "--focus")).toEqual(["a", "b", "c"]);
+  });
+
+  it("drops empty entries produced by consecutive commas", () => {
+    expect(parseListFlag(["--focus", "a,,b"], "--focus")).toEqual(["a", "b"]);
+  });
+
+  it("returns undefined when the flag is absent", () => {
+    expect(parseListFlag([], "--focus")).toBeUndefined();
+  });
+
+  it("returns undefined when the flag is the last argument with no value", () => {
+    expect(parseListFlag(["--focus"], "--focus")).toBeUndefined();
   });
 });

@@ -1,13 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ToolDeps } from "../types.js";
+import type { ToolDeps, GraphDeps } from "../types.js";
 import { formatHits, graphUnavailable, type ToolResult } from "./format.js";
 import { toolAnnotations } from "../constants.js";
 
 /** Handle find_callers logic (exported for testing). */
 export async function handleFindCallers(
   args: { name: string },
-  deps: ToolDeps
+  deps: GraphDeps
 ): Promise<ToolResult> {
   if (!deps.graph) return graphUnavailable();
 
@@ -26,7 +26,7 @@ export async function handleFindCallers(
 /** Handle find_callees logic (exported for testing). */
 export async function handleFindCallees(
   args: { name: string },
-  deps: ToolDeps
+  deps: GraphDeps
 ): Promise<ToolResult> {
   if (!deps.graph) return graphUnavailable();
 

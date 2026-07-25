@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ToolDeps } from "../types.js";
+import type { ToolDeps, GraphDeps } from "../types.js";
 import { formatHits, graphUnavailable, type ToolResult } from "./format.js";
 import { toolAnnotations } from "../constants.js";
 
@@ -9,7 +9,7 @@ const DEFAULT_MAX_DEPTH = 6;
 /** Handle impact logic (exported for testing). */
 export async function handleImpact(
   args: { name: string; maxDepth?: number },
-  deps: ToolDeps
+  deps: GraphDeps
 ): Promise<ToolResult> {
   if (!deps.graph) return graphUnavailable();
 

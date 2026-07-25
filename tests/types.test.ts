@@ -5,6 +5,8 @@ import type {
   Chunk,
   SearchResult,
   ToolDeps,
+  GraphDeps,
+  SearchCodeDeps,
 } from "../src/types.js";
 import {
   VECTOR_DIM,
@@ -133,6 +135,64 @@ describe("VectorStore.getChunksByIds", () => {
       assertDim: async () => {},
     };
     expect(minimal.getChunksByIds).toBeUndefined();
+  });
+});
+
+describe("GraphDeps / SearchCodeDeps narrowing", () => {
+  it("GraphDeps accepts an object with only an optional graph field", () => {
+    const empty: GraphDeps = {};
+    expect(empty.graph).toBeUndefined();
+
+    const withGraph: GraphDeps = { graph: {} as GraphDeps["graph"] };
+    expect(withGraph.graph).toBeDefined();
+  });
+
+  it("SearchCodeDeps requires only a store field", () => {
+    const mockStore: VectorStore = {
+      ensureTable: async () => {},
+      upsert: async () => {},
+      batchReplace: async () => {},
+      search: async () => [],
+      deleteBySource: async () => {},
+      listModules: async () => [],
+      getModuleChunks: async () => [],
+      countChunks: async () => 0,
+      optimize: async () => {},
+      buildIndexes: async () => {},
+      hybridSearch: async () => [],
+      getChunkById: async () => null,
+      assertDim: async () => {},
+    };
+    const deps: SearchCodeDeps = { store: mockStore };
+    expect(deps.store).toBeDefined();
+  });
+
+  it("a full ToolDeps structurally satisfies both GraphDeps and SearchCodeDeps", () => {
+    const mockStore: VectorStore = {
+      ensureTable: async () => {},
+      upsert: async () => {},
+      batchReplace: async () => {},
+      search: async () => [],
+      deleteBySource: async () => {},
+      listModules: async () => [],
+      getModuleChunks: async () => [],
+      countChunks: async () => 0,
+      optimize: async () => {},
+      buildIndexes: async () => {},
+      hybridSearch: async () => [],
+      getChunkById: async () => null,
+      assertDim: async () => {},
+    };
+    const mockEmbeddings: EmbeddingClient = {
+      dim: VECTOR_DIM,
+      embed: async () => null,
+      isAvailable: async () => false,
+    };
+    const full: ToolDeps = { store: mockStore, embeddings: mockEmbeddings };
+    const asGraphDeps: GraphDeps = full;
+    const asSearchCodeDeps: SearchCodeDeps = full;
+    expect(asGraphDeps).toBe(full);
+    expect(asSearchCodeDeps).toBe(full);
   });
 });
 

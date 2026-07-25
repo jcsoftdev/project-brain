@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ToolDeps } from "../types.js";
+import type { ToolDeps, SearchCodeDeps } from "../types.js";
 import { jsonResult, type ToolResult } from "./format.js";
 import { toolAnnotations } from "../constants.js";
 
@@ -11,7 +11,7 @@ interface SearchCodeArgs {
 }
 
 /** Handle search_code logic (exported for testing). */
-export async function handleSearchCode(args: SearchCodeArgs, deps: ToolDeps): Promise<ToolResult> {
+export async function handleSearchCode(args: SearchCodeArgs, deps: SearchCodeDeps): Promise<ToolResult> {
   if (!deps.store.ftsSearch) {
     return jsonResult({ error: "store does not support full-text search", code: "FTS_UNSUPPORTED" }, true);
   }

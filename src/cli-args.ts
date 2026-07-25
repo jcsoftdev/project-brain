@@ -30,3 +30,55 @@ export function parseModelRoutingFlag(args: string[]): "ask" | "yes" | "no" {
   if (args.includes("--no-model-routing")) return "no";
   return "ask";
 }
+
+/**
+ * Collect positional (non-flag) arguments, skipping both a valued flag AND
+ * its following value. Flags not listed in `valuedFlags` are simply excluded
+ * from the positionals themselves — they are not treated as consuming a
+ * following value (that following value stays positional).
+ */
+export function collectPositionals(args: string[], valuedFlags: readonly string[]): string[] {
+  const positionals: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (valuedFlags.includes(arg)) {
+      i++; // skip the flag's value too
+      continue;
+    }
+    if (arg.startsWith("--")) continue;
+    positionals.push(arg);
+  }
+  return positionals;
+}
+
+/**
+ * Resolve an integer-valued flag: indexOf-based lookup, clamped to
+ * [opts.min, opts.max]. Falls back to opts.def when the flag is absent or
+ * its value isn't a valid integer.
+ */
+export function parseIntFlag(
+  args: string[],
+  flag: string,
+  opts: { def: number; min: number; max: number }
+): number {
+  const idx = args.indexOf(flag);
+  const raw = idx !== -1 ? args[idx + 1] : undefined;
+  const n = raw !== undefined ? parseInt(raw, 10) : NaN;
+  if (Number.isNaN(n)) return opts.def;
+  return Math.min(Math.max(n, opts.min), opts.max);
+}
+
+/**
+ * Resolve a comma-separated list flag: finds `flag`'s value, splits on
+ * commas, trims each entry, and drops empty entries. Returns undefined when
+ * the flag is absent (or has no following value).
+ */
+export function parseListFlag(args: string[], flag: string): string[] | undefined {
+  const idx = args.indexOf(flag);
+  const raw = idx !== -1 ? args[idx + 1] : undefined;
+  if (raw === undefined) return undefined;
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
