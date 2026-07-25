@@ -127,3 +127,49 @@ it("kotlin: boundaries present with byte offsets", async () => {
   expect(boundaries.map((b) => b.name)).toEqual(expect.arrayContaining(["A", "run", "helper"]));
   expect(boundaries.every((b) => b.end_index > b.start_index)).toBe(true);
 });
+
+it("scala: class + object + trait + method + call edge", async () => {
+  const syms = await symbolsOf(
+    ".scala",
+    `class A {\n  def run(): Unit = { helper() }\n  def helper(): Unit = {}\n}\n\nobject Singleton {\n  def foo(): Unit = {}\n}\n\ntrait Greeter {\n  def greet(): Unit = { helper() }\n}`,
+  );
+  const names = syms.map((s) => s.name);
+  expect(names).toEqual(expect.arrayContaining(["A", "run", "helper", "Singleton", "foo", "Greeter", "greet"]));
+  expect(syms.find((s) => s.name === "run")!.edges.map((e) => e.dst_name)).toContain("helper");
+});
+
+it("scala: boundaries present with byte offsets", async () => {
+  const boundaries = await boundariesOf(
+    ".scala",
+    `class A {\n  def run(): Unit = { helper() }\n  def helper(): Unit = {}\n}\n\nobject Singleton {\n  def foo(): Unit = {}\n}\n\ntrait Greeter {\n  def greet(): Unit = { helper() }\n}`,
+  );
+  expect(boundaries.map((b) => b.name)).toEqual(
+    expect.arrayContaining(["A", "run", "helper", "Singleton", "foo", "Greeter", "greet"]),
+  );
+  expect(boundaries.every((b) => b.end_index > b.start_index)).toBe(true);
+});
+
+it("dart: class + enum + mixin + method + call edge", async () => {
+  const syms = await symbolsOf(
+    ".dart",
+    `class A {\n  void run() {\n    helper();\n  }\n  void helper() {}\n}\n\nenum Color { red, green, blue }\n\nmixin Flyable {\n  void fly() {}\n}`,
+  );
+  const names = syms.map((s) => s.name);
+  expect(names).toEqual(expect.arrayContaining(["A", "run", "helper", "Color", "Flyable", "fly"]));
+  // NOTE: Dart method/function bodies live in a sibling `function_body` node,
+  // not inside the `function_signature` node used for symbol extraction, and
+  // invocations parse as identifier+selector/argument_part chains rather than
+  // a call_expression/call node — so there is no resolvable call-edge to
+  // assert here (mirrors the Ruby precedent above). Names-only coverage is honest.
+});
+
+it("dart: boundaries present with byte offsets", async () => {
+  const boundaries = await boundariesOf(
+    ".dart",
+    `class A {\n  void run() {\n    helper();\n  }\n  void helper() {}\n}\n\nenum Color { red, green, blue }\n\nmixin Flyable {\n  void fly() {}\n}`,
+  );
+  expect(boundaries.map((b) => b.name)).toEqual(
+    expect.arrayContaining(["A", "run", "helper", "Color", "Flyable", "fly"]),
+  );
+  expect(boundaries.every((b) => b.end_index > b.start_index)).toBe(true);
+});

@@ -2,13 +2,18 @@ import { join } from "node:path";
 import { readdir, stat, mkdir, writeFile, access } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { WATCHER_ALWAYS_IGNORE } from "../constants.js";
+import { LANGUAGES } from "../parser/languages.js";
 
-/** Recognized source extensions that qualify a directory as a module. */
-const SOURCE_EXTENSIONS = new Set([
-  ".ts", ".tsx", ".js", ".jsx", ".mjs",
-  ".py", ".go", ".rs", ".rb", ".java",
-  ".kt", ".swift", ".c", ".cpp", ".h", ".md",
-]);
+/**
+ * Recognized source extensions that qualify a directory as a module.
+ * Derived from LANGUAGES (src/parser/languages.ts) so every AST-supported
+ * extension automatically qualifies — this used to be a hand-maintained
+ * literal list that silently drifted from LANGUAGES (e.g. .cs and .php were
+ * fully AST-supported but missing here). .md and .mjs are not AST-parsed
+ * (.mjs is plain JS content served by the .js extension already, no
+ * separate grammar entry) but are kept as explicit non-AST extras.
+ */
+const SOURCE_EXTENSIONS = new Set([...Object.keys(LANGUAGES), ".md", ".mjs"]);
 
 /** Fallback template used when templates/module-doc.md is not on disk. */
 const FALLBACK_MODULE_TEMPLATE = `# Module: {{name}}

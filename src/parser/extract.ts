@@ -78,9 +78,40 @@ const DECL_KINDS: Record<string, Record<string, SymbolKind>> = {
     function_declaration: "function",
     class_declaration: "class",
   },
+  scala: {
+    class_definition: "class",
+    object_definition: "class", // singleton → class, lossless label
+    trait_definition: "trait",
+    function_definition: "function",
+  },
+  dart: {
+    class_definition: "class",
+    enum_declaration: "enum",
+    mixin_declaration: "trait", // mixin → trait, reusable-behavior label
+    // Dart's method/function body lives in a SIBLING `function_body` node,
+    // not inside `function_signature` — so extracted boundaries cover only
+    // the signature span, and collectCalls (which only walks children of
+    // the symbol node) finds no calls inside. This is a real limitation:
+    // no call edges for Dart (see CALL_NODE_TYPES comment below), and
+    // boundaries are signature-only. `function_signature` is used (not the
+    // wrapping `method_signature`, which has no resolvable name) — it also
+    // covers top-level functions (same node type, no class/mixin ancestor),
+    // so a free function is labeled "method" too; SymbolKind is display-only
+    // (see src/types.ts), so this is a cosmetic tradeoff, not a functional bug.
+    function_signature: "method",
+  },
 };
 
-/** Per-language call-site node types. Default covers TS/JS/Python/Go/Rust (current behavior). */
+/**
+ * Per-language call-site node types. Default covers TS/JS/Python/Go/Rust
+ * (current behavior) and also Scala, whose `call_expression` node resolves
+ * a callee identifier via namedChild(0) exactly like the default path — no
+ * explicit "scala" entry needed.
+ * Dart has NO entry (and none should be added): a Dart invocation like
+ * `helper()` parses as identifier + sibling `selector`/`argument_part`/
+ * `arguments`, not a `call_expression`/`call` node — there is nothing for
+ * the default fallback to match, so Dart symbols simply get zero edges.
+ */
 export const CALL_NODE_TYPES: Record<string, string[]> = {
   default: ["call_expression", "call"],
   java: ["method_invocation", "object_creation_expression"],
