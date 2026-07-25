@@ -33,6 +33,15 @@ Commands:
   search "<query>"   Search indexed context (used by hooks); prints compact results
   update             Update project-brain to the latest published version
 
+Structural (offline — no Ollama probe, reads the local graph.db directly):
+  find <name>              Exact symbol lookup by name
+  callers <name>           Every symbol that calls <name>
+  callees <name>           Every symbol <name> calls
+  impact <name>            Blast radius (transitive callers), [--max-depth N] (default 6, max 20)
+  trace <from> <to>        Shortest call path from <from> to <to>, [--max-depth N] (default 8, max 20)
+  map                      Token-budgeted repo overview, [--budget N] [--focus a,b,c]
+  code "<query>"           Keyword/BM25 code search (no embeddings needed), [--limit N] (default 10, max 50)
+
 Options for serve --http:
   --port <n>         HTTP listen port (default: 3000; env: BRAIN_HTTP_PORT)
   BRAIN_HTTP_TOKEN   Required env var — bearer secret for HTTP auth
@@ -137,6 +146,41 @@ switch (command) {
     await execute(args);
     break;
   }
+  case "find": {
+    const { execute } = await import("./commands/find.js");
+    await execute(args);
+    break;
+  }
+  case "callers": {
+    const { execute } = await import("./commands/callers.js");
+    await execute(args);
+    break;
+  }
+  case "callees": {
+    const { execute } = await import("./commands/callees.js");
+    await execute(args);
+    break;
+  }
+  case "impact": {
+    const { execute } = await import("./commands/impact.js");
+    await execute(args);
+    break;
+  }
+  case "trace": {
+    const { execute } = await import("./commands/trace.js");
+    await execute(args);
+    break;
+  }
+  case "map": {
+    const { execute } = await import("./commands/map.js");
+    await execute(args);
+    break;
+  }
+  case "code": {
+    const { execute } = await import("./commands/code.js");
+    await execute(args);
+    break;
+  }
   case "__parse-selftest": {
     // Hidden build-smoke hook (not in --help). Ollama-free: proves the
     // cross-compiled binary loaded the embedded WASM grammar + produced
@@ -160,7 +204,7 @@ switch (command) {
   default:
     console.error(`Unknown command: ${command}`);
     console.error(
-      "Usage: project-brain [setup|init|sync|conceptualize|reindex|health|search|update|serve]"
+      "Usage: project-brain [setup|init|sync|conceptualize|reindex|health|search|update|serve|find|callers|callees|impact|trace|map|code]"
     );
     process.exit(1);
 }

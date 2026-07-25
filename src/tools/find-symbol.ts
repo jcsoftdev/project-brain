@@ -1,13 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ToolDeps } from "../types.js";
+import type { ToolDeps, GraphDeps } from "../types.js";
 import { formatHits, graphUnavailable, type ToolResult } from "./format.js";
 import { toolAnnotations } from "../constants.js";
 
 /** Handle find_symbol logic (exported for testing). */
 export async function handleFindSymbol(
   args: { name: string },
-  deps: ToolDeps
+  deps: GraphDeps
 ): Promise<ToolResult> {
   if (!deps.graph) return graphUnavailable();
 

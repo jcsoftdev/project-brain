@@ -86,20 +86,24 @@ Once connected over MCP, AI assistants get these tools. The server also injects 
 
 ### Lexical (keyword — no embeddings needed)
 
-| Tool | What it does |
-|---|---|
-| `search_code` | Exact/keyword full-text search (BM25) over indexed code — identifiers, error strings, exact phrases. Works offline without Ollama. Not regex. |
+| Tool | CLI | What it does |
+|---|---|---|
+| `search_code` | `project-brain code "<query>" [--limit N]` | Exact/keyword full-text search (BM25) over indexed code — identifiers, error strings, exact phrases. Works offline without Ollama. Not regex. |
 
 ### Structural (AST graph — exact, no embeddings needed)
 
-| Tool | What it does |
-|---|---|
-| `find_symbol` | Exact symbol definition(s) by name: path, line range, kind, signature. Use when you know the name. |
-| `find_callers` | Every symbol that calls the named symbol (who depends on X). |
-| `find_callees` | Every symbol the named symbol calls (what X depends on). |
-| `impact` | Blast radius — all symbols transitively affected if the named symbol changes (reverse call graph, bounded by `maxDepth`). |
-| `trace_path` | Shortest call path between two symbols (how does A reach B) — ordered caller→callee chain. |
-| `repo_map` | Token-budgeted overview of the most important symbols in the codebase, ranked by PageRank over the call graph. Use for repo orientation / where to start reading. |
+Every structural tool is also a native CLI command — reusable without an MCP client, and even more offline than the MCP path (no Ollama probe, reads the local `graph.db` directly):
+
+| Tool | CLI | What it does |
+|---|---|---|
+| `find_symbol` | `project-brain find <name>` | Exact symbol definition(s) by name: path, line range, kind, signature. Use when you know the name. |
+| `find_callers` | `project-brain callers <name>` | Every symbol that calls the named symbol (who depends on X). |
+| `find_callees` | `project-brain callees <name>` | Every symbol the named symbol calls (what X depends on). |
+| `impact` | `project-brain impact <name> [--max-depth N]` | Blast radius — all symbols transitively affected if the named symbol changes (reverse call graph, bounded by `maxDepth`, default 6, max 20). |
+| `trace_path` | `project-brain trace <from> <to> [--max-depth N]` | Shortest call path between two symbols (how does A reach B) — ordered caller→callee chain (default depth 8, max 20). |
+| `repo_map` | `project-brain map [--budget N] [--focus a,b,c]` | Token-budgeted overview of the most important symbols in the codebase, ranked by PageRank over the call graph. Use for repo orientation / where to start reading. |
+
+The CLI commands exit 0 for any executed query — including legitimate empty results (symbol not found, no callers, no path within depth). They exit 1 only for usage errors or an unindexed/unsynced project (`project-brain init`/`sync` first).
 
 ### Modules & knowledge
 
@@ -198,6 +202,20 @@ Search the indexed context and print compact results. Primarily used internally:
 ```bash
 project-brain search "how does auth work"
 echo "how does auth work" | project-brain search --stdin
+```
+
+### Structural & lexical commands (`find`, `callers`, `callees`, `impact`, `trace`, `map`, `code`)
+
+Native CLI equivalents of the structural/lexical MCP tools — see the [Structural](#structural-ast-graph--exact-no-embeddings-needed) and [Lexical](#lexical-keyword--no-embeddings-needed) tables above for the full CLI ↔ MCP tool mapping. All read the local index directly (no Ollama probe), so they work fully offline once `project-brain sync` has run.
+
+```bash
+project-brain find GraphStore
+project-brain callers runSync
+project-brain callees runSync
+project-brain impact parseConfig --max-depth 3
+project-brain trace handleSearch runSync
+project-brain map --budget 2000 --focus createServer,runSync
+project-brain code "chargeCard" --limit 5
 ```
 
 ### `update`

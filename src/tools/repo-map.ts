@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { ToolDeps } from "../types.js";
+import type { ToolDeps, GraphDeps } from "../types.js";
 import { jsonResult, graphUnavailable, type ToolResult } from "./format.js";
 import { toolAnnotations } from "../constants.js";
 import { estimateTokens } from "../retrieval/budget.js";
@@ -13,7 +13,7 @@ const MAX_TOKEN_BUDGET = 8000;
 /** Handle repo_map logic (exported for testing). */
 export async function handleRepoMap(
   args: { token_budget?: number; focus?: string[] },
-  deps: ToolDeps
+  deps: GraphDeps
 ): Promise<ToolResult> {
   if (!deps.graph) return graphUnavailable();
 

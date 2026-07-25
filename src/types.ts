@@ -113,6 +113,25 @@ export interface VectorStore {
 
 import type { GraphStore } from "./graph/store.js";
 
+/**
+ * Narrow dependency shape for the 6 structural-graph handlers (find_symbol,
+ * find_callers, find_callees, impact, trace_path, repo_map) — they only ever
+ * read `deps.graph`, never `store`/`embeddings`. A full `ToolDeps` already
+ * satisfies this structurally, so callers (server.ts) need zero changes.
+ */
+export interface GraphDeps {
+  graph?: GraphStore;
+}
+
+/**
+ * Narrow dependency shape for search_code — pure BM25 full-text search over
+ * `deps.store.ftsSearch`, no embeddings involved. A full `ToolDeps` already
+ * satisfies this structurally, so callers (server.ts) need zero changes.
+ */
+export interface SearchCodeDeps {
+  store: VectorStore;
+}
+
 /** Dependencies injected into MCP tool handlers. */
 export interface ToolDeps {
   store: VectorStore;
