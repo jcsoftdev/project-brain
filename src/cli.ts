@@ -5,7 +5,7 @@ const [command, ...args] = process.argv.slice(2);
 // Update notifier: instant (reads a cached result only, no network) and
 // fail-silent. Skipped for hidden/internal commands so the detached background
 // refresh never re-triggers itself. Opt out with BRAIN_NO_UPDATE_CHECK=1.
-if (command !== "__update-check" && command !== "__parse-selftest") {
+if (command !== "__update-check" && command !== "__parse-selftest" && command !== "__extract-selftest") {
   try {
     const { notifyIfUpdateAvailable } = await import("./notifier.js");
     notifyIfUpdateAvailable();
@@ -142,6 +142,15 @@ switch (command) {
     // cross-compiled binary loaded the embedded WASM grammar + produced
     // symbols. Used by .github/workflows/release.yml. See parse-selftest.ts.
     const { execute } = await import("./commands/parse-selftest.js");
+    await execute(args);
+    break;
+  }
+  case "__extract-selftest": {
+    // Hidden build-smoke hook (not in --help). Ollama-free: proves the
+    // cross-compiled binary bundles + can run unpdf/mammoth/exceljs and
+    // extract pdf/docx/xlsx content. Used by .github/workflows/release.yml.
+    // See extract-selftest.ts.
+    const { execute } = await import("./commands/extract-selftest.js");
     await execute(args);
     break;
   }

@@ -106,6 +106,20 @@ export const GRAPH_DB_FILE = "graph.db";
 export const ANN_INDEX_MIN_ROWS = 20_000;
 
 export const MAX_PARSE_BYTES = 512 * 1024;      // skip files > 512KB (minified/generated)
+
+/** Raw file-size ceiling for ordinary code/text files read during sync (unchanged 512KB behavior). */
+export const MAX_TEXT_FILE_BYTES = 512_000;
+/**
+ * Raw pre-extraction file-size ceiling for PDF/DOCX/XLSX documents. Deliberately
+ * more conservative than a naive 20MB — exceljs/mammoth unzip fully into memory.
+ */
+export const MAX_DOC_FILE_BYTES = 10_000_000;
+/**
+ * Post-extraction truncation cap (characters) for text pulled out of a doc.
+ * A cost guard against a pathological spreadsheet exploding into thousands of
+ * chunks — extraction still proceeds (truncated), never rejected outright.
+ */
+export const MAX_EXTRACTED_TEXT_CHARS = 1_000_000;
 export const MAX_LINE_LENGTH = 5000;            // skip files with pathological lines
 export const PARSER_TEARDOWN_EVERY = 500;       // recreate WASM instance every N files to reclaim linear memory
 export const WASM_MAX_PAGES = 4096;             // advisory page count; real backstop is input gating (MAX_PARSE_BYTES) + adaptive teardown + optional OS RSS limit on the indexer process

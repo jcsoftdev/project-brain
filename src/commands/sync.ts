@@ -4,7 +4,15 @@ import type { Dirent } from "node:fs";
 import { computeHash } from "../indexer/hash.js";
 import { chunkContent } from "../indexer/parser.js";
 import { shouldIgnore, loadPatterns } from "../indexer/gitignore.js";
-import { WATCHER_ALWAYS_IGNORE, GRAPH_DB_FILE, OLLAMA_HOST, EMBEDDING_MODEL } from "../constants.js";
+import { readIndexableText, isDocExtension } from "../indexer/extract-text.js";
+import {
+  WATCHER_ALWAYS_IGNORE,
+  GRAPH_DB_FILE,
+  OLLAMA_HOST,
+  EMBEDDING_MODEL,
+  MAX_TEXT_FILE_BYTES,
+  MAX_DOC_FILE_BYTES,
+} from "../constants.js";
 import { mapLimit } from "../indexer/concurrency.js";
 import type { EmbeddingClient, VectorStore, Chunk, TableMeta } from "../types.js";
 import { WasmParser } from "../parser/wasm.js";
@@ -386,7 +394,6 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
         ? { batchSize: 1, concurrency: 1 }
         : await resolveEmbedConfigAsync(process.env, OLLAMA_HOST, embeddings.model ?? EMBEDDING_MODEL);
     const SAVE_EVERY = 10;
-    const MAX_FILE_BYTES = 512_000;
 
     type FileEntry = { relPath: string; hash: string; mtime: number; rawChunks: ReturnType<typeof chunkContent> };
 
@@ -403,9 +410,10 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
         batch.map(async (filePath) => {
           // Fast path: check mtime via stat (no content read)
           let mtime = 0;
+          let size = 0;
           try {
             const s = await stat(filePath);
-            if (s.size > MAX_FILE_BYTES) return null;
+            size = s.size;
             mtime = s.mtimeMs;
           } catch { return null; }
 
@@ -415,12 +423,29 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           const relPath = (filePath.startsWith(root + "/")
             ? filePath.slice(root.length + 1) : filePath).replace(/\\/g, "/");
 
+          // Extension must be known BEFORE the size gate below: doc formats
+          // (pdf/docx/xlsx) get the more generous MAX_DOC_FILE_BYTES ceiling
+          // (their extracted text is far smaller than their raw on-disk
+          // size) instead of the tighter MAX_TEXT_FILE_BYTES applied to
+          // ordinary code/text. Dot-less filenames (e.g. "Makefile") have no
+          // extension → "".
+          const dotIdx = relPath.lastIndexOf(".");
+          const ext = dotIdx < 0 ? "" : relPath.slice(dotIdx);
+          const sizeCeiling = isDocExtension(ext) ? MAX_DOC_FILE_BYTES : MAX_TEXT_FILE_BYTES;
+          if (size > sizeCeiling) return null;
+
           const entry = manifestStore.getEntry(relPath);
           if (entry && entry.mtime === mtime) return "skipped" as const; // mtime unchanged → skip
 
-          // mtime changed → read content + verify hash
-          let content: string;
-          try { content = await Bun.file(filePath).text(); } catch { return null; }
+          // mtime changed → read/extract content + verify hash. Binary-safety
+          // (content sniff) and doc extraction (pdf/docx/xlsx) both live in
+          // readIndexableText — BOTH sync read sites (this loop and
+          // checkStaleness below) call the SAME function so a doc's
+          // content-hash can never diverge between "sync" and "staleness
+          // check". A null result (binary file, or a doc that failed to
+          // extract) is treated exactly like a read error: skip this file.
+          const content = await readIndexableText(filePath, ext);
+          if (content === null) return null;
           const hash = computeHash(content);
 
           if (entry && entry.hash === hash) {
@@ -439,9 +464,6 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
           // Structural graph: parse + extract symbols (gated by same hash-skip above).
           // Skipped entirely when the WASM parser failed to initialise.
-          // Dot-less filenames (e.g. "Makefile") have no extension → "".
-          const dotIdx = relPath.lastIndexOf(".");
-          const ext = dotIdx < 0 ? "" : relPath.slice(dotIdx);
           // Best-effort: a single malformed/unsupported file must NOT abort the
           // whole sync (which would also kill embedding of every other file).
           // Any throw from warm/parse/extract is logged and structural work for
@@ -889,21 +911,36 @@ export async function checkStaleness(options: StalenessOptions): Promise<Stalene
   try {
     const gitignorePatterns = await loadPatterns(root);
     const filePaths = await listAllFiles(root, root, gitignorePatterns);
+    const { stat } = await import("node:fs/promises");
 
     let stale = 0;
     let current = 0;
 
     for (const filePath of filePaths) {
-      let content: string;
+      const relPath = (filePath.startsWith(root + "/")
+        ? filePath.slice(root.length + 1)
+        : filePath).replace(/\\/g, "/");
+
+      // Same ext-aware size ceiling as the main sync loop above — a file
+      // runSync would skip as oversized must not be read/extracted here
+      // either, or checkStaleness and an actual sync could disagree.
+      const dotIdx = relPath.lastIndexOf(".");
+      const ext = dotIdx < 0 ? "" : relPath.slice(dotIdx);
+      const sizeCeiling = isDocExtension(ext) ? MAX_DOC_FILE_BYTES : MAX_TEXT_FILE_BYTES;
       try {
-        content = await Bun.file(filePath).text();
+        const s = await stat(filePath);
+        if (s.size > sizeCeiling) continue;
       } catch {
         continue;
       }
 
-      const relPath = (filePath.startsWith(root + "/")
-        ? filePath.slice(root.length + 1)
-        : filePath).replace(/\\/g, "/");
+      // Shares readIndexableText with the main sync loop (see runSync above)
+      // — this is a correctness requirement, not a style preference: using
+      // different read logic here would make a doc's content-hash diverge
+      // between "sync" and "staleness check", causing it to perpetually
+      // flag as stale.
+      const content = await readIndexableText(filePath, ext);
+      if (content === null) continue;
       const hash = computeHash(content);
 
       const entry = manifest.getEntry(relPath);

@@ -1,5 +1,6 @@
 import { computeHash } from "./hash.js";
 import { castChunk, CAST_MAX_NON_WHITESPACE_CHARS } from "./cast.js";
+import { isDocExtension } from "./extract-text.js";
 import type { Boundary } from "../parser/extract.js";
 import type { SymbolKind } from "../types.js";
 
@@ -49,11 +50,12 @@ const MD_EXTENSIONS = [".md", ".mdx", ".markdown"];
 
 /**
  * Chunk file content into semantically meaningful pieces.
- * Markdown: split by headings. Code: split by real AST declaration
- * boundaries (cAST, src/indexer/cast.ts) when `boundaries` is provided and
- * non-empty; otherwise falls back to the legacy regex/brace-counter
- * splitCode — used for markdown, unsupported languages, parse failures, and
- * oversize-skipped files, none of which ever produce AST boundaries.
+ * Markdown (and extracted PDF/DOCX/XLSX prose — see isDocExtension): split by
+ * headings. Code: split by real AST declaration boundaries (cAST,
+ * src/indexer/cast.ts) when `boundaries` is provided and non-empty; otherwise
+ * falls back to the legacy regex/brace-counter splitCode — used for
+ * markdown/prose, unsupported languages, parse failures, and oversize-skipped
+ * files, none of which ever produce AST boundaries.
  */
 export function chunkContent(
   content: string,
@@ -62,10 +64,15 @@ export function chunkContent(
   boundaries?: Boundary[]
 ): RawChunk[] {
   const ext = source.includes(".") ? "." + source.split(".").pop()! : "";
-  const isMarkdown = MD_EXTENSIONS.includes(ext.toLowerCase());
+  // Extracted PDF/DOCX prose has no natural headings most of the time and
+  // falls through to splitMarkdown's splitBySize fallback — same as any
+  // other heading-less markdown file, zero new chunking logic needed.
+  // Extracted XLSX text is pre-rendered with real `## <sheetName>` headings
+  // (src/indexer/extract-text.ts) specifically so it splits cleanly here too.
+  const useProsePath = MD_EXTENSIONS.includes(ext.toLowerCase()) || isDocExtension(ext);
 
-  const isCastPath = !isMarkdown && !!boundaries && boundaries.length > 0;
-  const sections = isMarkdown
+  const isCastPath = !useProsePath && !!boundaries && boundaries.length > 0;
+  const sections = useProsePath
     ? splitMarkdown(content)
     : isCastPath
       ? castChunk(content, boundaries!)
