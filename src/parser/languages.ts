@@ -32,6 +32,8 @@ import rubyWasm from "tree-sitter-wasms/out/tree-sitter-ruby.wasm" with { type: 
 import phpWasm from "tree-sitter-wasms/out/tree-sitter-php.wasm" with { type: "file" };
 import swiftWasm from "tree-sitter-wasms/out/tree-sitter-swift.wasm" with { type: "file" };
 import kotlinWasm from "tree-sitter-wasms/out/tree-sitter-kotlin.wasm" with { type: "file" };
+import scalaWasm from "tree-sitter-wasms/out/tree-sitter-scala.wasm" with { type: "file" };
+import dartWasm from "tree-sitter-wasms/out/tree-sitter-dart.wasm" with { type: "file" };
 
 export interface LanguageSpec {
   id: string;
@@ -58,6 +60,8 @@ export const LANGUAGES: Record<string, LanguageSpec> = {
   ".swift": { id: "swift", wasmPath: swiftWasm },
   ".kt": { id: "kotlin", wasmPath: kotlinWasm },
   ".kts": { id: "kotlin", wasmPath: kotlinWasm },
+  ".scala": { id: "scala", wasmPath: scalaWasm },
+  ".dart": { id: "dart", wasmPath: dartWasm },
 };
 
 export function langForExt(ext: string): LanguageSpec | undefined {

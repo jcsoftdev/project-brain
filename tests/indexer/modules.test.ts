@@ -87,6 +87,32 @@ describe("detectModules", () => {
 
     expect(result).toEqual(["packages"]);
   });
+
+  /**
+   * SOURCE_EXTENSIONS must derive from LANGUAGES (src/parser/languages.ts)
+   * so every AST-supported extension automatically qualifies a directory as
+   * a module — previously .cs and .php were fully AST-supported but hardcoded
+   * out of this set. Also covers the newly-wired .scala and .dart.
+   */
+  it("qualifies directories via every LANGUAGES extension, including .cs/.php/.scala/.dart", async () => {
+    const { detectModules } = await import("../../src/indexer/modules.js");
+
+    await mkdir(join(tempDir, "dotnet-app"), { recursive: true });
+    await writeFile(join(tempDir, "dotnet-app", "Program.cs"), "class Program {}");
+
+    await mkdir(join(tempDir, "php-app"), { recursive: true });
+    await writeFile(join(tempDir, "php-app", "index.php"), "<?php echo 1;");
+
+    await mkdir(join(tempDir, "scala-app"), { recursive: true });
+    await writeFile(join(tempDir, "scala-app", "Main.scala"), "object Main {}");
+
+    await mkdir(join(tempDir, "dart-app"), { recursive: true });
+    await writeFile(join(tempDir, "dart-app", "main.dart"), "void main() {}");
+
+    const result = await detectModules(tempDir);
+
+    expect(result).toEqual(["dart-app", "dotnet-app", "php-app", "scala-app"]);
+  });
 });
 
 describe("writeModuleStubs", () => {
