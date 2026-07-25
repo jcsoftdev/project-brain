@@ -63,6 +63,30 @@ export class MyClass {
     });
   });
 
+  describe("extracted-doc prose routing (.pdf/.docx/.xlsx go through the markdown/prose path)", () => {
+    it("splits extracted PDF prose by headings when present", () => {
+      const content = `# Report\n\nIntro text.\n\n## Findings\n\nSome findings text.\n`;
+      const chunks = chunkContent(content, "report.pdf", "docs");
+      expect(chunks.length).toBeGreaterThanOrEqual(2);
+      expect(chunks.some((c) => c.symbol_kind === "section")).toBe(true);
+    });
+
+    it("keeps small heading-less extracted DOCX prose as a single chunk (splitMarkdown's splitBySize fallback)", () => {
+      const content = "Just a short paragraph of extracted docx prose, no headings at all.";
+      const chunks = chunkContent(content, "notes.docx", "docs");
+      expect(chunks.length).toBe(1);
+      expect(chunks[0].content).toContain("extracted docx prose");
+    });
+
+    it("splits a rendered XLSX (## <sheetName> headings) by sheet, not as code", () => {
+      const content = `## People\nName: Ada; Age: 36\nName: Grace; Age: 85\n\n## NoHeader\nraw\ttab\tjoined`;
+      const chunks = chunkContent(content, "workbook.xlsx", "docs");
+      expect(chunks.length).toBeGreaterThanOrEqual(2);
+      expect(chunks.some((c) => c.symbol_name === "People")).toBe(true);
+      expect(chunks.some((c) => c.symbol_name === "NoHeader")).toBe(true);
+    });
+  });
+
   describe("chunk properties", () => {
     it("chunks include id, content, source, module, content_hash, updated_at", () => {
       const chunks = chunkContent("const x = 1;", "test.ts", "mod");

@@ -20,3 +20,13 @@ declare module "*.md" {
   const text: string;
   export default text;
 }
+
+// mammoth ships no TypeScript declarations and no @types/mammoth package
+// exists — this ambient module covers the single API surface this codebase
+// uses (src/indexer/extract-text.ts).
+declare module "mammoth" {
+  export function extractRawText(input: { path: string } | { buffer: Buffer }): Promise<{
+    value: string;
+    messages: Array<{ type: string; message: string }>;
+  }>;
+}

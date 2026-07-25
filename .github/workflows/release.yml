@@ -104,6 +104,24 @@ jobs:
         # that cannot resolve their own imports, silently yielding zero symbols.
         run: bun build ./src/cli.ts ./src/parser/worker.ts --compile --target=${{ matrix.bun_target }} --outfile dist/project-brain-${{ matrix.target }}
 
+      - name: Report binary size
+        # Informational only, never fails the build: the pdf/docx/xlsx
+        # extraction libraries (unpdf/mammoth/exceljs) added as default
+        # dependencies grow every platform artifact — this makes that growth
+        # visible in the job summary without gating on any threshold.
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e
+          BIN="dist/project-brain-${{ matrix.target }}${{ matrix.ext }}"
+          {
+            echo "### Binary size — ${{ matrix.target }}"
+            echo '```'
+            du -h "$BIN" 2>/dev/null || echo "(could not stat $BIN)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
       - name: Smoke test native binary
         shell: bash
         # Runs the JUST-BUILT native binary (matrix.os matches matrix.target, so
@@ -162,6 +180,26 @@ jobs:
           fi
           if ! echo "$POUT" | grep -Eq 'STRUCT_OK [1-9][0-9]*'; then
             echo "::error::worker-pool smoke did NOT emit STRUCT_OK — the pool path is dead in this binary"
+            exit 1
+          fi
+
+          # EXTRACT gate: exercise the hidden `__extract-selftest` hook. Proves
+          # unpdf/mammoth/exceljs (default dependencies added for pdf/docx/xlsx
+          # ingestion) actually bundle and run inside the `--compile` binary —
+          # not just in dev mode. exceljs's own write path is exercised here
+          # too, the biggest at-risk item for this change (see extract-selftest.ts).
+          set +e
+          EOUT="$("$BIN" __extract-selftest 2>&1)"
+          ESTATUS=$?
+          set -e
+          echo "extract_exit=$ESTATUS"
+          echo "$EOUT"
+          if echo "$EOUT" | grep -E 'RuntimeError|\$bunfs' >/dev/null; then
+            echo "::error::extract-selftest smoke hit an embedded-asset regression (RuntimeError/\$bunfs)"
+            exit 1
+          fi
+          if ! echo "$EOUT" | grep -Eq 'EXTRACT_OK 3'; then
+            echo "::error::native binary smoke did NOT emit EXTRACT_OK 3 — document extraction (pdf/docx/xlsx) is dead in this binary"
             exit 1
           fi
 
