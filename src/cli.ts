@@ -33,6 +33,11 @@ Commands:
   search "<query>"   Search indexed context (used by hooks); prints compact results
   update             Update project-brain to the latest published version
 
+Knowledge bundles (Open Knowledge Format v0.2 — the *why*, not the *what*):
+  okf validate [dir]       Check bundle conformance (SPEC §11). Offline.
+  okf sync [dir]           Index the bundle's concepts so search_context returns them
+                             dir defaults to ./okf
+
 Structural (offline — no Ollama probe, reads the local graph.db directly):
   find <name>              Exact symbol lookup by name
   callers <name>           Every symbol that calls <name>
@@ -181,6 +186,11 @@ switch (command) {
     await execute(args);
     break;
   }
+  case "okf": {
+    const { execute } = await import("./commands/okf.js");
+    await execute(args);
+    break;
+  }
   case "__parse-selftest": {
     // Hidden build-smoke hook (not in --help). Ollama-free: proves the
     // cross-compiled binary loaded the embedded WASM grammar + produced
@@ -213,7 +223,7 @@ switch (command) {
   default:
     console.error(`Unknown command: ${command}`);
     console.error(
-      "Usage: project-brain [setup|init|sync|conceptualize|reindex|health|search|update|serve|find|callers|callees|impact|trace|map|code]"
+      "Usage: project-brain [setup|init|sync|conceptualize|reindex|health|search|update|serve|find|callers|callees|impact|trace|map|code|okf]"
     );
     process.exit(1);
 }
