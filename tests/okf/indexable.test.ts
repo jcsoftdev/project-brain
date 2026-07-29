@@ -41,12 +41,26 @@ describe("conceptToIndexable", () => {
     );
   });
 
-  it("namespaces the source under okf/ and groups every concept in the okf module", async () => {
+  it("uses the caller-supplied source verbatim — a real repo path, never a synthetic prefix", async () => {
     const { conceptToIndexable } = await import("../../src/okf/indexable.js");
 
-    const result = conceptToIndexable(file("decisions/wasm.md", CONCEPT));
+    // The source must be the file's actual repo-relative path. A synthetic
+    // prefix would both invent a path that does not exist (when the bundle
+    // lives outside ./okf) and collide with the regular indexer, which files
+    // every tracked file under its own real path.
+    const result = conceptToIndexable(file("wasm.md", CONCEPT), "docs/knowledge/wasm.md");
 
-    expect(result?.source).toBe("okf/decisions/wasm.md");
+    expect(result?.source).toBe("docs/knowledge/wasm.md");
+  });
+
+  it("files every concept under the okf module wherever the bundle lives", async () => {
+    const { conceptToIndexable } = await import("../../src/okf/indexable.js");
+
+    // The regular indexer derives a module from the first path segment, so a
+    // bundle in docs/knowledge/ would land in "docs". Pinning the module makes
+    // "this chunk is curated knowledge" true regardless of directory.
+    const result = conceptToIndexable(file("wasm.md", CONCEPT), "docs/knowledge/wasm.md");
+
     expect(result?.module).toBe("okf");
   });
 

@@ -11,11 +11,16 @@ import type { BundleFile } from "./bundle.js";
  */
 export const OKF_MODULE = "okf";
 
-/** Prefix that keeps concept sources from colliding with real repo paths. */
-export const OKF_SOURCE_PREFIX = "okf/";
-
 export interface IndexableConcept {
-  /** Store source id, e.g. "okf/decisions/wasm-bytes.md". */
+  /**
+   * Store source id — the file's real repo-relative path.
+   *
+   * It must match what the regular indexer would use for the same file
+   * (`sync.ts` files everything under `entry.relPath`), because both write to
+   * the same table. A synthetic prefix would either collide with a real path or
+   * invent one that does not exist, and it would break the anchoring that reads
+   * a concept's location back off the store.
+   */
   source: string;
   module: string;
   /** Preamble + curated prose, ready to be chunked and embedded. */
@@ -32,8 +37,15 @@ export interface IndexableConcept {
  *
  * Returns null for anything that is not knowledge: reserved navigation files,
  * reference material, and concepts whose body is nothing but a managed block.
+ *
+ * `source` defaults to the bundle-relative path, but callers that know where
+ * the bundle sits in the repo MUST pass the real repo-relative path so the id
+ * matches the one the regular indexer uses for that same file.
  */
-export function conceptToIndexable(file: BundleFile): IndexableConcept | null {
+export function conceptToIndexable(
+  file: BundleFile,
+  source: string = file.path
+): IndexableConcept | null {
   if (file.kind !== "concept") return null;
 
   const { type, title, tags, status } = file.document.frontmatter;
@@ -54,7 +66,7 @@ export function conceptToIndexable(file: BundleFile): IndexableConcept | null {
   const tagLine = Array.isArray(tags) && tags.length > 0 ? `tags: ${tags.join(", ")}` : null;
 
   return {
-    source: `${OKF_SOURCE_PREFIX}${file.path}`,
+    source,
     module: OKF_MODULE,
     content: [heading, tagLine, "", prose].filter((l) => l !== null).join("\n"),
   };

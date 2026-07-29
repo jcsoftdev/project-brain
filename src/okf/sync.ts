@@ -1,3 +1,4 @@
+import { join, relative, sep } from "node:path";
 import { chunkContent } from "../indexer/parser.js";
 import type { Chunk, EmbeddingClient, VectorStore } from "../types.js";
 import { OkfBundleError, readBundle } from "./bundle.js";
@@ -8,6 +9,12 @@ export interface SyncBundleDeps {
   project: string;
   store: VectorStore;
   embeddings: EmbeddingClient;
+  /**
+   * Repository root. Concept sources are stored as paths relative to it, so
+   * they match the ids the regular indexer writes for the very same files.
+   * Defaults to the bundle root, which is correct when the bundle IS the repo.
+   */
+  repoRoot?: string;
 }
 
 export interface SyncBundleResult {
@@ -20,6 +27,15 @@ export interface SyncBundleResult {
   /** Conformance problems found while reading (§11) — reported, never fatal. */
   issues: OkfIssue[];
   okfVersion: string | null;
+}
+
+/**
+ * Store id for a bundle file: its path relative to the repository root, always
+ * POSIX-separated to match the ids `sync.ts` writes.
+ */
+function repoRelativeSource(repoRoot: string, bundleRoot: string, bundlePath: string): string {
+  const abs = join(bundleRoot, bundlePath.split("/").join(sep));
+  return relative(repoRoot, abs).split(sep).join("/");
 }
 
 /**
@@ -37,7 +53,7 @@ export interface SyncBundleResult {
 export async function syncBundle(root: string, deps: SyncBundleDeps): Promise<SyncBundleResult> {
   const bundle = await readBundle(root);
   const indexables = bundle.files
-    .map(conceptToIndexable)
+    .map((f) => conceptToIndexable(f, repoRelativeSource(deps.repoRoot ?? root, root, f.path)))
     .filter((i): i is NonNullable<typeof i> => i !== null);
 
   const priorSources = new Set(

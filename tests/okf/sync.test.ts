@@ -71,7 +71,7 @@ describe("syncBundle", () => {
   const concept = (type: string, title: string, body = "Because of a real constraint.") =>
     ["---", `type: ${type}`, `title: ${title}`, "---", "", "# Why", body].join("\n");
 
-  it("indexes concepts under the okf module with namespaced sources", async () => {
+  it("indexes concepts under the okf module", async () => {
     const { syncBundle } = await import("../../src/okf/sync.js");
     const { store, calls } = fakeStore();
     await write("decisions/wasm.md", concept("Decision", "Load grammars from bytes"));
@@ -81,7 +81,26 @@ describe("syncBundle", () => {
     expect(result.concepts).toBe(1);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.chunks.every((c) => c.module === "okf")).toBe(true);
-    expect(calls[0]?.chunks.every((c) => c.source === "okf/decisions/wasm.md")).toBe(true);
+    expect(calls[0]?.chunks.every((c) => c.source === "decisions/wasm.md")).toBe(true);
+  });
+
+  it("stores sources relative to the repo root, matching the ids the regular indexer writes", async () => {
+    const { syncBundle } = await import("../../src/okf/sync.js");
+    const { store, calls } = fakeStore();
+    await mkdir(join(root, "docs", "knowledge"), { recursive: true });
+    await write("docs/knowledge/wasm.md", concept("Decision", "Load grammars from bytes"));
+
+    // Bundle lives at <repo>/docs/knowledge; the store id must be the real repo
+    // path, because sync.ts writes exactly that for the same file and both
+    // pipelines share one table.
+    await syncBundle(join(root, "docs", "knowledge"), {
+      project: "p",
+      store,
+      embeddings: fakeEmbeddings(),
+      repoRoot: root,
+    });
+
+    expect(calls[0]?.chunks.every((c) => c.source === "docs/knowledge/wasm.md")).toBe(true);
   });
 
   it("attaches an embedding vector to every chunk it stores", async () => {
@@ -99,26 +118,26 @@ describe("syncBundle", () => {
     const { syncBundle } = await import("../../src/okf/sync.js");
     const { store, calls, seed } = fakeStore();
     seed([
-      { source: "okf/decisions/gone.md", module: "okf" },
-      { source: "okf/decisions/kept.md", module: "okf" },
+      { source: "decisions/gone.md", module: "okf" },
+      { source: "decisions/kept.md", module: "okf" },
     ]);
     await write("decisions/kept.md", concept("Decision", "Kept"));
 
     const result = await syncBundle(root, { project: "p", store, embeddings: fakeEmbeddings() });
 
-    expect(calls[0]?.sources).toContain("okf/decisions/gone.md");
-    expect(result.removed).toEqual(["okf/decisions/gone.md"]);
+    expect(calls[0]?.sources).toContain("decisions/gone.md");
+    expect(result.removed).toEqual(["decisions/gone.md"]);
   });
 
   it("replaces the sources it re-indexes so repeated syncs do not duplicate chunks", async () => {
     const { syncBundle } = await import("../../src/okf/sync.js");
     const { store, calls, seed } = fakeStore();
-    seed([{ source: "okf/decisions/kept.md", module: "okf" }]);
+    seed([{ source: "decisions/kept.md", module: "okf" }]);
     await write("decisions/kept.md", concept("Decision", "Kept"));
 
     await syncBundle(root, { project: "p", store, embeddings: fakeEmbeddings() });
 
-    expect(calls[0]?.sources).toContain("okf/decisions/kept.md");
+    expect(calls[0]?.sources).toContain("decisions/kept.md");
   });
 
   it("does not index reserved navigation or reference material", async () => {
@@ -132,7 +151,7 @@ describe("syncBundle", () => {
     const result = await syncBundle(root, { project: "p", store, embeddings: fakeEmbeddings() });
 
     expect(result.concepts).toBe(1);
-    expect(calls[0]?.chunks.every((c) => c.source === "okf/decisions/wasm.md")).toBe(true);
+    expect(calls[0]?.chunks.every((c) => c.source === "decisions/wasm.md")).toBe(true);
   });
 
   it("reports conformance issues without refusing to index the good concepts", async () => {

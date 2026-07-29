@@ -46,7 +46,7 @@ export interface Bundle {
 
 const REFERENCES_DIR = "references";
 
-function classify(path: string): BundleFileKind {
+export function classifyBundleFile(path: string): BundleFileKind {
   if (path === REFERENCES_DIR || path.startsWith(`${REFERENCES_DIR}/`)) return "reference";
   const name = path.slice(path.lastIndexOf("/") + 1);
   if (name === "index.md") return "index";
@@ -92,7 +92,7 @@ export async function readBundle(root: string): Promise<Bundle> {
 
   for (const path of paths) {
     const raw = await readFile(join(root, path.split("/").join(sep)), "utf-8");
-    const kind = classify(path);
+    const kind = classifyBundleFile(path);
     files.push({ path, kind, raw, document: parseDocument(raw) });
     // `references/` is external material, not a concept — validating it would
     // report conformance errors on files the spec never asked to conform.
