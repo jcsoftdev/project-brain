@@ -9,6 +9,23 @@ import { MAX_PARSE_BYTES, MAX_LINE_LENGTH, PARSER_TEARDOWN_EVERY } from "../cons
 
 export interface ParsedTree { tree: any; langId: string; }
 
+/**
+ * Loads a grammar from its own bytes rather than handing the path to
+ * `Language.load`.
+ *
+ * Grammar .wasm files are embedded with `{ type: "file" }`, so inside a
+ * `bun build --compile` binary `wasmPath` is a /$bunfs virtual path. Bun's own
+ * file APIs read that path fine, but `Language.load(path)` delegates to
+ * web-tree-sitter's emscripten loader, which bypasses the virtual filesystem
+ * and fails with `ENOENT '/$bunfs/root/tree-sitter-<lang>-<hash>.wasm'` — every
+ * language silently unsupported in the shipped binary while dev runs stayed
+ * green. Reading the bytes here keeps both layouts on one code path.
+ */
+async function loadGrammar(wasmPath: string): Promise<any> {
+  const bytes = new Uint8Array(await Bun.file(wasmPath).arrayBuffer());
+  return Language.load(bytes);
+}
+
 export class WasmParser {
   private parser: any = null;
   /** In-flight load promises — deduplicates concurrent Language.load calls for the same langId. */
@@ -45,7 +62,7 @@ export class WasmParser {
       // Evict on rejection so a transient/failed Language.load does NOT poison
       // the cache permanently. A second attempt can retry; until then parseFile
       // simply returns null for this language (grammar not ready).
-      p = Language.load(wasmPath).catch((err) => {
+      p = loadGrammar(wasmPath).catch((err) => {
         this.grammars.delete(langId);
         throw err;
       });

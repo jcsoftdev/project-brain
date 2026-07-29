@@ -69,8 +69,15 @@ test("warm swallows a grammar load failure and keeps the parser usable", async (
   // Force the real Language.load (invoked inside ensureGrammar) to reject ONCE,
   // exercising the .catch evictor in the fix. warm() must swallow the rejection.
   const grammars = (p as any).grammars as Map<string, Promise<any>>;
-  const loadSpy = spyOn(Language, "load").mockRejectedValueOnce(
-    new Error("forced load failure")
+  // Reject lazily, not via mockRejectedValueOnce: that form builds the rejected
+  // promise when the mock is configured, so it sits handler-less until the code
+  // under test calls Language.load. ensureGrammar now reads the grammar bytes
+  // first (required to load from /$bunfs in the compiled binary), which puts a
+  // real await in between and is long enough for Bun to flag the pre-built
+  // rejection as unhandled. Building it inside the call keeps the rejection tied
+  // to the invocation it is meant to simulate.
+  const loadSpy = spyOn(Language, "load").mockImplementationOnce(() =>
+    Promise.reject(new Error("forced load failure"))
   );
 
   await expect(p.warm(".ts")).resolves.toBeUndefined();
