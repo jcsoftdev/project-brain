@@ -23,6 +23,7 @@ import { openGraphDb } from "../graph/db.js";
 import { ManifestStore } from "../indexer/manifest-store.js";
 import { detectEmbedTuning, type EmbedTuning } from "../embeddings/auto-tune.js";
 import { rescueEmbedPass } from "../embeddings/rescue.js";
+import { routeOkfFile, DEFAULT_OKF_DIR } from "../okf/route.js";
 
 export interface ManifestEntry {
   hash: string;
@@ -60,6 +61,11 @@ export interface SyncOptions {
   graph?: GraphStore;
   /** When present, infra-level setup failures (e.g. parser init) are recorded for `project-brain health`. */
   dbPath?: string;
+  /**
+   * Repo-relative location of the OKF knowledge bundle. Files under it are
+   * indexed as curated concepts instead of raw markdown. Defaults to "okf".
+   */
+  okfDir?: string;
 }
 
 /** Resolved embedding batch/concurrency configuration for a sync run. */
@@ -275,6 +281,7 @@ async function listAllFiles(
  */
 export async function runSync(options: SyncOptions): Promise<SyncResult> {
   const { root, projectId, store, embeddings, onProgress, dbPath } = options;
+  const okfDir = options.okfDir ?? DEFAULT_OKF_DIR;
 
   // Structural graph: one WasmParser + one GraphStore per run.
   // When the caller injects a graph (e.g. the long-lived MCP server's shared
@@ -461,6 +468,26 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
           const parts = relPath.split("/");
           const module = parts.length > 1 ? parts[0] : "root";
+
+          // OKF knowledge bundles are tracked in git and therefore walked by
+          // this indexer, but they must NOT be chunked as raw markdown: both
+          // pipelines key chunks by this same relPath, so the raw version would
+          // replace the curated projection on every commit (the git hook runs
+          // sync). Route them through the OKF projection instead — one pipeline,
+          // and the bundle stays fresh via the watcher and hook for free.
+          const okfRoute = routeOkfFile(relPath, content, okfDir);
+          if (okfRoute) {
+            if (okfRoute.skip) {
+              manifestStore.upsertFile(relPath, hash, mtime, {});
+              return "skipped" as const;
+            }
+            return {
+              relPath,
+              hash,
+              mtime,
+              rawChunks: chunkContent(okfRoute.content, relPath, okfRoute.module),
+            };
+          }
 
           // Structural graph: parse + extract symbols (gated by same hash-skip above).
           // Skipped entirely when the WASM parser failed to initialise.
