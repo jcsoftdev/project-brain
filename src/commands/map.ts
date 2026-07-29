@@ -1,6 +1,6 @@
 import type { GraphStore } from "../graph/store.js";
 import { handleRepoMap } from "../tools/repo-map.js";
-import { parseIntFlag, parseListFlag } from "../cli-args.js";
+import { parseIntFlag, parseListFlag, parseStringFlag } from "../cli-args.js";
 import { withGraph } from "./graph-runner.js";
 
 const BUDGET_DEFAULT = 1000;
@@ -36,5 +36,5 @@ export async function execute(args: string[]): Promise<void> {
     max: BUDGET_MAX,
   });
   const focus = parseListFlag(args, "--focus");
-  await withGraph((graph) => runMap(budget, focus, graph));
+  await withGraph((graph) => runMap(budget, focus, graph), { project: parseStringFlag(args, "--project") });
 }

@@ -1,6 +1,6 @@
 import type { GraphStore } from "../graph/store.js";
 import { handleTracePath } from "../tools/trace-path.js";
-import { collectPositionals, parseIntFlag } from "../cli-args.js";
+import { collectPositionals, parseIntFlag, parseStringFlag } from "../cli-args.js";
 import { withGraph } from "./graph-runner.js";
 
 const MAX_DEPTH_DEFAULT = 8;
@@ -32,9 +32,9 @@ export async function runTrace(
 
 /** CLI entry point for the trace command. */
 export async function execute(args: string[]): Promise<void> {
-  const [from, to] = collectPositionals(args, ["--max-depth"]);
+  const [from, to] = collectPositionals(args, ["--max-depth", "--project"]);
   if (!from || !to) {
-    console.error("Usage: project-brain trace <from> <to> [--max-depth N]");
+    console.error("Usage: project-brain trace <from> <to> [--max-depth N] [--project ID]");
     process.exit(1);
     return;
   }
@@ -43,5 +43,5 @@ export async function execute(args: string[]): Promise<void> {
     min: MAX_DEPTH_MIN,
     max: MAX_DEPTH_MAX,
   });
-  await withGraph((graph) => runTrace(from, to, maxDepth, graph));
+  await withGraph((graph) => runTrace(from, to, maxDepth, graph), { project: parseStringFlag(args, "--project") });
 }

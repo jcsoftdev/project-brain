@@ -69,6 +69,19 @@ export function parseIntFlag(
 }
 
 /**
+ * Resolve a string-valued flag. Returns undefined when the flag is absent, has
+ * no following value, or is followed by another flag — `--project --budget 500`
+ * is a missing value, not a project literally named "--budget".
+ */
+export function parseStringFlag(args: string[], flag: string): string | undefined {
+  const idx = args.indexOf(flag);
+  if (idx === -1) return undefined;
+  const raw = args[idx + 1];
+  if (raw === undefined || raw.startsWith("-")) return undefined;
+  return raw;
+}
+
+/**
  * Resolve a comma-separated list flag: finds `flag`'s value, splits on
  * commas, trims each entry, and drops empty entries. Returns undefined when
  * the flag is absent (or has no following value).

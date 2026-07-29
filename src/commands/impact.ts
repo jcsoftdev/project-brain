@@ -1,6 +1,6 @@
 import type { GraphStore } from "../graph/store.js";
 import { handleImpact } from "../tools/impact.js";
-import { collectPositionals, parseIntFlag } from "../cli-args.js";
+import { collectPositionals, parseIntFlag, parseStringFlag } from "../cli-args.js";
 import { withGraph } from "./graph-runner.js";
 
 const MAX_DEPTH_DEFAULT = 6;
@@ -15,9 +15,9 @@ export async function runImpact(name: string, maxDepth: number | undefined, grap
 
 /** CLI entry point for the impact command. */
 export async function execute(args: string[]): Promise<void> {
-  const [name] = collectPositionals(args, ["--max-depth"]);
+  const [name] = collectPositionals(args, ["--max-depth", "--project"]);
   if (!name) {
-    console.error("Usage: project-brain impact <name> [--max-depth N]");
+    console.error("Usage: project-brain impact <name> [--max-depth N] [--project ID]");
     process.exit(1);
     return;
   }
@@ -26,5 +26,5 @@ export async function execute(args: string[]): Promise<void> {
     min: MAX_DEPTH_MIN,
     max: MAX_DEPTH_MAX,
   });
-  await withGraph((graph) => runImpact(name, maxDepth, graph));
+  await withGraph((graph) => runImpact(name, maxDepth, graph), { project: parseStringFlag(args, "--project") });
 }

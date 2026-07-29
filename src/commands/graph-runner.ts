@@ -2,6 +2,14 @@ import type { GraphStore } from "../graph/store.js";
 import { findProjectRoot, openProjectGraph } from "./resolve-project.js";
 
 export interface WithGraphDeps {
+  /**
+   * Target another indexed project by id instead of the current directory.
+   * Resolved through the project id → root registry that `init` writes — the
+   * same path the MCP structural tools use for their `project` argument.
+   */
+  project?: string;
+  /** DI seam for tests — defaults to lookupProjectRoot(DATA_DIR, id). */
+  lookupRoot?: (project: string) => Promise<string | null>;
   /** DI seam for tests — defaults to findProjectRoot(). */
   findRoot?: () => string | null;
   /** DI seam for tests — defaults to openProjectGraph(root). */
@@ -31,11 +39,31 @@ export async function withGraph(
   const log = deps.log ?? ((msg: string) => console.log(msg));
   const error = deps.error ?? ((msg: string) => console.error(msg));
 
-  const root = findRoot();
-  if (!root) {
-    error("Not a project-brain project (no .project-brain/ found). Run `project-brain init` first.");
-    exit(1);
-    return;
+  let root: string | null;
+  if (deps.project) {
+    const lookupRoot =
+      deps.lookupRoot ??
+      (async (id: string) => {
+        const { DATA_DIR } = await import("../constants.js");
+        const { lookupProjectRoot } = await import("../store/project-registry.js");
+        return lookupProjectRoot(DATA_DIR, id);
+      });
+    root = await lookupRoot(deps.project);
+    if (!root) {
+      error(
+        `Project "${deps.project}" is not registered, or its root no longer exists. ` +
+          "Run `project-brain init` in that project, then `project-brain sync`."
+      );
+      exit(1);
+      return;
+    }
+  } else {
+    root = findRoot();
+    if (!root) {
+      error("Not a project-brain project (no .project-brain/ found). Run `project-brain init` first.");
+      exit(1);
+      return;
+    }
   }
 
   const graph = openGraph(root);
