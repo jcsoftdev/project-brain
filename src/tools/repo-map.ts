@@ -1,8 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps, GraphDeps } from "../types.js";
-import { jsonResult, graphUnavailable, type ToolResult } from "./format.js";
+import { jsonResult, type ToolResult } from "./format.js";
 import { toolAnnotations } from "../constants.js";
+import { PROJECT_ARG, SCOPE_OUTPUT, resolveGraphScope } from "./graph-scope.js";
 import { estimateTokens } from "../retrieval/budget.js";
 import type { RankedSymbol } from "../graph/store.js";
 
@@ -12,13 +13,14 @@ const MAX_TOKEN_BUDGET = 8000;
 
 /** Handle repo_map logic (exported for testing). */
 export async function handleRepoMap(
-  args: { token_budget?: number; focus?: string[] },
+  args: { token_budget?: number; focus?: string[]; project?: string },
   deps: GraphDeps
 ): Promise<ToolResult> {
-  if (!deps.graph) return graphUnavailable();
+  const scope = await resolveGraphScope(deps, args.project);
+  if (!scope.ok) return scope.result;
 
   const tokenBudget = Math.min(Math.max(args.token_budget ?? DEFAULT_TOKEN_BUDGET, MIN_TOKEN_BUDGET), MAX_TOKEN_BUDGET);
-  const ranked = deps.graph.pageRank({ focus: args.focus });
+  const ranked = scope.graph.pageRank({ focus: args.focus });
 
   // Group by file, ordered by the SUM of each file's symbol ranks (descending).
   const byFile = new Map<string, RankedSymbol[]>();
@@ -81,6 +83,7 @@ export async function handleRepoMap(
     files: includedFiles,
     symbols: includedSymbols,
     truncated,
+    project: scope.project,
   });
 }
 
@@ -105,14 +108,14 @@ export function register(server: McpServer, deps: ToolDeps): void {
           .array(z.string())
           .optional()
           .describe("Optional symbol names to focus the PageRank on (personalized ranking) — highlights symbols reachable from these"),
+        project: PROJECT_ARG,
       },
       outputSchema: {
         map: z.string(),
         files: z.number(),
         symbols: z.number(),
         truncated: z.boolean(),
-        error: z.string().optional(),
-        code: z.string().optional(),
+        ...SCOPE_OUTPUT,
       },
       annotations: toolAnnotations("repo_map"),
     },

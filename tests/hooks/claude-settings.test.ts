@@ -105,7 +105,7 @@ describe("init hook installation (file IO)", () => {
 
   it("writes .claude/settings.json with UserPromptSubmit hook on fresh init", async () => {
     const { runInit } = await import("../../src/commands/init.js");
-    await runInit({ root: tempDir, skipGitHook: true, skipIndex: true, skipRules: true });
+    await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true, skipRules: true });
 
     const raw = await readFile(join(tempDir, ".claude", "settings.json"), "utf-8");
     const settings = JSON.parse(raw) as Record<string, unknown>;
@@ -119,7 +119,7 @@ describe("init hook installation (file IO)", () => {
     await writeFile(join(claudeDir, "settings.json"), JSON.stringify(existing, null, 2));
 
     const { runInit } = await import("../../src/commands/init.js");
-    await runInit({ root: tempDir, skipGitHook: true, skipIndex: true, skipRules: true });
+    await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true, skipRules: true });
 
     const raw = await readFile(join(claudeDir, "settings.json"), "utf-8");
     const settings = JSON.parse(raw) as Record<string, unknown>;
@@ -130,8 +130,8 @@ describe("init hook installation (file IO)", () => {
 
   it("is idempotent: running init twice does not duplicate the hook", async () => {
     const { runInit } = await import("../../src/commands/init.js");
-    await runInit({ root: tempDir, skipGitHook: true, skipIndex: true, skipRules: true });
-    await runInit({ root: tempDir, skipGitHook: true, skipIndex: true, skipRules: true });
+    await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true, skipRules: true });
+    await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true, skipRules: true });
 
     const raw = await readFile(join(tempDir, ".claude", "settings.json"), "utf-8");
     const settings = JSON.parse(raw) as Record<string, unknown>;
@@ -143,6 +143,7 @@ describe("init hook installation (file IO)", () => {
     const { runInit } = await import("../../src/commands/init.js");
     await runInit({
       root: tempDir,
+      dataDir: join(tempDir, ".project-brain"),
       skipGitHook: true,
       skipIndex: true,
       skipRules: true,

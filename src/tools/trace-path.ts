@@ -1,20 +1,22 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps, GraphDeps } from "../types.js";
-import { jsonResult, graphUnavailable, type ToolResult } from "./format.js";
+import { jsonResult, type ToolResult } from "./format.js";
 import { toolAnnotations } from "../constants.js";
+import { PROJECT_ARG, SCOPE_OUTPUT, resolveGraphScope } from "./graph-scope.js";
 
 const DEFAULT_MAX_DEPTH = 8;
 
 /** Handle trace_path logic (exported for testing). */
 export async function handleTracePath(
-  args: { from: string; to: string; maxDepth?: number },
+  args: { from: string; to: string; maxDepth?: number; project?: string },
   deps: GraphDeps
 ): Promise<ToolResult> {
-  if (!deps.graph) return graphUnavailable();
+  const scope = await resolveGraphScope(deps, args.project);
+  if (!scope.ok) return scope.result;
 
-  const path = deps.graph.tracePath(args.from, args.to, args.maxDepth ?? DEFAULT_MAX_DEPTH);
-  return jsonResult({ path, from: args.from, to: args.to });
+  const path = scope.graph.tracePath(args.from, args.to, args.maxDepth ?? DEFAULT_MAX_DEPTH);
+  return jsonResult({ path, from: args.from, to: args.to, project: scope.project });
 }
 
 /** Register trace_path tool with MCP server. */
@@ -37,6 +39,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
           .max(20)
           .optional()
           .describe("Maximum traversal depth (default 8, max 20)"),
+        project: PROJECT_ARG,
       },
       outputSchema: {
         path: z.array(z.object({
@@ -49,6 +52,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
         })),
         from: z.string(),
         to: z.string(),
+        ...SCOPE_OUTPUT,
         error: z.string().optional(),
         code: z.string().optional(),
       },

@@ -28,6 +28,8 @@ export interface InitOptions {
   skipClaudeHook?: boolean;
   /** DI seam: inject fake store and embeddings for tests. */
   indexDeps?: { store: VectorStore; embeddings: EmbeddingClient };
+  /** Global data dir holding the project id → root registry. Defaults to DATA_DIR. */
+  dataDir?: string;
   /** Progress callback forwarded to runReindex. */
   onProgress?: (p: SyncProgress) => void;
 }
@@ -87,6 +89,16 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
   };
 
   await writeFile(configPath, JSON.stringify(config, null, 2));
+
+  // 5b. Record projectId → root globally. This is the only place both are
+  // known together, and it is what lets the structural tools (whose graph is a
+  // project-LOCAL file) resolve a project by id from any other root.
+  // registerProject swallows its own failures — init must not depend on it.
+  {
+    const { DATA_DIR } = await import("../constants.js");
+    const { registerProject } = await import("../store/project-registry.js");
+    await registerProject(options.dataDir ?? DATA_DIR, projectId, root);
+  }
 
   // 6. Detect modules
   const modules = await detectModules(root);

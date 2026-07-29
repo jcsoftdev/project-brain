@@ -120,7 +120,20 @@ import type { GraphStore } from "./graph/store.js";
  * satisfies this structurally, so callers (server.ts) need zero changes.
  */
 export interface GraphDeps {
+  /** The served project's own structural graph. */
   graph?: GraphStore;
+  /**
+   * Project id `graph` belongs to. Echoed back by every structural tool so a
+   * caller can tell which repository answered — the graph is project-local, so
+   * without this a mismatched `project` argument elsewhere goes unnoticed.
+   */
+  projectId?: string;
+  /**
+   * Resolve another project's graph by id, via the project id → root registry.
+   * Returns null when the project is unregistered or has no graph.db yet.
+   * Absent in injected test deps — then only the served project is reachable.
+   */
+  graphFor?: (project: string) => Promise<GraphStore | null>;
 }
 
 /**
@@ -133,7 +146,7 @@ export interface SearchCodeDeps {
 }
 
 /** Dependencies injected into MCP tool handlers. */
-export interface ToolDeps {
+export interface ToolDeps extends GraphDeps {
   store: VectorStore;
   embeddings: EmbeddingClient;
   /**
@@ -142,8 +155,6 @@ export interface ToolDeps {
    * When absent, handlers fall back to `embeddings` (backward-compatible).
    */
   embeddingsFor?: (project: string) => Promise<EmbeddingClient>;
-  /** Structural graph store for exact symbol lookups (find_symbol and related tools). */
-  graph?: GraphStore;
   /**
    * Capability-gated destructive-action confirmation. Wired by server.ts to
    * MCP elicitation when the client declares the capability; absent otherwise

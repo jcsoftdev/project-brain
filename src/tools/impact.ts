@@ -1,29 +1,34 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { ToolDeps, GraphDeps } from "../types.js";
-import { formatHits, graphUnavailable, type ToolResult } from "./format.js";
+import { formatHits, type ToolResult } from "./format.js";
 import { toolAnnotations } from "../constants.js";
+import { PROJECT_ARG, SCOPE_OUTPUT, resolveGraphScope } from "./graph-scope.js";
 
 const DEFAULT_MAX_DEPTH = 6;
 
 /** Handle impact logic (exported for testing). */
 export async function handleImpact(
-  args: { name: string; maxDepth?: number },
+  args: { name: string; maxDepth?: number; project?: string },
   deps: GraphDeps
 ): Promise<ToolResult> {
-  if (!deps.graph) return graphUnavailable();
+  const scope = await resolveGraphScope(deps, args.project);
+  if (!scope.ok) return scope.result;
 
   const maxDepth = args.maxDepth ?? DEFAULT_MAX_DEPTH;
-  const hits = deps.graph.impact(args.name, maxDepth);
+  const hits = scope.graph.impact(args.name, maxDepth);
 
   if (hits.length === 0) {
     return {
-      content: [{ type: "text", text: `No transitive callers of "${args.name}" found in the index.` }],
-      structuredContent: { hits: [] },
+      content: [{ type: "text", text: `No transitive callers of "${args.name}" found in the ${scope.project} index.` }],
+      structuredContent: { hits: [], project: scope.project },
     };
   }
 
-  return { content: [{ type: "text", text: formatHits(hits) }], structuredContent: { hits } };
+  return {
+    content: [{ type: "text", text: formatHits(hits) }],
+    structuredContent: { hits, project: scope.project },
+  };
 }
 
 /** Register impact tool with MCP server. */
@@ -46,6 +51,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
           .max(20)
           .optional()
           .describe("Maximum traversal depth (default 6, max 20)"),
+        project: PROJECT_ARG,
       },
       outputSchema: {
         hits: z.array(z.object({
@@ -56,6 +62,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
           start_line: z.number(),
           end_line: z.number(),
         })),
+        ...SCOPE_OUTPUT,
       },
       annotations: toolAnnotations("impact"),
     },

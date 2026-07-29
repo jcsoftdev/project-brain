@@ -2,7 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { LanceDbStore } from "./store/lancedb.js";
 import { createEmbeddingClient } from "./embeddings/factory.js";
 import { makeEmbeddingResolver } from "./embeddings/resolver.js";
-import { DB_PATH, OLLAMA_HOST, VERSION, SERVER_INSTRUCTIONS, GRAPH_DB_FILE } from "./constants.js";
+import { DB_PATH, DATA_DIR, OLLAMA_HOST, VERSION, SERVER_INSTRUCTIONS, GRAPH_DB_FILE } from "./constants.js";
+import { resolveProjectId, openProjectGraph } from "./commands/resolve-project.js";
+import { lookupProjectRoot } from "./store/project-registry.js";
 import { register as registerSearch } from "./tools/search.js";
 import { register as registerSearchCode } from "./tools/search-code.js";
 import { register as registerIngest } from "./tools/ingest.js";
@@ -37,6 +39,11 @@ interface ServerOptions {
    * so the served structural tools read the SAME db that runSync writes.
    */
   projectRoot?: string;
+  /**
+   * Global data dir holding the project id → root registry, used to resolve
+   * OTHER projects' structural graphs. Defaults to DATA_DIR.
+   */
+  dataDir?: string;
 }
 
 /** Create and configure the MCP server with all tools registered. */
@@ -72,6 +79,25 @@ export async function createServer(options: ServerOptions = {}) {
   // `reindex`/`init` that replaces the file underneath it.
   const graph = new GraphStore(openGraphDb(graphPath), graphPath);
 
+  // Structural tools may target ANOTHER project by id. The graph is a
+  // project-local file, so resolving one means going through the registry that
+  // `init` writes: id → root → that root's graph.db. Opened lazily and cached
+  // for the process lifetime; a project with no graph.db yet resolves to null,
+  // which the tools surface as PROJECT_NOT_FOUND rather than an empty answer.
+  const ownProjectId = await resolveProjectId(projectRoot);
+  const registryDir = options.dataDir ?? DATA_DIR;
+  const foreignGraphs = new Map<string, GraphStore>();
+  const graphFor = async (project: string): Promise<GraphStore | null> => {
+    if (project === ownProjectId) return graph;
+    const cached = foreignGraphs.get(project);
+    if (cached) return cached;
+    const root = await lookupProjectRoot(registryDir, project);
+    if (!root) return null;
+    const opened = openProjectGraph(root);
+    if (opened) foreignGraphs.set(project, opened);
+    return opened;
+  };
+
   // Capability-gated destructive confirmation via MCP elicitation (2026 spec).
   // getClientCapabilities() is only populated after initialization, so the
   // gate is evaluated per-call, not at startup.
@@ -89,7 +115,10 @@ export async function createServer(options: ServerOptions = {}) {
     return res.action === "accept" && res.content?.confirm === true;
   };
 
-  const deps: ToolDeps = { store, embeddings, embeddingsFor, graph, confirmDestructive, projectRoot, dbPath };
+  const deps: ToolDeps = {
+    store, embeddings, embeddingsFor, graph, confirmDestructive, projectRoot, dbPath,
+    projectId: ownProjectId, graphFor,
+  };
 
   // Register all tools
   registerSearch(server, deps);

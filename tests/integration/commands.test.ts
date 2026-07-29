@@ -73,7 +73,7 @@ describe("Integration: command lifecycle", () => {
       const { runInit } = await import("../../src/commands/init.js");
       const store = makeMemoryStore();
 
-      const initResult = await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
+      const initResult = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
       expect(initResult.projectId).toBeTruthy();
 
       // Config must exist and be valid JSON
@@ -91,7 +91,7 @@ describe("Integration: command lifecycle", () => {
       const { runHealth } = await import("../../src/commands/health.js");
       const store = makeMemoryStore();
 
-      const initResult = await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
+      const initResult = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
 
       // Create a file to index
       await writeFile(join(tempDir, "README.md"), "# My Project\n\nThis is the README.");
@@ -120,7 +120,7 @@ describe("Integration: command lifecycle", () => {
       const { runHealth } = await import("../../src/commands/health.js");
       const store = makeMemoryStore();
 
-      const initResult = await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
+      const initResult = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
 
       const health = await runHealth({
         projectId: initResult.projectId,
@@ -141,7 +141,7 @@ describe("Integration: command lifecycle", () => {
       const { runSync } = await import("../../src/commands/sync.js");
       const store = makeMemoryStore();
 
-      const initResult = await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
+      const initResult = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
 
       // First sync — no files
       const r1 = await runSync({
@@ -170,7 +170,7 @@ describe("Integration: command lifecycle", () => {
       const { runSync } = await import("../../src/commands/sync.js");
       const store = makeMemoryStore();
 
-      const initResult = await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
+      const initResult = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
       await writeFile(join(tempDir, "doc.md"), "Version 1 content.");
 
       // First sync
@@ -201,7 +201,7 @@ describe("Integration: command lifecycle", () => {
       const { runSync } = await import("../../src/commands/sync.js");
       const store = makeMemoryStore();
 
-      const initResult = await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
+      const initResult = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
       await writeFile(join(tempDir, "to-delete.md"), "Temporary file.");
 
       // Sync to index the file
@@ -239,7 +239,7 @@ describe("Integration: command lifecycle", () => {
       const { runReindex } = await import("../../src/commands/reindex.js");
       const store = makeMemoryStore();
 
-      const initResult = await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
+      const initResult = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
       await writeFile(join(tempDir, "content.md"), "# Content\n\nFull content here.");
 
       // Sync first to populate hashes
@@ -272,7 +272,7 @@ describe("Integration: command lifecycle", () => {
       const storeAfterSync = makeMemoryStore();
       const storeAfterReindex = makeMemoryStore();
 
-      const initResult = await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
+      const initResult = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true, skipClaudeHook: true });
       await writeFile(join(tempDir, "a.md"), "# Section A\n\nContent for A.");
 
       // Sync path

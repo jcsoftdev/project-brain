@@ -25,7 +25,7 @@ describe("init command", () => {
     it("creates .project-brain/ directory in the target root", async () => {
       const { runInit } = await import("../../src/commands/init.js");
 
-      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
+      await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true });
 
       const dotDir = join(tempDir, ".project-brain");
       const proc = Bun.spawn(["test", "-d", dotDir], {
@@ -38,7 +38,7 @@ describe("init command", () => {
     it("writes project.json with projectId field", async () => {
       const { runInit } = await import("../../src/commands/init.js");
 
-      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
+      await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true });
 
       const configPath = join(tempDir, ".project-brain", "project.json");
       const raw = await readFile(configPath, "utf-8");
@@ -50,7 +50,7 @@ describe("init command", () => {
     it("writes project.json with root field matching the initialized root", async () => {
       const { runInit } = await import("../../src/commands/init.js");
 
-      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
+      await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true });
 
       const configPath = join(tempDir, ".project-brain", "project.json");
       const raw = await readFile(configPath, "utf-8");
@@ -68,7 +68,7 @@ describe("init command", () => {
       );
 
       const { runInit } = await import("../../src/commands/init.js");
-      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
+      await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true });
 
       const configPath = join(tempDir, ".project-brain", "project.json");
       const raw = await readFile(configPath, "utf-8");
@@ -79,7 +79,7 @@ describe("init command", () => {
 
     it("stores empty stack gracefully when no manifest is found", async () => {
       const { runInit } = await import("../../src/commands/init.js");
-      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
+      await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true });
 
       const configPath = join(tempDir, ".project-brain", "project.json");
       const raw = await readFile(configPath, "utf-8");
@@ -93,22 +93,22 @@ describe("init command", () => {
     it("does not error when .project-brain already exists", async () => {
       const { runInit } = await import("../../src/commands/init.js");
 
-      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
+      await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true });
       // Second run should not throw
-      await expect(runInit({ root: tempDir, skipGitHook: true, skipIndex: true })).resolves.toBeDefined();
+      await expect(runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true })).resolves.toBeDefined();
     });
 
     it("preserves existing projectId across re-runs", async () => {
       const { runInit } = await import("../../src/commands/init.js");
 
-      const r1 = await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
+      const r1 = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true });
 
       const configPath = join(tempDir, ".project-brain", "project.json");
       const raw1 = await readFile(configPath, "utf-8");
       const config1 = JSON.parse(raw1);
 
       // Second run
-      await runInit({ root: tempDir, skipGitHook: true, skipIndex: true });
+      await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true });
 
       const raw2 = await readFile(configPath, "utf-8");
       const config2 = JSON.parse(raw2);
@@ -180,6 +180,10 @@ function makeThrowingEmbeddings(): EmbeddingClient {
 /**
  * T-07: CLI output for init with indexing results
  */
+// NOTE: these exercise the CLI entry point, which resolves the project
+// registry from the real DATA_DIR — there is no --data-dir flag. Each run
+// leaves one entry pointing at a temp dir that afterEach deletes;
+// registerProject prunes dead roots on its next write, so it self-cleans.
 describe("init execute CLI output (T-07)", () => {
   let tempDir: string;
 
@@ -253,6 +257,7 @@ describe("init command — indexing (T-06)", () => {
 
     const result = await runInit({
       root: tempDir,
+      dataDir: join(tempDir, ".project-brain"),
       skipGitHook: true,
       skipRules: true,
       indexDeps: { store: fakeStore, embeddings: fakeEmbeddings },
@@ -275,6 +280,7 @@ describe("init command — indexing (T-06)", () => {
 
     const result = await runInit({
       root: tempDir,
+      dataDir: join(tempDir, ".project-brain"),
       skipGitHook: true,
       skipRules: true,
       indexDeps: { store: fakeStore, embeddings: throwingEmbeddings },
@@ -301,6 +307,7 @@ describe("init command — indexing (T-06)", () => {
 
     const result = await runInit({
       root: tempDir,
+      dataDir: join(tempDir, ".project-brain"),
       skipGitHook: true,
       skipRules: true,
       skipIndex: true,
@@ -319,8 +326,8 @@ describe("init command — indexing (T-06)", () => {
   it("Scenario 1.4: re-init preserves existing projectId when skipIndex: true", async () => {
     const { runInit } = await import("../../src/commands/init.js");
 
-    const r1 = await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true });
-    const r2 = await runInit({ root: tempDir, skipGitHook: true, skipRules: true, skipIndex: true });
+    const r1 = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true });
+    const r2 = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true });
 
     expect(r2.projectId).toBe(r1.projectId);
     expect(r2.indexed).toBe(false);

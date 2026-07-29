@@ -254,5 +254,7 @@ ${TOOL_ROUTING.map((r) => `- ${r.when} → ${r.tool}`).join("\n")}
 
 WORKFLOW (token-efficient): call search_context first → it returns ranked snippets, each with a chunk_id. Read the snippets; for only the ones you actually need, call expand_context(chunk_id) for the full body — do NOT re-read whole files.
 
+PROJECT SCOPE: every tool takes an optional \`project\`. Omit it to query the project this server was started in. The structural tools (find_symbol, find_callers, find_callees, impact, trace_path, repo_map) echo the \`project\` they answered for in their result — check it when you passed an explicit \`project\` elsewhere, so you never mix answers from two repositories. A \`project\` that is unregistered or not yet indexed returns code PROJECT_NOT_FOUND.
+
 Tools by intent:
 ${renderToolList()}`;
