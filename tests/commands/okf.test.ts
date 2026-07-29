@@ -83,6 +83,32 @@ describe("okf command", () => {
   });
 
   describe("runOkfSync", () => {
+    it("keys concepts by their repo-relative path, matching what a plain sync writes", async () => {
+      const { runOkfSync } = await import("../../src/commands/okf.js");
+      const captured: Chunk[] = [];
+      const store = {
+        ...fakeStore(),
+        batchReplace: async (_p: string, _s: string[], chunks: Chunk[]) => {
+          captured.push(...chunks);
+        },
+      } as unknown as VectorStore;
+      await write("okf/decisions/a.md", concept("Decision", "A"));
+
+      // The command layer must forward the repo root. Without it the ids come
+      // out bundle-relative ("decisions/a.md") while runSync writes
+      // "okf/decisions/a.md" for the same file, and the two pipelines delete
+      // each other's chunks on every run.
+      await runOkfSync(join(root, "okf"), {
+        project: "p",
+        store,
+        embeddings: fakeEmbeddings,
+        repoRoot: root,
+      });
+
+      expect(captured.length).toBeGreaterThan(0);
+      expect(captured.every((c) => c.source === "okf/decisions/a.md")).toBe(true);
+    });
+
     it("summarizes what it indexed", async () => {
       const { runOkfSync } = await import("../../src/commands/okf.js");
       await write("decisions/a.md", concept("Decision", "A"));
@@ -92,6 +118,7 @@ describe("okf command", () => {
         project: "p",
         store: fakeStore(),
         embeddings: fakeEmbeddings,
+        repoRoot: root,
       });
 
       expect(output).toContain("2 concepts");
@@ -106,6 +133,7 @@ describe("okf command", () => {
         project: "p",
         store: fakeStore(),
         embeddings: fakeEmbeddings,
+        repoRoot: root,
       });
 
       expect(output).toContain("1 concept");

@@ -58,7 +58,16 @@ export async function runOkfValidate(dir: string): Promise<{ output: string; ok:
  * indexed, so saying so is the difference between the author fixing the
  * frontmatter and quietly wondering why their note never surfaces in a search.
  */
-export async function runOkfSync(dir: string, deps: SyncBundleDeps): Promise<string> {
+/**
+ * `repoRoot` is REQUIRED here, unlike in syncBundle where it is optional for the
+ * bundle-is-the-repo case. Omitting it from a command run inside a repository
+ * produces bundle-relative ids while runSync writes repo-relative ones for the
+ * very same files, so the two pipelines delete each other's chunks on every run.
+ * Making it required turns that into a compile error instead of a silent one.
+ */
+export type OkfSyncDeps = SyncBundleDeps & { repoRoot: string };
+
+export async function runOkfSync(dir: string, deps: OkfSyncDeps): Promise<string> {
   const result = await syncBundle(dir, deps);
 
   const lines = [
@@ -125,7 +134,7 @@ export async function execute(args: string[]): Promise<void> {
   );
 
   try {
-    console.log(await runOkfSync(dir, { project, store, embeddings }));
+    console.log(await runOkfSync(dir, { project, store, embeddings, repoRoot: root }));
   } catch (error) {
     console.error(error instanceof OkfBundleError ? error.message : String(error));
     process.exit(1);
