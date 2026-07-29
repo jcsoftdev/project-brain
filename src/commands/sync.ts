@@ -844,6 +844,21 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           deleted++;
         }
       }
+
+      // The sweep above is manifest-driven, so it can only see paths the
+      // manifest knows. Rows that exist ONLY in the graph — written by an older
+      // pass whose ignore rules let `node_modules/` through, then orphaned when
+      // the manifest was rebuilt without them — are invisible to it and survive
+      // every sync AND every reindex (which clears the manifest, not the graph).
+      // Left alone they dominate the call graph: PageRank then ranks vendored
+      // internals above every project symbol and repo_map becomes unusable.
+      // Reconcile against the graph's own contents on this authoritative walk.
+      for (const relPath of graph.listFiles()) {
+        if (!currentRels.has(relPath) && !priorPaths.has(relPath)) {
+          graph.deleteFile(relPath);
+          deleted++;
+        }
+      }
     }
 
     // Repair stale edge links after structural mutation. SQLite reuses rowids,

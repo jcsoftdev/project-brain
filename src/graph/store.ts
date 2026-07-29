@@ -1,4 +1,6 @@
 import { Database } from "bun:sqlite";
+import { statSync } from "node:fs";
+import { openGraphDb } from "./db.js";
 
 export interface EdgeInput { dst_name: string; edge_type: string; }
 export interface SymbolInput {
@@ -12,13 +14,32 @@ export interface RankedSymbol {
 }
 
 export class GraphStore {
-  private delStmt: ReturnType<Database["query"]>;
-  private insSymStmt: ReturnType<Database["query"]>;
-  private insEdgeStmt: ReturnType<Database["query"]>;
+  // Assigned via prepare(), called from the constructor and again on reopen —
+  // TS cannot see through the indirection, hence the definite-assignment marks.
+  private delStmt!: ReturnType<Database["query"]>;
+  private insSymStmt!: ReturnType<Database["query"]>;
+  private insEdgeStmt!: ReturnType<Database["query"]>;
   private hitSql = `s.name AS name, s.kind AS kind, s.signature AS signature,
                     f.path AS path, s.start_line AS start_line, s.end_line AS end_line`;
 
-  constructor(private db: Database) {
+  /** Inode of `path` as of the last open. null when there is no backing path. */
+  private currentIno: number | null = null;
+
+  /**
+   * @param db    an open connection — used as-is.
+   * @param path  the file `db` was opened from. Supply it for a long-lived
+   *              store (the MCP server) so reads can detect an out-of-band
+   *              rebuild; omit it for `:memory:` or caller-managed handles.
+   */
+  constructor(
+    private db: Database,
+    private readonly path?: string
+  ) {
+    this.prepare();
+    this.currentIno = this.statIno();
+  }
+
+  private prepare(): void {
     this.delStmt = this.db.query("DELETE FROM files WHERE path = $path");
     this.insSymStmt = this.db.query(
       "INSERT INTO symbols (file_id,name,kind,signature,start_line,end_line) VALUES ($f,$n,$k,$s,$a,$b) RETURNING id"
@@ -28,6 +49,44 @@ export class GraphStore {
     );
   }
 
+  private statIno(): number | null {
+    if (!this.path) return null;
+    try {
+      return statSync(this.path).ino;
+    } catch {
+      return null; // gone, or unreadable — ensureFresh treats this as "reopen"
+    }
+  }
+
+  /**
+   * Reopen when the backing file was replaced out from under us.
+   *
+   * A `reindex` or `init` from another process unlinks `.project-brain/graph.db`
+   * and writes a new one. A long-lived server holding the old descriptor keeps
+   * reading the unlinked inode and serves pre-rebuild data until it restarts —
+   * and once the WAL/shm siblings are gone, reads fail outright with
+   * "disk I/O error". Comparing the inode before each read costs one `stat` and
+   * makes the swap invisible to callers.
+   *
+   * A missing file is also treated as "reopen": openGraphDb recreates it empty
+   * with the schema, so reads degrade to no-results instead of throwing, and
+   * the next sync repopulates it.
+   */
+  private ensureFresh(): void {
+    if (!this.path) return;
+    const ino = this.statIno();
+    if (ino !== null && ino === this.currentIno) return;
+
+    try {
+      this.db.close();
+    } catch {
+      // Already-broken handle (unlinked WAL) — nothing to salvage, just replace it.
+    }
+    this.db = openGraphDb(this.path);
+    this.prepare();
+    this.currentIno = this.statIno();
+  }
+
   /** Close the underlying SQLite connection. Callers that own the connection use this on shutdown. */
   close(): void {
     this.db.close();
@@ -35,7 +94,23 @@ export class GraphStore {
 
   /** Total number of indexed symbols across all files. */
   countSymbols(): number {
+    this.ensureFresh();
     return (this.db.query("SELECT COUNT(*) AS n FROM symbols").get() as { n: number }).n;
+  }
+
+  /**
+   * Every file path the graph currently holds.
+   *
+   * The graph is written by the same walk that feeds the manifest, but nothing
+   * reconciles it against its OWN contents: the deletion sweep in runSync
+   * iterates manifest paths, so a row that exists only here (left over from an
+   * older indexing pass with different ignore rules) is never visited and
+   * survives forever — including a full `reindex`, which clears the manifest
+   * only. Callers use this to prune those orphans on an authoritative walk.
+   */
+  listFiles(): string[] {
+    this.ensureFresh();
+    return (this.db.query("SELECT path FROM files").all() as { path: string }[]).map((r) => r.path);
   }
 
   deleteFile(path: string): void {
@@ -133,12 +208,14 @@ export class GraphStore {
   }
 
   findSymbol(name: string) {
+    this.ensureFresh();
     return this.db.query(
       `SELECT ${this.hitSql} FROM symbols s JOIN files f ON s.file_id=f.id WHERE s.name = $n`
     ).all({ $n: name }) as SymbolHit[];
   }
 
   findCallers(name: string) {
+    this.ensureFresh();
     return this.db.query(
       `SELECT DISTINCT ${this.hitSql} FROM edges e
        JOIN symbols s ON e.src_symbol_id = s.id JOIN files f ON s.file_id=f.id
@@ -147,6 +224,7 @@ export class GraphStore {
   }
 
   findCallees(name: string) {
+    this.ensureFresh();
     return this.db.query(
       `SELECT DISTINCT ${this.hitSql} FROM edges e
        JOIN symbols src ON e.src_symbol_id = src.id
@@ -156,6 +234,7 @@ export class GraphStore {
   }
 
   impact(name: string, maxDepth = 6) {
+    this.ensureFresh();
     return this.db.query(
       `WITH RECURSIVE up(id, depth, path) AS (
          SELECT s.id, 0, '/' || s.id || '/' FROM symbols s WHERE s.name = $n
@@ -178,6 +257,7 @@ export class GraphStore {
    * every definition of `from` seeds the walk; the shortest path wins.
    */
   tracePath(from: string, to: string, maxDepth = 8): SymbolHit[] {
+    this.ensureFresh();
     if (from === to) {
       const self = this.findSymbol(from);
       return self.length ? [self[0]] : [];
@@ -230,6 +310,7 @@ export class GraphStore {
    * - Empty graph → [].
    */
   pageRank(opts?: { damping?: number; iterations?: number; focus?: string[] }): RankedSymbol[] {
+    this.ensureFresh();
     const damping = opts?.damping ?? 0.85;
     const maxIterations = opts?.iterations ?? 20;
 

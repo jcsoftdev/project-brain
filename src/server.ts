@@ -68,7 +68,9 @@ export async function createServer(options: ServerOptions = {}) {
   const graphDir = join(projectRoot, ".project-brain");
   mkdirSync(graphDir, { recursive: true });
   const graphPath = join(graphDir, GRAPH_DB_FILE);
-  const graph = new GraphStore(openGraphDb(graphPath));
+  // Pass the path so reads revalidate: this handle outlives any CLI
+  // `reindex`/`init` that replaces the file underneath it.
+  const graph = new GraphStore(openGraphDb(graphPath), graphPath);
 
   // Capability-gated destructive confirmation via MCP elicitation (2026 spec).
   // getClientCapabilities() is only populated after initialization, so the
