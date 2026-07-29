@@ -1,13 +1,14 @@
-function markers(sectionId: string): { start: string; end: string } {
-  return {
-    start: `<!-- ${sectionId}:start -->`,
-    end: `<!-- ${sectionId}:end -->`,
-  };
-}
+import {
+  DEFAULT_SECTION_ID,
+  hasSectionMarkers,
+  replaceSection,
+  stripSection,
+} from "../markers.js";
 
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+/**
+ * Filesystem side of the managed-block convention. The string operations live
+ * in src/markers.ts so the OKF exporter shares exactly one marker format.
+ */
 
 /**
  * Write content between section markers in a file.
@@ -17,32 +18,16 @@ function escapeRegex(str: string): string {
 export async function writeSection(
   filePath: string,
   content: string,
-  sectionId = "project-brain"
+  sectionId = DEFAULT_SECTION_ID
 ): Promise<void> {
-  const { start: START_MARKER, end: END_MARKER } = markers(sectionId);
-  const section = `${START_MARKER}\n${content}\n${END_MARKER}`;
   let existing = "";
-
   try {
     existing = await Bun.file(filePath).text();
   } catch {
     // File doesn't exist yet
   }
 
-  if (existing.includes(START_MARKER)) {
-    // Replace existing section
-    const regex = new RegExp(
-      `${escapeRegex(START_MARKER)}[\\s\\S]*?${escapeRegex(END_MARKER)}`
-    );
-    await Bun.write(filePath, existing.replace(regex, section));
-  } else if (existing.length === 0) {
-    // New file
-    await Bun.write(filePath, section + "\n");
-  } else {
-    // Append with spacing
-    const separator = existing.endsWith("\n") ? "\n" : "\n\n";
-    await Bun.write(filePath, existing + separator + section + "\n");
-  }
+  await Bun.write(filePath, `${replaceSection(existing, content, sectionId)}\n`);
 }
 
 /**
@@ -51,9 +36,8 @@ export async function writeSection(
  */
 export async function removeSection(
   filePath: string,
-  sectionId = "project-brain"
+  sectionId = DEFAULT_SECTION_ID
 ): Promise<boolean> {
-  const { start: START_MARKER, end: END_MARKER } = markers(sectionId);
   let existing = "";
   try {
     existing = await Bun.file(filePath).text();
@@ -61,26 +45,19 @@ export async function removeSection(
     return false;
   }
 
-  if (!existing.includes(START_MARKER)) {
-    return false;
-  }
+  if (!hasSectionMarkers(existing, sectionId)) return false;
 
-  const regex = new RegExp(
-    `\\n*${escapeRegex(START_MARKER)}[\\s\\S]*?${escapeRegex(END_MARKER)}\\n*`
-  );
-  await Bun.write(filePath, existing.replace(regex, "\n"));
+  await Bun.write(filePath, `${stripSection(existing, sectionId)}\n`);
   return true;
 }
 
 /** Returns true if the section identified by sectionId is present in the file. */
 export async function hasSection(
   filePath: string,
-  sectionId = "project-brain"
+  sectionId = DEFAULT_SECTION_ID
 ): Promise<boolean> {
-  const { start: START_MARKER } = markers(sectionId);
   try {
-    const existing = await Bun.file(filePath).text();
-    return existing.includes(START_MARKER);
+    return hasSectionMarkers(await Bun.file(filePath).text(), sectionId);
   } catch {
     return false;
   }
