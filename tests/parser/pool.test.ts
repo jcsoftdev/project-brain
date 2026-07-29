@@ -212,22 +212,45 @@ test("ParserPool.worker.onerror settles the in-flight job AND drains queued jobs
 });
 
 /**
- * Supplementary test — NOT a substitute for the test above. This only
- * proves the underlying Bun mechanism pool.ts depends on (a Worker
- * constructed against a script that fails to load fires `onerror`), by
- * constructing a raw `Worker` directly and bypassing `ParserPool` entirely.
- * It says nothing about ParserPool's own bookkeeping.
+ * Supplementary test — NOT a substitute for the test above. This only pins the
+ * underlying Bun mechanism `spawnSlot` depends on, by constructing a raw
+ * `Worker` directly and bypassing `ParserPool` entirely. It says nothing about
+ * ParserPool's own bookkeeping.
+ *
+ * The mechanism is deliberately asserted as "fails observably, either way".
+ * Bun has surfaced an unresolvable worker entry BOTH ways across versions: as
+ * an async `error` event (which `worker.onerror` handles) and as a synchronous
+ * throw out of the constructor (Bun 1.2.2, which `spawnSlot`'s try/catch
+ * handles). Pinning only one of them is what let a real fallback regression
+ * hide here: the pool stopped falling back at all, because the constructor
+ * threw straight through it. Both paths must stay covered, so this test fails
+ * only if a dead candidate becomes *silently* fine — the one outcome that
+ * would leave the pool waiting on a worker that will never load.
  */
-test("(supplementary, underlying-mechanism only) a genuinely unloadable Worker script fires onerror", async () => {
-  const worker = new Worker(new URL("./does-not-exist-9f3c2a.js", import.meta.url).href);
+test("(supplementary, underlying-mechanism only) a genuinely unloadable Worker script fails observably", async () => {
+  const url = new URL("./does-not-exist-9f3c2a.js", import.meta.url).href;
+
+  let worker: Worker | undefined;
+  let threwSynchronously = false;
+  try {
+    worker = new Worker(url);
+  } catch {
+    threwSynchronously = true;
+  }
+
+  if (threwSynchronously) {
+    expect(worker).toBeUndefined();
+    return;
+  }
+
   try {
     const errored = await new Promise<boolean>((resolve) => {
-      worker.onerror = () => resolve(true);
+      worker!.onerror = () => resolve(true);
       setTimeout(() => resolve(false), 2000);
     });
     expect(errored).toBe(true);
   } finally {
-    worker.terminate();
+    worker!.terminate();
   }
 });
 

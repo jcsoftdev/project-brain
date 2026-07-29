@@ -352,7 +352,28 @@ export class ParserPool {
     }
 
     const url = candidates[candidateIndex];
-    const worker = new Worker(url);
+
+    // A candidate that cannot be resolved fails in one of two ways depending on
+    // the runtime: some Bun versions surface it asynchronously as an `error`
+    // event (handled in `worker.onerror` below), others reject inside the
+    // constructor itself. An uncaught throw here would escape the ParserPool
+    // constructor and abort indexing outright — exactly the dead-first-candidate
+    // scenario the fallback exists to survive — so treat it as this candidate
+    // being dead and move to the next one.
+    let worker: Worker;
+    try {
+      worker = new Worker(url);
+    } catch (error) {
+      this.attemptLog.push({
+        url,
+        outcome: "errored",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      if (!this.disposed) this.spawnSlot(candidates, candidateIndex + 1);
+      else this.drainQueue();
+      return;
+    }
+
     let confirmed = false;
 
     const timer = setTimeout(() => {
