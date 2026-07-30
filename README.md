@@ -7,16 +7,24 @@ project-brain indexes your project files into a local LanceDB vector store using
 ## Quick Start
 
 ```bash
-# 1. Install globally
-bun install -g project-brain
+# 1. Install globally — pick one
+curl -fsSL https://raw.githubusercontent.com/jcsoftdev/project-brain/main/scripts/install.sh | sh
+bun install -g project-brain          # or npm / pnpm / yarn
+brew install jcsoftdev/tap/project-brain
 
 # 2. One-time: register in your AI tools (Claude, Codex, Cursor, Gemini, Windsurf, Zed, VS Code)
+#    Also installs the brain-audit and brain-okf host skills. --no-skills to opt out.
 project-brain setup
 
 # 3. Per-project: initialize, index, and install git hook
 cd my-project
 project-brain init
+
+# 4. Optional, per-project: start a knowledge bundle for the *why*
+project-brain okf init
 ```
+
+The `curl` line needs no package manager at all — the binary ships self-contained. See [Install](#install) for every channel and the platforms each covers.
 
 After `init`, the following run **automatically** without any extra steps:
 
@@ -28,7 +36,7 @@ After `init`, the following run **automatically** without any extra steps:
 
 ## Prerequisites
 
-- **Nothing extra to run it.** The registry install ships a self-contained, prebuilt binary per platform (the runtime is bundled in) — you do **not** need Bun or Node installed to use project-brain.
+- **Nothing extra to run it.** Every channel ships the same self-contained, prebuilt binary per platform, with the runtime, WASM grammars and templates bundled in — you do **not** need Bun or Node installed to use project-brain. The `curl` installer does not even need one to *install* it.
 - **Bun** ≥ 1.3.14 — only needed to build/run **from source** ([install](https://bun.sh)).
 - **Ollama** (optional, only for semantic search) — download from [ollama.com](https://ollama.com). `project-brain init` **auto-pulls** the default embedding model `qwen3-embedding:0.6b` (1024-dim, fast, code-capable). To pre-pull it: `ollama pull qwen3-embedding:0.6b`. If it can't be pulled, project-brain falls back to `nomic-embed-text`. The structural tools work with **no** Ollama at all.
 

@@ -135,6 +135,40 @@ describe("README.md (T-10)", () => {
   });
 
   /**
+   * Every install channel that exists must be documented, and the no-package-
+   * manager one must appear in the Quick Start — not only buried in Install.
+   * The Prerequisites section states outright that Bun and Node are not needed
+   * to run project-brain; a Quick Start whose only step 1 is `bun install`
+   * contradicts that on the first screen anyone reads.
+   */
+  it("documents every install channel, including the one needing no package manager", async () => {
+    const content = await loadReadme();
+    expect(content).toContain("scripts/install.sh | sh");
+    expect(content).toContain("bun install -g project-brain");
+    expect(content).toContain("brew install jcsoftdev/tap/project-brain");
+    expect(content).toContain("scoop install project-brain");
+  });
+
+  it("offers the package-manager-free install in the Quick Start, not only in Install", async () => {
+    const content = await loadReadme();
+    const quickStart = content.slice(
+      content.indexOf("## Quick Start"),
+      content.indexOf("## Prerequisites")
+    );
+    expect(quickStart.length).toBeGreaterThan(0);
+    expect(quickStart).toContain("scripts/install.sh | sh");
+  });
+
+  it("documents the install-dir and version overrides the script actually reads", async () => {
+    const content = await loadReadme();
+    const script = await Bun.file(join(ROOT, "scripts/install.sh")).text();
+    for (const envVar of ["BRAIN_INSTALL_DIR", "BRAIN_VERSION"]) {
+      expect(script, `${envVar} missing from the script`).toContain(envVar);
+      expect(content, `${envVar} undocumented`).toContain(envVar);
+    }
+  });
+
+  /**
    * setup writes brain-audit into the user's global skills directory, so the
    * README has to say so and has to say how to decline. Without this assertion
    * the section can be deleted and nothing complains — exactly the "no
