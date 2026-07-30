@@ -14,13 +14,17 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, readFile, readdir, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import {
   BRAIN_AUDIT_FILES,
   GENERATOR_MARKER,
+  MANIFEST_STAMP,
   SKILL_MANIFESTS,
+  STAMP_FILE,
   getSkillTargetDirs,
   inspectOwnership,
   installSkill,
+  refreshStaleSkills,
 } from "../../src/rules/skills.js";
 
 describe("getSkillTargetDirs", () => {
@@ -343,5 +347,124 @@ describe("ownership guard (design §7 — Defect 3)", () => {
     expect(await readFile(join(dirB, "brain-audit", "SKILL.md"), "utf8")).toBe(
       BRAIN_AUDIT_FILES["SKILL.md"]
     );
+  });
+});
+
+/**
+ * Lazy upgrade path.
+ *
+ * The ownership marker was built so setup could overwrite its own skill
+ * directories — and then nothing ever invoked it. `update` only spawns the
+ * package manager; it never re-installs skills. So an upgraded binary shipped
+ * new skill content that never reached disk.
+ *
+ * The stamp is over the WHOLE manifest, not just SKILL.md. Work Unit 2 changed
+ * 31 reference files without touching SKILL.md's gate table — a SKILL.md-only
+ * comparison would have missed the entire release.
+ */
+describe("refreshStaleSkills", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "pb-refresh-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("writes a stamp alongside the skill on install", async () => {
+    await installSkill([root]);
+    for (const name of Object.keys(SKILL_MANIFESTS)) {
+      const stamp = await readFile(join(root, name, STAMP_FILE), "utf8");
+      expect(stamp.trim()).toBe(MANIFEST_STAMP);
+    }
+  });
+
+  it("reports up-to-date and writes nothing when the stamp matches", async () => {
+    await installSkill([root]);
+    const result = await refreshStaleSkills([root]);
+
+    expect(result.refreshed).toEqual([]);
+    expect(result.upToDate.sort()).toEqual(
+      Object.keys(SKILL_MANIFESTS).map((n) => join(root, n)).sort()
+    );
+  });
+
+  it("rewrites the skill when the stamp is stale", async () => {
+    await installSkill([root]);
+    const skillDir = join(root, "brain-audit");
+    await writeFile(join(skillDir, STAMP_FILE), "an-older-release\n");
+    // Content from that older release. It KEEPS the marker, because an older
+    // release of ours wrote it — that is what makes the directory refreshable.
+    await writeFile(
+      join(skillDir, "SKILL.md"),
+      `---\nname: brain-audit\nmetadata:\n  ${GENERATOR_MARKER}\n---\nolder content\n`
+    );
+
+    const result = await refreshStaleSkills([root]);
+
+    expect(result.refreshed).toContain(skillDir);
+    expect(await readFile(join(skillDir, "SKILL.md"), "utf8")).toBe(
+      BRAIN_AUDIT_FILES["SKILL.md"]
+    );
+    expect((await readFile(join(skillDir, STAMP_FILE), "utf8")).trim()).toBe(MANIFEST_STAMP);
+  });
+
+  /**
+   * Documents a real limitation rather than hiding it: refresh needs the marker
+   * in the INSTALLED copy. A copy whose SKILL.md lost the marker — hand-edited,
+   * or shipped by a build that omitted it — is permanently unreachable by the
+   * upgrade path, exactly as the marker's own comment warns. Failing closed is
+   * still right: without the marker we cannot prove the directory is ours.
+   */
+  it("cannot refresh a copy whose SKILL.md lost the marker — and says so", async () => {
+    await installSkill([root]);
+    const skillDir = join(root, "brain-audit");
+    await writeFile(join(skillDir, STAMP_FILE), "an-older-release\n");
+    await writeFile(join(skillDir, "SKILL.md"), "---\nname: brain-audit\n---\nno marker\n");
+
+    const result = await refreshStaleSkills([root]);
+
+    expect(result.refreshed).not.toContain(skillDir);
+    expect(result.skipped).toEqual([{ dir: skillDir, reason: "foreign" }]);
+  });
+
+  it("treats a missing stamp as stale — it predates stamping", async () => {
+    await installSkill([root]);
+    const skillDir = join(root, "brain-okf");
+    await rm(join(skillDir, STAMP_FILE));
+
+    const result = await refreshStaleSkills([root]);
+    expect(result.refreshed).toContain(skillDir);
+  });
+
+  /**
+   * The load-bearing property. A lazy check must never start installing into a
+   * root the user did not opt into — that is setup's job, with a prompt.
+   */
+  it("NEVER creates a skill directory that does not already exist", async () => {
+    const result = await refreshStaleSkills([root]);
+
+    expect(result.refreshed).toEqual([]);
+    expect(result.upToDate).toEqual([]);
+    for (const name of Object.keys(SKILL_MANIFESTS)) {
+      expect(existsSync(join(root, name)), `${name} must not be created`).toBe(false);
+    }
+  });
+
+  it("leaves a foreign skill directory alone even when it looks stale", async () => {
+    const skillDir = join(root, "brain-audit");
+    await mkdir(skillDir, { recursive: true });
+    const mine = "---\nname: brain-audit\n---\nhand-written\n";
+    await writeFile(join(skillDir, "SKILL.md"), mine);
+
+    const result = await refreshStaleSkills([root]);
+
+    expect(result.refreshed).toEqual([]);
+    expect(result.skipped).toEqual([{ dir: skillDir, reason: "foreign" }]);
+    expect(await readFile(join(skillDir, "SKILL.md"), "utf8")).toBe(mine);
+  });
+
+  it("does not throw on an unreadable root", async () => {
+    await expect(refreshStaleSkills([join(root, "nope")])).resolves.toBeDefined();
   });
 });

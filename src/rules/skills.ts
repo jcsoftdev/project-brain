@@ -171,6 +171,50 @@ export function getSkillTargetDirs(registeredTools: string[]): string[] {
   return [...dirs];
 }
 
+/**
+ * Filename of the per-skill content stamp, written inside each installed skill
+ * directory. Dot-prefixed so hosts scanning for `SKILL.md` skip it.
+ */
+export const STAMP_FILE = ".project-brain-stamp";
+
+/**
+ * Fingerprint of every byte this build ships, across every skill.
+ *
+ * Stamped over the WHOLE manifest rather than SKILL.md alone: Work Unit 2
+ * rewrote 31 reference files without touching brain-audit's gate table, so a
+ * SKILL.md-only comparison would have declared that release already installed.
+ *
+ * Computed once at import from strings already resident in the binary, so it
+ * costs nothing at runtime and needs no human to remember a version bump.
+ */
+export const MANIFEST_STAMP: string = (() => {
+  const parts: string[] = [];
+  for (const name of Object.keys(SKILL_MANIFESTS).sort()) {
+    for (const rel of Object.keys(SKILL_MANIFESTS[name]).sort()) {
+      parts.push(`${name}/${rel} ${SKILL_MANIFESTS[name][rel]}`);
+    }
+  }
+  return Bun.hash(parts.join("")).toString(16);
+})();
+
+/**
+ * Every skills root project-brain can install into, regardless of which tools
+ * are currently detected.
+ *
+ * Safe to hand to `refreshStaleSkills` unconditionally: it only touches
+ * directories that already exist, so listing a root no tool uses is a no-op.
+ * Detection is deliberately avoided here — a tool uninstalled after setup ran
+ * would otherwise leave its skills frozen at whatever version was current then.
+ */
+export function knownSkillRoots(): string[] {
+  const home = homedir();
+  return [
+    join(home, ".claude", "skills"),
+    join(home, ".codex", "skills"),
+    join(home, ".agents", "skills"),
+  ];
+}
+
 export type Ownership = "absent" | "ours" | "foreign" | "unreadable";
 
 export interface SkippedTarget {
@@ -229,9 +273,79 @@ export async function installSkill(targetDirs: string[]): Promise<InstallResult>
         await mkdir(dirname(dest), { recursive: true });
         await writeFile(dest, content, "utf8");
       }
+      await writeFile(join(skillDir, STAMP_FILE), `${MANIFEST_STAMP}\n`, "utf8");
       written.push(skillDir);
     }
   }
 
   return { written, skipped };
+}
+
+export interface RefreshResult {
+  /** Skill directories rewritten because their stamp was stale or missing. */
+  refreshed: string[];
+  /** Skill directories already carrying this build's stamp. */
+  upToDate: string[];
+  /** Existing directories left alone because ownership could not be proven. */
+  skipped: SkippedTarget[];
+}
+
+/**
+ * Bring already-installed skills up to this build's content.
+ *
+ * This closes a path that was built and never walked. The ownership marker
+ * exists so setup can overwrite its own directories, but `update` only spawns
+ * the package manager — nothing re-installed skills, so an upgraded binary
+ * shipped new skill content that never reached disk. Worse, it is not fixable by
+ * chaining `update` into `setup`: someone who upgrades with `brew upgrade`, or by
+ * dropping in a binary, never runs `update` at all. Comparing content on disk
+ * against content in the binary is the only check that works for every channel.
+ *
+ * **Never creates a directory.** Installing into a skills root is setup's job,
+ * with a prompt. This only refreshes what setup already put there, and only when
+ * it can still prove the directory is ours.
+ */
+export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshResult> {
+  const refreshed: string[] = [];
+  const upToDate: string[] = [];
+  const skipped: SkippedTarget[] = [];
+
+  for (const dir of targetDirs) {
+    for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
+      const skillDir = join(dir, name);
+      if (!existsSync(skillDir)) continue; // setup never installed here — not ours to create
+
+      const ownership = await inspectOwnership(skillDir);
+      if (ownership !== "ours") {
+        skipped.push({ dir: skillDir, reason: ownership });
+        continue;
+      }
+
+      let stamp = "";
+      try {
+        stamp = (await readFile(join(skillDir, STAMP_FILE), "utf8")).trim();
+      } catch {
+        // Missing stamp means this copy predates stamping — treat as stale.
+      }
+      if (stamp === MANIFEST_STAMP) {
+        upToDate.push(skillDir);
+        continue;
+      }
+
+      try {
+        for (const [rel, content] of Object.entries(manifest)) {
+          const dest = join(skillDir, rel);
+          await mkdir(dirname(dest), { recursive: true });
+          await writeFile(dest, content, "utf8");
+        }
+        await writeFile(join(skillDir, STAMP_FILE), `${MANIFEST_STAMP}\n`, "utf8");
+        refreshed.push(skillDir);
+      } catch {
+        // A read-only or vanished directory must not break the command that
+        // happened to trigger this check.
+      }
+    }
+  }
+
+  return { refreshed, upToDate, skipped };
 }

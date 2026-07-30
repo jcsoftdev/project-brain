@@ -12,6 +12,26 @@ if (command !== "__update-check" && command !== "__parse-selftest" && command !=
   } catch {
     /* fail-silent — never let the notifier break a command */
   }
+
+  // Bring already-installed skills up to this build's content.
+  //
+  // Deliberately NOT chained onto `update`: someone who upgrades with
+  // `brew upgrade`, or by dropping in a binary, never runs `update` at all.
+  // Comparing what is on disk against what is in this binary is the only check
+  // that works for every install channel. Only refreshes directories setup
+  // already created, and only while it can prove they are ours — it never
+  // installs. Opt out with BRAIN_NO_SKILL_REFRESH=1.
+  if (!process.env.BRAIN_NO_SKILL_REFRESH) {
+    try {
+      const { refreshStaleSkills, knownSkillRoots } = await import("./rules/skills.js");
+      const { refreshed } = await refreshStaleSkills(knownSkillRoots());
+      if (refreshed.length > 0) {
+        console.error(`  project-brain: refreshed ${refreshed.length} skill(s) to match this version`);
+      }
+    } catch {
+      /* fail-silent — a skills directory must never break a command */
+    }
+  }
 }
 
 function printHelp() {
