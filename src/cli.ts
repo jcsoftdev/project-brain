@@ -111,6 +111,7 @@ switch (command) {
       const { maybeStartWatcher, createShutdownHandler } = await import(
         "./serve.js"
       );
+      const { ORPHAN_CHECK_MS } = await import("./constants.js");
       const dbPath = process.env.BRAIN_DATA_DIR || undefined;
       const embedModel = process.env.BRAIN_EMBED_MODEL || undefined;
       const cwd = process.cwd();
@@ -124,6 +125,37 @@ switch (command) {
       const shutdown = createShutdownHandler(watcher, undefined, graph);
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
+
+      // A stdio server's lifetime is its client's, and signals alone do not
+      // enforce that. A host that crashes or is force-quit sends nothing, the
+      // watcher keeps the event loop alive, and the server runs forever.
+      // Measured before this existed: 19 live servers on one machine, 6 of them
+      // orphaned to init, the oldest up 3 days, each holding ~3 GB and serving
+      // nobody. Across several projects and tools that is the whole machine.
+      //
+      // Watching the PARENT rather than stdin, for two reasons found by testing:
+      // the SDK's stdio transport subscribes only to `data` and `error` and
+      // never observes EOF, and adding our own stdin listener broke the
+      // handshake outright — the server answered nothing, reproduced 3/3 against
+      // a real `initialize` while the unmodified build answered 3/3. The
+      // transport counts stdin listeners to decide whether to pause the stream,
+      // so it is not a stream to share.
+      //
+      // process.ppid is cached in Bun and never changes on adoption, so polling
+      // it is useless; asking whether the ORIGINAL parent still exists is the
+      // check that works. Signal 0 performs the permission and existence test
+      // without delivering anything.
+      const parentPid = process.ppid;
+      const orphanCheck = setInterval(() => {
+        try {
+          process.kill(parentPid, 0);
+        } catch {
+          shutdown();
+        }
+      }, ORPHAN_CHECK_MS);
+      // Never hold the loop open on this timer's account — it exists to end the
+      // process, not to keep it running.
+      orphanCheck.unref?.();
 
       const transport = new StdioServerTransport();
       await server.connect(transport);

@@ -258,3 +258,12 @@ PROJECT SCOPE: every tool takes an optional \`project\`. Omit it to query the pr
 
 Tools by intent:
 ${renderToolList()}`;
+
+/**
+ * How often a stdio server checks that its client is still alive.
+ *
+ * 30s is a deliberate floor on wasted memory, not a latency target: an orphan
+ * lingers at most this long instead of for days. Cheaper than it looks — one
+ * signal-0 syscall, on an unref'd timer.
+ */
+export const ORPHAN_CHECK_MS = Number(process.env.BRAIN_ORPHAN_CHECK_MS) || 30_000;
