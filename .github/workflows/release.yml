@@ -40,6 +40,11 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: create-release
     runs-on: ${{ matrix.os }}
+    # Without this the GitHub default applies — 360 minutes. The smoke test runs
+    # three selftest subprocesses with no timeout of their own, and the --pool
+    # gate spawns a worker pool; a worker that never comes up leaves the parent
+    # waiting. One hung runner then blocks the root publish for six hours.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -246,8 +251,13 @@ jobs:
   publish-npm:
     name: Publish to npm
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    # `always()` so a single failed or hung platform build does not withhold the
+    # release from every platform that DID build. The safety property is kept by
+    # the dist-tag below, not by refusing to publish: a partial release goes out
+    # under `next`, never `latest`.
+    if: always() && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -272,15 +282,45 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
 
+      # `latest` only when every platform the root package promises actually
+      # exists at this version. optionalDependencies means a missing platform
+      # package does NOT fail `npm install` — it installs clean and then has no
+      # binary, so publishing an incomplete release to `latest` produces a
+      # silently broken install. `next` makes that breakage opt-in instead.
+      #
+      # The target list is read from optionalDependencies rather than restated
+      # here, so it cannot drift from what the root package actually promises.
+      - name: Decide dist-tag
+        id: disttag
+        shell: bash
+        run: |
+          VERSION="${VERSION#v}"
+          MISSING=""
+          for pkg in $(node -e "console.log(Object.keys(require('./package.json').optionalDependencies||{}).join(' '))"); do
+            if ! npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+              MISSING="${MISSING} ${pkg}"
+            fi
+          done
+          if [ -z "${MISSING}" ]; then
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+            echo "All platform packages present at ${VERSION} — publishing to latest."
+          else
+            echo "tag=next" >> "$GITHUB_OUTPUT"
+            echo "::warning::Missing platform packages at ${VERSION}:${MISSING} — publishing under 'next', leaving 'latest' untouched. Re-run the failed build job, then promote with: npm dist-tag add project-brain@${VERSION} latest"
+          fi
+        env:
+          VERSION: ${{ github.ref_name }}
+
       - name: Publish
         shell: bash
         run: |
-          VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          if npm view "project-brain@${VERSION}" version 2>/dev/null; then
+          TAG="${{ steps.disttag.outputs.tag }}"
+          if npm view "project-brain@${VERSION}" version >/dev/null 2>&1; then
             echo "project-brain@${VERSION} already published, skipping."
           else
-            npm publish --access public
+            npm publish --access public --tag "${TAG}"
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ github.ref_name }}
