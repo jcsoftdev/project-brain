@@ -36,6 +36,12 @@ Commands:
 Knowledge bundles (Open Knowledge Format v0.2 — the *why*, not the *what*):
   okf validate [dir]       Check bundle conformance (SPEC §11). Offline.
   okf sync [dir]           Index the bundle's concepts so search_context returns them
+  okf audit [dir]          Cross-check the bundle against the code graph:
+                             broken anchors, knowledge older than the code it
+                             explains, important code nothing documents, and
+                             concepts whose code calls across them but whose
+                             prose does not
+    --symbol <name>        Name the concepts to re-read after <name> changes
                              dir defaults to ./okf
 
 Structural (offline — no Ollama probe, reads the local graph.db directly):

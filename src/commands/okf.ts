@@ -2,6 +2,8 @@ import { join } from "node:path";
 import { OkfBundleError, readBundle } from "../okf/bundle.js";
 import { syncBundle, type SyncBundleDeps } from "../okf/sync.js";
 import type { OkfIssue } from "../okf/validate.js";
+import { auditBundle, impactedConcepts, type AuditGraph } from "../okf/audit.js";
+import type { CodeClock } from "../git/last-changed.js";
 
 /**
  * Default bundle location, relative to the project root.
@@ -88,26 +90,51 @@ export async function runOkfSync(dir: string, deps: OkfSyncDeps): Promise<string
 function usage(): void {
   console.error(
     [
-      "Usage: project-brain okf <validate|sync> [dir]",
+      "Usage: project-brain okf <validate|sync|audit> [dir] [--symbol <name>]",
       "",
       `  validate   check bundle conformance (SPEC v0.2 §11). Offline.`,
       `  sync       index the bundle's concepts into this project's brain.`,
+      `  audit      compare the bundle against the code graph: broken anchors,`,
+      `             stale knowledge, undocumented code, missing links.`,
       "",
+      `  --symbol   with audit: name the concepts to re-read after <name> changes.`,
       `  dir defaults to ./${DEFAULT_BUNDLE_DIR}`,
     ].join("\n")
   );
 }
 
+const SYMBOL_FLAG = "--symbol";
+
+/** Splits positionals from `--symbol <name>` / `--symbol=<name>`, ignoring unknown flags. */
+function parseArgs(args: string[]): { positional: string[]; symbol?: string } {
+  const positional: string[] = [];
+  let symbol: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === SYMBOL_FLAG) {
+      symbol = args[++i];
+      continue;
+    }
+    if (arg.startsWith(`${SYMBOL_FLAG}=`)) {
+      symbol = arg.slice(SYMBOL_FLAG.length + 1);
+      continue;
+    }
+    if (!arg.startsWith("--")) positional.push(arg);
+  }
+  return { positional, symbol };
+}
+
 /** CLI entry point for the okf command. */
 export async function execute(args: string[]): Promise<void> {
-  const [action, dirArg] = args.filter((a) => !a.startsWith("--"));
-  if (action !== "validate" && action !== "sync") {
+  const { positional, symbol } = parseArgs(args);
+  const [action, dirArg] = positional;
+  if (action !== "validate" && action !== "sync" && action !== "audit") {
     usage();
     process.exit(1);
     return;
   }
 
-  const { findProjectRoot, resolveProjectId } = await import("./resolve-project.js");
+  const { findProjectRoot, openProjectGraph, resolveProjectId } = await import("./resolve-project.js");
   const root = findProjectRoot() ?? process.cwd();
   const dir = dirArg ?? join(root, DEFAULT_BUNDLE_DIR);
 
@@ -115,6 +142,36 @@ export async function execute(args: string[]): Promise<void> {
     const { output, ok } = await runOkfValidate(dir);
     console.log(output);
     if (!ok) process.exit(1);
+    return;
+  }
+
+  if (action === "audit") {
+    const { createGitClock } = await import("../git/last-changed.js");
+    const { existsSync } = await import("node:fs");
+
+    // The audit is entirely about the join with the call graph. Without one,
+    // every anchor would look unresolvable and every symbol uncovered — a
+    // report full of findings that are really just "you have not synced yet".
+    const graph = openProjectGraph(root);
+    if (!graph) {
+      console.error("No structural graph at this project root yet — run `project-brain sync` first.");
+      process.exit(1);
+      return;
+    }
+
+    try {
+      const { output, ok } = await runOkfAudit(dir, {
+        graph,
+        clock: createGitClock(root),
+        exists: (relPath) => existsSync(join(root, relPath)),
+        repoRoot: root,
+        symbol,
+      });
+      console.log(output);
+      if (!ok) process.exit(1);
+    } finally {
+      graph.close();
+    }
     return;
   }
 
@@ -139,4 +196,102 @@ export async function execute(args: string[]): Promise<void> {
     console.error(error instanceof OkfBundleError ? error.message : String(error));
     process.exit(1);
   }
+}
+
+export interface OkfAuditDeps {
+  graph: AuditGraph;
+  clock: CodeClock;
+  exists(repoRelPath: string): boolean;
+  repoRoot: string;
+  coverageLimit?: number;
+  /** Report which concepts to re-read after this symbol changes. */
+  symbol?: string;
+}
+
+const RESOLUTION_REASON: Record<string, string> = {
+  "missing-file": "file not found",
+  "missing-symbol": "symbol not found",
+};
+
+/**
+ * Compares the bundle against the code graph and reports what drifted.
+ *
+ * Only findings the author can act on with certainty fail the run: an anchor
+ * pointing at code that is gone, and knowledge older than the code it explains.
+ * Coverage gaps, link suggestions, and unattested concepts are backlog — they
+ * are true of every young bundle, and failing on them would make the audit
+ * useless in CI from the first commit.
+ */
+export async function runOkfAudit(
+  dir: string,
+  deps: OkfAuditDeps
+): Promise<{ output: string; ok: boolean }> {
+  let bundle;
+  try {
+    bundle = await readBundle(dir);
+  } catch (error) {
+    const message = error instanceof OkfBundleError ? error.message : String(error);
+    return { output: `${message}\nCreate it, or pass a path: project-brain okf audit <dir>`, ok: false };
+  }
+
+  const layout = { bundleRoot: dir, repoRoot: deps.repoRoot };
+  const report = auditBundle(bundle, layout, deps);
+  const concepts = new Set(report.anchors.map((a) => a.concept)).size;
+
+  const lines = [
+    `project-brain okf audit — ${dir}`,
+    `  ${plural(report.anchors.length, "anchor")} across ${plural(concepts, "concept")}`,
+  ];
+
+  if (report.broken.length > 0) {
+    lines.push("", `  ${plural(report.broken.length, "broken anchor")}:`);
+    for (const anchor of report.broken) {
+      lines.push(`  ✗ ${anchor.concept} → ${anchor.resource} (${RESOLUTION_REASON[anchor.resolution]})`);
+    }
+  }
+
+  if (report.stale.length > 0) {
+    lines.push("", `  ${plural(report.stale.length, "stale concept")}:`);
+    for (const finding of report.stale) {
+      lines.push(
+        finding.reason === "uncommitted"
+          ? `  ! ${finding.concept} — ${finding.path} has uncommitted changes, attested ${finding.attestedAt}`
+          : `  ! ${finding.concept} — ${finding.path} changed ${finding.changedAt}, attested ${finding.attestedAt}`
+      );
+    }
+  }
+
+  if (report.unattested.length > 0) {
+    lines.push("", `  ${plural(report.unattested.length, "concept")} never attested:`);
+    for (const concept of report.unattested) lines.push(`  - ${concept}`);
+  }
+
+  if (report.links.length > 0) {
+    lines.push("", `  ${plural(report.links.length, "link suggestion")}:`);
+    for (const link of report.links) {
+      lines.push(`  ~ ${link.from} → ${link.to} (${link.because.caller} calls ${link.because.callee})`);
+    }
+  }
+
+  if (report.coverage.length > 0) {
+    lines.push("", `  top ${report.coverage.length} ranked by importance, explained by nothing:`);
+    for (const gap of report.coverage) lines.push(`  · ${gap.name} (${gap.kind}) ${gap.file}`);
+  }
+
+  if (deps.symbol !== undefined) {
+    const impacted = impactedConcepts(deps.symbol, bundle, layout, deps);
+    lines.push("");
+    if (impacted.length === 0) {
+      lines.push(`  no concept explains code affected by \`${deps.symbol}\``);
+    } else {
+      lines.push(`  ${plural(impacted.length, "concept")} to re-read after \`${deps.symbol}\` changes:`);
+      for (const item of impacted) {
+        lines.push(`  → ${item.concept} (via ${item.via.name} in ${item.via.file})`);
+      }
+    }
+  }
+
+  const ok = report.broken.length === 0 && report.stale.length === 0;
+  if (ok) lines.push("", "  every anchor resolves, and no concept is older than the code it explains");
+  return { output: lines.join("\n"), ok };
 }
