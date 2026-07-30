@@ -87,11 +87,35 @@ export async function runOkfSync(dir: string, deps: OkfSyncDeps): Promise<string
   return lines.join("\n");
 }
 
+/**
+ * Re-render <root>/CLAUDE.md so its knowledge-bundle section appears now that a
+ * bundle exists. `project-brain init` ran before it did, so that section was
+ * omitted; without this the host is never told the bundle is there.
+ *
+ * Reads the same project.json init wrote, so projectId and stack stay in sync
+ * rather than being re-detected differently here.
+ */
+async function refreshProjectRules(root: string): Promise<void> {
+  const { readFile } = await import("node:fs/promises");
+  const { writeProjectRules } = await import("../rules/project.js");
+
+  const raw = await readFile(join(root, ".project-brain", "project.json"), "utf-8");
+  const config = JSON.parse(raw) as { projectId: string; stack: any; modules?: string[] };
+
+  await writeProjectRules(root, {
+    projectId: config.projectId,
+    stack: config.stack,
+    modules: config.modules,
+    hasOkfBundle: true,
+  });
+}
+
 function usage(): void {
   console.error(
     [
-      "Usage: project-brain okf <validate|sync|audit> [dir] [--symbol <name>]",
+      "Usage: project-brain okf <init|validate|sync|audit> [dir] [--symbol <name>]",
       "",
+      `  init       scaffold an empty bundle (index.md + log.md). Never overwrites.`,
       `  validate   check bundle conformance (SPEC v0.2 §11). Offline.`,
       `  sync       index the bundle's concepts into this project's brain.`,
       `  audit      compare the bundle against the code graph: broken anchors,`,
@@ -128,7 +152,7 @@ function parseArgs(args: string[]): { positional: string[]; symbol?: string } {
 export async function execute(args: string[]): Promise<void> {
   const { positional, symbol } = parseArgs(args);
   const [action, dirArg] = positional;
-  if (action !== "validate" && action !== "sync" && action !== "audit") {
+  if (action !== "init" && action !== "validate" && action !== "sync" && action !== "audit") {
     usage();
     process.exit(1);
     return;
@@ -137,6 +161,25 @@ export async function execute(args: string[]): Promise<void> {
   const { findProjectRoot, openProjectGraph, resolveProjectId } = await import("./resolve-project.js");
   const root = findProjectRoot() ?? process.cwd();
   const dir = dirArg ?? join(root, DEFAULT_BUNDLE_DIR);
+
+  if (action === "init") {
+    const { runOkfInit } = await import("../okf/init.js");
+    const { created, skipped } = await runOkfInit({ root, dir, refreshRules: () => refreshProjectRules(root) });
+
+    console.log(`project-brain okf init — ${dir}`);
+    for (const name of created) console.log(`  created  ${name}`);
+    for (const name of skipped) console.log(`  exists   ${name} (left alone)`);
+    if (created.length === 0) {
+      console.log("\n  Bundle already present. Nothing to do.");
+    } else {
+      console.log(
+        "\n  Write your first concept with the `brain-okf` skill, or by hand:" +
+          `\n    ${DEFAULT_BUNDLE_DIR}/gotchas/<slug>.md   type: Gotcha, anchored with resource: ../src/...` +
+          "\n  Then: project-brain okf validate && project-brain okf sync"
+      );
+    }
+    return;
+  }
 
   if (action === "validate") {
     const { output, ok } = await runOkfValidate(dir);

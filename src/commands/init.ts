@@ -1,5 +1,7 @@
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { DEFAULT_BUNDLE_DIRNAME } from "../okf/init.js";
 import { detectStack } from "../indexer/stack.js";
 import { deriveProjectId } from "../indexer/project-id.js";
 import { installGitHook } from "../hooks/git.js";
@@ -112,10 +114,15 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
     }
   }
 
-  // 7. Write project rules into CLAUDE.md unless skipped
+  // 7. Write project rules into CLAUDE.md unless skipped.
+  //
+  // The knowledge-bundle section is gated on the bundle EXISTING, so a re-run
+  // of init on a project that has since gained one picks it up. On a first run
+  // there is no bundle yet — `okf init` re-renders this file when it creates one.
   if (!options.skipRules) {
     try {
-      await writeProjectRules(root, { projectId, stack, modules });
+      const hasOkfBundle = existsSync(join(root, DEFAULT_BUNDLE_DIRNAME));
+      await writeProjectRules(root, { projectId, stack, modules, hasOkfBundle });
     } catch {
       // Non-fatal: rules writing should not block init
     }

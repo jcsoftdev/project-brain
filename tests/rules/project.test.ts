@@ -197,3 +197,70 @@ describe("writeProjectRules", () => {
     expect(content).not.toContain("## Module Documentation");
   });
 });
+
+/**
+ * The OKF block is conditional on the bundle EXISTING.
+ *
+ * A project with no `okf/` must not be told to maintain one — the instruction
+ * would be dead weight in every CLAUDE.md that project-brain touches. And the
+ * ordering matters: `project-brain init` runs before any bundle exists, so
+ * `okf init` has to re-render this section afterwards or the instruction never
+ * appears at all.
+ */
+describe("writeProjectRules — conditional OKF block", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "brain-okf-rules-"));
+  });
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const stack = { languages: ["TypeScript"], frameworks: [], packageManager: "bun", manifest: "package.json" };
+
+  async function claudeMd(): Promise<string> {
+    return readFile(join(tempDir, "CLAUDE.md"), "utf8");
+  }
+
+  it("omits the OKF section entirely when no bundle exists", async () => {
+    const { writeProjectRules } = await import("../../src/rules/project.js");
+    await writeProjectRules(tempDir, { projectId: "p", stack });
+
+    const content = await claudeMd();
+    expect(content).not.toContain("Knowledge bundle");
+    expect(content).not.toContain("okf audit");
+  });
+
+  it("omits it when hasOkfBundle is explicitly false", async () => {
+    const { writeProjectRules } = await import("../../src/rules/project.js");
+    await writeProjectRules(tempDir, { projectId: "p", stack, hasOkfBundle: false });
+    expect(await claudeMd()).not.toContain("Knowledge bundle");
+  });
+
+  it("includes the block, the commands, and the end-of-task checkpoint when a bundle exists", async () => {
+    const { writeProjectRules } = await import("../../src/rules/project.js");
+    await writeProjectRules(tempDir, { projectId: "p", stack, hasOkfBundle: true });
+
+    const content = await claudeMd();
+    expect(content).toContain("Knowledge bundle");
+    expect(content).toContain("okf audit");
+    expect(content).toContain("brain-okf");
+  });
+
+  /** "Nothing to record" must read as a valid outcome, or this becomes a concept mill. */
+  it("states that most tasks produce no concept", async () => {
+    const { writeProjectRules } = await import("../../src/rules/project.js");
+    await writeProjectRules(tempDir, { projectId: "p", stack, hasOkfBundle: true });
+    expect(await claudeMd()).toMatch(/most tasks|Most tasks/);
+  });
+
+  it("re-rendering without the bundle removes the block again", async () => {
+    const { writeProjectRules } = await import("../../src/rules/project.js");
+    await writeProjectRules(tempDir, { projectId: "p", stack, hasOkfBundle: true });
+    expect(await claudeMd()).toContain("Knowledge bundle");
+
+    await writeProjectRules(tempDir, { projectId: "p", stack, hasOkfBundle: false });
+    expect(await claudeMd()).not.toContain("Knowledge bundle");
+  });
+});

@@ -14,4 +14,4 @@ When answering questions about this codebase, run `search_context` first to find
 
 - **Project ID**: {{projectId}}
 - **Stack**: {{stack}}
-{{modules}}
+{{modules}}{{okf}}

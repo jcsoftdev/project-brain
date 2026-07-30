@@ -23,6 +23,18 @@ Apply when a **specific piece of reasoning** is worth keeping: a fix that surpri
 
 Do not apply when: the ask is "document this module" or "explain what this code does" (that is `conceptualize`, below); the project has no `okf/` bundle and the user has not asked to start one; or the insight is a restatement of the diff.
 
+### End of a task is a checkpoint, not a quota
+
+A project whose CLAUDE.md carries the knowledge-bundle section is asking for one thing at the end of a piece of work: **decide whether anything belongs in the bundle.** Deciding is the whole obligation. Three things qualify:
+
+- A fix whose **cause was surprising** — the symptom pointed somewhere else.
+- A decision where a **real alternative was rejected**, and the reason is not obvious from the result.
+- A **constraint** that must keep holding, where violating it breaks something non-locally.
+
+**Most tasks produce nothing, and that is the expected answer.** Say so in one line and move on. A checkpoint that feels obliged to produce a file is a concept mill, and noise in a knowledge bundle is worse than gaps — it destroys the signal that made the bundle worth reading.
+
+If a project has no bundle, `project-brain okf init` scaffolds an empty one and re-renders the project rules so the host learns it exists. Propose that; do not create it unasked.
+
 ## Two knowledge layers — do not conflate them
 
 | | `conceptualize` (already automatic) | OKF concept (this skill) |

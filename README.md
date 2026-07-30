@@ -240,11 +240,16 @@ project-brain code "chargeCard" --limit 5
 The index answers "what does this code do". It cannot answer "why is it like this", because that never existed in the AST. An **[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.2 bundle** — a committed directory of Markdown files with YAML frontmatter — holds that half, and `okf` keeps the two halves honest about each other.
 
 ```bash
+project-brain okf init [dir]               # scaffold an empty bundle. Never overwrites.
 project-brain okf validate [dir]           # conformance (SPEC §11). Offline.
 project-brain okf sync [dir]               # index the concepts so search returns them
 project-brain okf audit [dir]              # cross-check the bundle against the code graph
 project-brain okf audit --symbol <name>    # which concepts to re-read after <name> changes
 ```
+
+`init` writes `index.md` and `log.md` and stops — **no seeded concepts**, because a bundle shipped with examples makes the first `audit` report coverage gaps across the whole repo. Type directories appear when the first concept needs them.
+
+It also re-renders `CLAUDE.md`. `project-brain init` runs before any bundle exists, so the knowledge-bundle section is omitted then; `okf init` adds it once there is something to point at. That section asks the assistant to **decide, at the end of a task, whether anything belongs in the bundle** — and says plainly that most tasks produce nothing. A checkpoint that feels obliged to produce a file is a concept mill, and noise in a knowledge bundle is worse than gaps. Projects with no bundle never see the instruction.
 
 `dir` defaults to `./okf`. Because the bundle is tracked in git, a plain `project-brain sync` also keeps it fresh — bundle files are routed through the curated projection instead of being chunked as raw markdown, so `search_context` returns the reasoning next to the code it explains.
 
