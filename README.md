@@ -134,6 +134,8 @@ The CLI commands exit 0 for any executed query — including legitimate empty re
 | `get_architecture` | One-call project summary: detected tech stack, indexed modules, chunk count, and symbol count. |
 | `sync_project` | Re-index changed files now (incremental, hash-gated). Streams progress via MCP notifications when the client supplies a `progressToken`. Use when results look stale. |
 
+Curated knowledge (the *why* behind the code) lives in an OKF bundle rather than in these tools — see [`okf`](#okf--knowledge-bundles-the-why-not-the-what).
+
 Routing: exact symbol → `find_symbol`; who-calls → `find_callers`; what-it-calls → `find_callees`; "what breaks if I change X" → `impact`; "how does A end up calling B" → `trace_path`; fuzzy/conceptual → `search_context` then `expand_context`; exact string/identifier you can type verbatim → `search_code`. The canonical tool list lives in `src/constants.ts` (`TOOL_CATALOG`) and is rendered into both the MCP server instructions and the per-project `CLAUDE.md`.
 
 ## Recipes — get the most out of it
@@ -231,6 +233,41 @@ project-brain trace handleSearch runSync
 project-brain map --budget 2000 --focus createServer,runSync
 project-brain code "chargeCard" --limit 5
 ```
+
+### `okf` — knowledge bundles (the *why*, not the *what*)
+
+The index answers "what does this code do". It cannot answer "why is it like this", because that never existed in the AST. An **[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.2 bundle** — a committed directory of Markdown files with YAML frontmatter — holds that half, and `okf` keeps the two halves honest about each other.
+
+```bash
+project-brain okf validate [dir]           # conformance (SPEC §11). Offline.
+project-brain okf sync [dir]               # index the concepts so search returns them
+project-brain okf audit [dir]              # cross-check the bundle against the code graph
+project-brain okf audit --symbol <name>    # which concepts to re-read after <name> changes
+```
+
+`dir` defaults to `./okf`. Because the bundle is tracked in git, a plain `project-brain sync` also keeps it fresh — bundle files are routed through the curated projection instead of being chunked as raw markdown, so `search_context` returns the reasoning next to the code it explains.
+
+A concept anchors code through `resource` (and `sources[]`), resolved from the bundle root:
+
+```yaml
+---
+type: Gotcha
+title: Language.load ignores Bun's /$bunfs virtual filesystem
+resource: ../src/parser/wasm.ts#loadGrammar   # or ../src/parser/wasm.ts#L14-L24
+generated: { by: "human:you", at: 2026-07-30T00:00:00-05:00 }
+---
+```
+
+`audit` reports four things no single graph can answer:
+
+| Finding | Meaning |
+|---|---|
+| **Broken anchor** | The cited file or symbol is gone — the explanation points at nothing. |
+| **Stale concept** | The cited code changed after the knowledge was last confirmed. Uses git commit dates (not mtimes, which every clone resets) against the later of the declared attestation and the concept file's own commit date. |
+| **Coverage gap** | Highest-PageRank symbols no concept explains — a documentation backlog in priority order. Test helpers excluded. |
+| **Link suggestion** | Two concepts whose code calls across them, but whose prose never does. |
+
+Broken anchors and stale concepts exit 1, so `audit` works as a CI gate. Coverage gaps and link suggestions are backlog and never fail the run. Clear a stale finding by re-reading the concept and adding a `verified` entry — the file changes, so its commit date moves and the finding clears.
 
 ### `update`
 
