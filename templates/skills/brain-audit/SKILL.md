@@ -89,6 +89,32 @@ The `Reference` column is the exact filename under `references/` — load that f
 
 The absence gates (`Observability`, `Testing`) fire in both directions on purpose: "this project has no tests at all" is a finding, not a reason to skip the module.
 
+### Establishing each signal
+
+`get_architecture` covers only the manifest-derived signals. Everything else needs a probe, so run these rather than improvising — an improvised gate is a different answer on every run.
+
+| Signal | How to establish it |
+|---|---|
+| Server framework / API routes | `get_architecture` frameworks; else `search_code` the route-registration call |
+| UI framework | `get_architecture` frameworks |
+| Native mobile project | `search_code` for `AndroidManifest.xml`, `Info.plist`, `pubspec.yaml`, `*.xcodeproj` |
+| Schema / migrations / ORM | `search_code` for a migrations directory, `schema.sql`, or an ORM dependency |
+| LLM / AI SDK calls | `search_code` the provider SDK import |
+| Metered cloud usage | cloud SDK imports in the dependency manifest |
+| Queue / worker / background jobs | `search_code` the queue or scheduler dependency, or a worker entry point |
+| Auth, external input, network boundary | any one of: a route table, auth middleware, an outbound HTTP client |
+| CI/CD, Dockerfile, IaC | `search_code` for workflow files, `Dockerfile`, `*.tf`, `*.yaml` in a deploy path |
+| Logging / metrics / tracing | `search_code` the logger or metrics import — **absence fires the gate too** |
+| Test files | `search_code` the test-runner config or `*.test.*` — **absence fires the gate too** |
+| Published package manifest / release workflow | manifest from `get_architecture`, plus a release workflow file |
+| Lockfile / dependency manifest | `get_architecture` packageManager and manifest |
+| PII or user data persisted | schema and model field names — email, phone, address, name, date of birth, government id — plus any free-text column |
+| Locale files / translation keys | `search_code` for a locales directory or the translation function |
+| OpenAPI / GraphQL / protobuf / shared types | `search_code` for `openapi`, `.graphql`, `.proto`, or a shared-types package |
+| Hot path or measurable workload | `repo_map`'s top-ranked symbols, plus any loop over unbounded input |
+
+**A signal you cannot establish is `undetermined`, never `not applicable`.** Say which probe was inconclusive and let the user decide. Reporting an unestablished signal as not-applicable silently drops a module they may have needed, and they have no way to know it happened.
+
 ## Execution Steps
 
 1. Discovery — stack, architecture, feature map, via the routing table.

@@ -126,6 +126,19 @@ describe("README.md (T-10)", () => {
     expect(content).toContain("serve --http");
   });
 
+  /**
+   * setup writes brain-audit into the user's global skills directory, so the
+   * README has to say so and has to say how to decline. Without this assertion
+   * the section can be deleted and nothing complains — exactly the "no
+   * enforcement keeping docs honest" gap the skill's own documentation module
+   * reports.
+   */
+  it("documents the brain-audit skill and its opt-out", async () => {
+    const content = await loadReadme();
+    expect(content).toContain("brain-audit");
+    expect(content).toContain("--no-brain-audit");
+  });
+
   it("contains Bun prerequisite", async () => {
     const content = await loadReadme();
     expect(content).toContain("Bun");

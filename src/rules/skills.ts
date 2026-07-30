@@ -124,8 +124,12 @@ export const GENERATOR_MARKER = "generator: project-brain";
  *   Opencode    opencode.ai/docs/skills           (also ~/.config/opencode/skills)
  *   Windsurf    docs.windsurf.com → docs.devin.ai/desktop/cascade/skills     (also ~/.codeium/windsurf/skills)
  *
- * Zed's flat-layout rule is why the manifest nests under `references/` and not
- * deeper: brain-audit must remain a direct child of the skills root.
+ * Zed's flat-layout rule constrains only where a skill sits, not what it
+ * contains: "Skills must be direct children of the skills root. Nested folders
+ * like ~/.agents/skills/group/my-skill/ are not discovered." A skill's own
+ * `references/`, `scripts/` and `assets/` subdirectories are documented as
+ * supported, so brain-audit/references/*.md is fine — but brain-audit/ must
+ * never be moved under a grouping directory.
  */
 const AGENTS_SKILLS_TOOLS = new Set([
   "Cursor",
