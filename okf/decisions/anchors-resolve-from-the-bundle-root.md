@@ -64,6 +64,30 @@ prose.
 Use a file-level anchor when the concept really is about the whole module; reach
 for `#symbol` the moment it is not.
 
+# When even a symbol is too broad, use a range
+
+`#symbol` runs out when the symbol is an orchestrator. A gotcha about ten lines
+inside a 500-line `runSync` has no finer symbol to name, and naming `runSync`
+makes the concept responsible for every call that function makes — the audit
+duly proposed links from a chunk-deletion gotcha to a wasm loader and a worker
+pool.
+
+A line range is the answer, and it claims **only the symbols that fit inside
+it**:
+
+- `#L600-L610` around a small function claims that function.
+- `#L100-L110` inside a big one claims **nothing** — correctly, because the
+  concept does not explain any whole symbol.
+
+Claiming nothing costs nothing that matters. Coverage and staleness are
+independent: the range goes straight to the commit clock, so a sub-function
+citation is still watched for drift with better precision than a symbol anchor
+would give. The only thing given up is coverage credit, which the concept was
+never entitled to.
+
+Line numbers do drift as the file changes — and that is the point. When they
+move, staleness fires and the citation gets re-read.
+
 # Where a symbol anchor is NOT called broken
 
 If the graph holds no symbols at all for the anchored file, a `#fragment` is left

@@ -1,5 +1,10 @@
 # Knowledge Update Log
 
+## 2026-07-30
+* **Creation**: [A skipped file keeps its chunks](/gotchas/a-skipped-file-keeps-its-chunks.md) —
+  found by running the new cross-graph audit against this bundle: `log.md` itself
+  was in the vector index, orphaned by the OKF routing that skips it.
+
 ## 2026-07-29
 * **Creation**: Bundle seeded from the OKF v0.2 support work — the three traps
   found while building it and the decisions that shaped its scope.
