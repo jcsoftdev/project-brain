@@ -132,6 +132,28 @@ describe("runSync over a tracked OKF bundle", () => {
     expect(store.data.get("p") ?? []).toHaveLength(0);
   });
 
+  it("removes chunks a bundle file was indexed with before the router learned to skip it", async () => {
+    // The real sequence, found by auditing this repo's own bundle: okf/log.md
+    // was indexed as raw markdown before routing existed, and every later sync
+    // took the routed-skip branch — which updated the manifest but never
+    // deleted the chunks. A changelog stayed in search results forever.
+    const store = makeMemoryStore();
+    await mkdir(join(root, "okf"), { recursive: true });
+    await writeFile(join(root, "okf", "log.md"), "# Log\n## 2026-07-29\n* **Creation**: Init.");
+
+    // Bundle configured elsewhere → this file takes the ordinary markdown path.
+    const { runSync } = await import("../../src/commands/sync.js");
+    await runSync({ root, projectId: "p", store, embeddings: mockEmbeddings, okfDir: "elsewhere" });
+    expect((store.data.get("p") ?? []).some((c) => c.source === "okf/log.md")).toBe(true);
+
+    // Now it is inside the bundle, and its content changed so the hash-skip
+    // short-circuit does not hide the routing decision.
+    await writeFile(join(root, "okf", "log.md"), "# Log\n## 2026-07-30\n* **Update**: Second entry.");
+    await sync(store);
+
+    expect((store.data.get("p") ?? []).filter((c) => c.source === "okf/log.md")).toEqual([]);
+  });
+
   it("still indexes ordinary markdown outside the bundle the normal way", async () => {
     const store = makeMemoryStore();
     await mkdir(join(root, "docs"), { recursive: true });

@@ -478,6 +478,15 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           const okfRoute = routeOkfFile(relPath, content, okfDir);
           if (okfRoute) {
             if (okfRoute.skip) {
+              // A skipped bundle file must hold NO chunks. Recording the
+              // manifest alone is not enough: anything indexed before the
+              // router covered this path — or before the bundle moved here —
+              // keeps its raw chunks forever, because a skipped file never
+              // reaches batchReplace to be replaced. This repo's own okf/log.md
+              // sat in search results for exactly that reason. Delete before
+              // the manifest write so a failure here retries next run rather
+              // than being recorded as done.
+              await store.deleteBySource(projectId, relPath);
               manifestStore.upsertFile(relPath, hash, mtime, {});
               return "skipped" as const;
             }
