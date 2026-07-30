@@ -43,7 +43,15 @@ export function isNewer(latest: string, current: string): boolean {
   return false;
 }
 
-export type InstallManager = "bun" | "pnpm" | "yarn" | "npm";
+export type InstallManager =
+  | "bun"
+  | "pnpm"
+  | "yarn"
+  | "npm"
+  | "homebrew"
+  | "scoop"
+  /** Installed by some means we cannot drive — a downloaded binary, a distro package. */
+  | "standalone";
 
 /**
  * Pure detection of the install manager from the running binary's path.
@@ -72,11 +80,41 @@ export function detectInstallManager(
     return "yarn";
   }
 
-  return "npm";
+  // Non-JS channels. Checked before the npm fallback used to sit, because a
+  // Homebrew install told to run `npm install -g` either fails outright or
+  // installs a second copy that shadows the brew-managed one.
+  if (
+    normalized.includes("/Cellar/") ||
+    normalized.includes("/homebrew/") ||
+    normalized.includes("/linuxbrew/")
+  ) {
+    return "homebrew";
+  }
+
+  if (/(^|\/)scoop\//.test(normalized)) {
+    return "scoop";
+  }
+
+  // npm is now a POSITIVE match, not a shrug. `.nvm/` counts: nvm manages node
+  // and npm together, and a global install there is npm's whether the caller
+  // passed the bin shim or the realpath into node_modules.
+  if (
+    normalized.includes("node_modules") ||
+    normalized.includes("/.nvm/") ||
+    /(^|\/)npm(\/|$)/.test(normalized)
+  ) {
+    return "npm";
+  }
+
+  return "standalone";
 }
 
-/** Update command for the given install manager. */
-export function updateCommand(manager: InstallManager): string {
+/**
+ * Update command for the given install manager, or null when the channel cannot
+ * be driven from here. Null is a real answer: printing a command that installs a
+ * competing copy is worse than telling someone to update the way they installed.
+ */
+export function updateCommand(manager: InstallManager): string | null {
   switch (manager) {
     case "bun":
       return "bun add -g project-brain@latest";
@@ -86,6 +124,12 @@ export function updateCommand(manager: InstallManager): string {
       return "yarn global add project-brain@latest";
     case "npm":
       return "npm install -g project-brain@latest";
+    case "homebrew":
+      return "brew upgrade project-brain";
+    case "scoop":
+      return "scoop update project-brain";
+    case "standalone":
+      return null;
   }
 }
 
@@ -97,7 +141,8 @@ export interface NotifierDeps {
   refresh: () => void;
   staleMs: number;
   optedOut: boolean;
-  updateCmd: string;
+  /** Null when the install channel cannot be driven — the notice then says so. */
+  updateCmd: string | null;
 }
 
 /** Pure, fully-injectable core. Never throws. */
@@ -115,7 +160,9 @@ export function checkForUpdate(deps: NotifierDeps): void {
     try {
       deps.warn(
         `\n  project-brain update available: ${deps.currentVersion} → ${cache.latest}\n` +
-          `  Run: ${deps.updateCmd}\n`
+          (deps.updateCmd
+            ? `  Run: ${deps.updateCmd}\n`
+            : `  Update it the way you installed it.\n`)
       );
     } catch {
       /* fail-silent */

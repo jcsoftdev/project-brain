@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { test, it, expect, describe } from "bun:test";
 import { isNewer, checkForUpdate, detectInstallManager, updateCommand } from "../src/notifier.js";
 
 describe("isNewer", () => {
@@ -180,5 +180,63 @@ describe("checkForUpdate", () => {
     checkForUpdate(h.deps);
     expect(h.warned.length).toBe(0);
     expect(h.refreshed()).toBe(1);
+  });
+});
+
+/**
+ * The fallback used to be `npm` for anything unrecognised, which meant a
+ * Homebrew or standalone install was told to run `npm install -g project-brain`.
+ * That either fails outright or installs a SECOND copy that shadows the real
+ * one — worse than offering no update command at all.
+ */
+describe("detectInstallManager — non-JS channels", () => {
+  it("detects a Homebrew Cellar path", () => {
+    expect(detectInstallManager("/opt/homebrew/Cellar/project-brain/0.16.1/bin/project-brain", {}))
+      .toBe("homebrew");
+  });
+
+  it("detects an Intel-mac Homebrew path", () => {
+    expect(detectInstallManager("/usr/local/Cellar/project-brain/0.16.1/bin/project-brain", {}))
+      .toBe("homebrew");
+  });
+
+  it("detects linuxbrew", () => {
+    expect(detectInstallManager("/home/linuxbrew/.linuxbrew/bin/project-brain", {}))
+      .toBe("homebrew");
+  });
+
+  it("detects a Scoop shim", () => {
+    expect(detectInstallManager("C:/Users/me/scoop/apps/project-brain/current/project-brain.exe", {}))
+      .toBe("scoop");
+  });
+
+  it("reports standalone for a path under no known manager", () => {
+    expect(detectInstallManager("/usr/local/bin/project-brain", {})).toBe("standalone");
+  });
+
+  it("still detects the JS managers", () => {
+    expect(detectInstallManager("/Users/me/.bun/bin/project-brain", {})).toBe("bun");
+    expect(detectInstallManager("/Users/me/.yarn/bin/project-brain", {})).toBe("yarn");
+    expect(detectInstallManager("/opt/pnpm/project-brain", { PNPM_HOME: "/opt/pnpm" })).toBe("pnpm");
+  });
+
+  /** npm must be a positive match now, not a shrug. */
+  it("detects npm from a real npm global prefix", () => {
+    expect(detectInstallManager("/usr/local/lib/node_modules/.bin/project-brain", {})).toBe("npm");
+  });
+});
+
+describe("updateCommand — non-JS channels", () => {
+  it("uses brew upgrade for homebrew", () => {
+    expect(updateCommand("homebrew")).toBe("brew upgrade project-brain");
+  });
+
+  it("uses scoop update for scoop", () => {
+    expect(updateCommand("scoop")).toBe("scoop update project-brain");
+  });
+
+  /** No invented command for a channel we cannot drive. */
+  it("returns null for standalone rather than guessing", () => {
+    expect(updateCommand("standalone")).toBeNull();
   });
 });

@@ -26,7 +26,25 @@ export interface UpdateResult {
 /** Core, fully-injectable update logic. */
 export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   const manager = detectInstallManager(deps.binPath, deps.env);
-  const argv = updateCommand(manager).split(" ");
+  const command = updateCommand(manager);
+
+  // A channel we cannot drive. Running a guessed command here would install a
+  // second copy that shadows the real one, so say what we know and stop.
+  if (command === null) {
+    deps.log(
+      `project-brain ${deps.currentVersion} was not installed by a package manager this command can drive.\n` +
+        `  Update it the way you installed it — re-run your installer, or replace the binary.`
+    );
+    return {
+      alreadyLatest: false,
+      current: deps.currentVersion,
+      latest: null,
+      manager,
+      exitCode: null,
+    };
+  }
+
+  const argv = command.split(" ");
 
   const latest = await deps.fetchLatest().catch(() => null);
 
