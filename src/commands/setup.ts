@@ -5,7 +5,8 @@ import { detectEnvironment, type Environment } from "../env/detect.js";
 import { getRegistrars, type AIToolRegistrar } from "../registrars/types.js";
 import { UnparseableConfigError, standardServerEntry } from "../registrars/json-config.js";
 import { getGlobalRules } from "../rules/global.js";
-import { parseModelRoutingFlag } from "../cli-args.js";
+import { parseModelRoutingFlag, parseSkillInstallFlag } from "../cli-args.js";
+import { getSkillTargetDirs, installSkill, type SkippedTarget } from "../rules/skills.js";
 
 export interface SetupOptions {
   dataDir?: string;
@@ -17,6 +18,21 @@ export interface SetupOptions {
   modelRouting?: "ask" | "yes" | "no";
   /** Injectable for testing; defaults to the real promptModelRouting from src/interactive.js. */
   promptModelRouting?: () => Promise<boolean>;
+  /**
+   * Non-interactive override for the brain-audit skill install. Defaults to
+   * "ask", which resolves to INSTALL when non-interactive — unlike
+   * modelRouting, the skill is part of what setup delivers.
+   */
+  skillInstall?: "ask" | "yes" | "no";
+  /** Injectable for testing; defaults to the real promptSkillInstall from src/interactive.js. */
+  promptSkillInstall?: () => Promise<boolean>;
+  /**
+   * Injectable for testing; defaults to getSkillTargetDirs(registeredTools).
+   * Tests MUST set this — the default resolves against homedir(), so a suite
+   * that injects fake registrars would otherwise write brain-audit into the
+   * developer's real ~/.claude/skills.
+   */
+  skillTargetDirs?: string[];
 }
 
 export interface SetupResult {
@@ -26,6 +42,11 @@ export interface SetupResult {
   /** Human-readable manual-setup instructions for registrars that could not
    *  safely auto-register (e.g. an unparseable config file). */
   manualInstructions: string[];
+  /** brain-audit directories actually written. Empty when the install was
+   *  declined, skipped, or had no target. */
+  skillTargets: string[];
+  /** Targets left untouched because ownership could not be proven. */
+  skillSkipped: SkippedTarget[];
 }
 
 /** Tool names whose settings file is commonly hand-edited as JSONC (comments allowed). */
@@ -145,7 +166,39 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     }
   }
 
-  return { dataDir, env, registeredTools, manualInstructions };
+  // 5. Install the brain-audit skill.
+  //
+  // Runs once after the registrar loop, not per registrar: six of the eight
+  // tools share ~/.agents/skills, and getSkillTargetDirs already dedupes them.
+  let skillTargets: string[] = [];
+  let skillSkipped: SkippedTarget[] = [];
+
+  const skillMode = options.skillInstall ?? "ask";
+  const skillDirs = options.skillTargetDirs ?? getSkillTargetDirs(registeredTools);
+
+  if (skillMode !== "no" && skillDirs.length > 0) {
+    try {
+      const prompt =
+        options.promptSkillInstall ?? (await import("../interactive.js")).promptSkillInstall;
+      const accepted = skillMode === "yes" ? true : await prompt();
+      if (accepted) {
+        const outcome = await installSkill(skillDirs);
+        skillTargets = outcome.written;
+        skillSkipped = outcome.skipped;
+      }
+    } catch (e: any) {
+      console.warn(`Warning: Failed to install brain-audit skill: ${e.message}`);
+    }
+  }
+
+  for (const target of skillSkipped) {
+    console.warn(
+      `Warning: ${target.dir} already exists and was not created by project-brain` +
+        ` — left untouched. Move or delete it, then re-run setup.`
+    );
+  }
+
+  return { dataDir, env, registeredTools, manualInstructions, skillTargets, skillSkipped };
 }
 
 /** CLI entry point for the setup command. */
@@ -153,7 +206,8 @@ export async function execute(args: string[]): Promise<void> {
   console.log("project-brain setup\n");
 
   const modelRouting = parseModelRoutingFlag(args);
-  const result = await runSetup({ modelRouting });
+  const skillInstall = parseSkillInstallFlag(args);
+  const result = await runSetup({ modelRouting, skillInstall });
 
   console.log(`Environment:`);
   console.log(`  Bun: ${result.env.bun}`);
@@ -171,6 +225,10 @@ export async function execute(args: string[]): Promise<void> {
 
   if (result.registeredTools.length > 0) {
     console.log(`\nRegistered in: ${result.registeredTools.join(", ")}`);
+  }
+
+  if (result.skillTargets.length > 0) {
+    console.log(`\nSkill installed in: ${result.skillTargets.join(", ")}`);
   }
 
   if (result.manualInstructions.length > 0) {

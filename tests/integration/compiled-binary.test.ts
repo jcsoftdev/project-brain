@@ -44,6 +44,47 @@ if (sym.length > 0 && callees.includes("helper")) console.log("STRUCT_OK");
 else console.log("STRUCT_FAIL", JSON.stringify({ sym: sym.length, callees }));
 `;
 
+// Same class of bug, second surface: the brain-audit skill templates must be
+// EMBEDDED via `with { type: "text" }`, not read from templates/ at runtime.
+// 56af699 already fixed this for rules.claude.md / project.claude.md /
+// model-routing.claude.md; the original brain-audit design proposed a recursive
+// `cp` from import.meta.dir, which would have reintroduced it. Under
+// --compile, import.meta.dir is a virtual /$bunfs path with no traversal back
+// to a real templates/ directory, so every read fails with ENOENT.
+const SKILL_HARNESS = `
+import { installSkill, BRAIN_AUDIT_FILES } from "${REPO}/src/rules/skills.js";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const dir = mkdtempSync(join(tmpdir(), "pb-skill-cbin-"));
+const { written, skipped } = await installSkill([dir]);
+
+// Every embedded file must survive the compile AND land non-empty on disk.
+// Count is not hardcoded: Work Unit 2 grows the manifest and this still holds.
+let missing = [];
+for (const [rel, content] of Object.entries(BRAIN_AUDIT_FILES)) {
+  let onDisk = "";
+  try { onDisk = readFileSync(join(dir, "brain-audit", rel), "utf8"); } catch (e) { missing.push(rel + ":throw"); continue; }
+  if (onDisk.length === 0 || onDisk !== content) missing.push(rel);
+}
+
+const nested = Object.keys(BRAIN_AUDIT_FILES).filter((k) => k.startsWith("references/"));
+const ok =
+  written.length === 1 &&
+  skipped.length === 0 &&
+  missing.length === 0 &&
+  nested.length > 0 &&
+  BRAIN_AUDIT_FILES["SKILL.md"].includes("name: brain-audit");
+
+if (ok) console.log("SKILL_OK");
+else console.log("SKILL_FAIL", JSON.stringify({ written, skipped, missing, nested: nested.length }));
+`;
+
+let skillBinPath: string;
+let skillCompiled = false;
+let skillBuildStderr = "";
+
 beforeAll(() => {
   work = mkdtempSync(join(tmpdir(), "pb-compile-"));
   const harnessPath = join(work, "harness.ts");
@@ -62,6 +103,17 @@ beforeAll(() => {
     // shipped the original broken binary).
     buildStderr = build.stderr ?? "";
   }
+
+  const skillHarnessPath = join(work, "skill-harness.ts");
+  skillBinPath = join(work, "skill-bin");
+  writeFileSync(skillHarnessPath, SKILL_HARNESS);
+  const skillBuild = spawnSync(
+    "bun",
+    ["build", skillHarnessPath, "--compile", "--outfile", skillBinPath],
+    { cwd: REPO, encoding: "utf8" }
+  );
+  skillCompiled = skillBuild.status === 0;
+  if (!skillCompiled) skillBuildStderr = skillBuild.stderr ?? "";
 });
 
 afterAll(() => {
@@ -81,4 +133,17 @@ test("compiled binary embeds WASM grammars + SQLite schema and extracts structur
   expect(run.stderr ?? "").not.toContain("ENOENT");
   expect(run.status).toBe(0);
   expect(run.stdout).toContain("STRUCT_OK");
+});
+
+test("compiled binary embeds every brain-audit skill template and installs them outside the repo", () => {
+  expect(skillCompiled, `bun build --compile failed:\n${skillBuildStderr}`).toBe(true);
+  // cwd outside the repo: no templates/ directory anywhere up the tree, so a
+  // runtime filesystem read has nothing to find and must fail here if present.
+  const scratch = mkdtempSync(join(tmpdir(), "pb-skill-scratch-"));
+  const run = spawnSync(skillBinPath, [], { cwd: scratch, encoding: "utf8" });
+  rmSync(scratch, { recursive: true, force: true });
+
+  expect(run.stderr ?? "").not.toContain("ENOENT");
+  expect(run.status).toBe(0);
+  expect(run.stdout).toContain("SKILL_OK");
 });

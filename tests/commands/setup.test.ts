@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { UnparseableConfigError } from "../../src/registrars/json-config.js";
 import type { AIToolRegistrar } from "../../src/registrars/types.js";
@@ -114,6 +115,7 @@ describe("setup command", () => {
       dataDir,
       skipOllama: true,
       registrars: [badRegistrar, goodRegistrar],
+      skillInstall: "no",
     });
 
     expect(result.registeredTools).toEqual(["Cursor"]);
@@ -140,6 +142,7 @@ describe("setup command", () => {
       dataDir,
       skipOllama: true,
       registrars: [badRegistrar],
+      skillInstall: "no",
     });
 
     expect(result.registeredTools).toEqual([]);
@@ -188,6 +191,7 @@ describe("setup command", () => {
         dataDir,
         skipOllama: true,
         registrars: [fake],
+        skillInstall: "no",
         modelRouting: "no",
       });
 
@@ -205,6 +209,7 @@ describe("setup command", () => {
         dataDir,
         skipOllama: true,
         registrars: [fake],
+        skillInstall: "no",
         modelRouting: "yes",
         promptModelRouting: async () => {
           promptCalled = true;
@@ -227,6 +232,7 @@ describe("setup command", () => {
         dataDir,
         skipOllama: true,
         registrars: [fake],
+        skillInstall: "no",
         modelRouting: "ask",
         promptModelRouting: async () => {
           promptCalled = true;
@@ -249,6 +255,7 @@ describe("setup command", () => {
         dataDir: join(tempDir, "decline"),
         skipOllama: true,
         registrars: [declineFake],
+        skillInstall: "no",
         modelRouting: "ask",
         promptModelRouting: async () => {
           declinePromptCalled = true;
@@ -264,6 +271,7 @@ describe("setup command", () => {
         dataDir: join(tempDir, "accept"),
         skipOllama: true,
         registrars: [acceptFake],
+        skillInstall: "no",
         modelRouting: "ask",
         promptModelRouting: async () => {
           acceptPromptCalled = true;
@@ -289,10 +297,134 @@ describe("setup command", () => {
         dataDir,
         skipOllama: true,
         registrars: [plainRegistrar],
+        skillInstall: "no",
         modelRouting: "yes",
       });
 
       expect(result.registeredTools).toEqual(["Codex"]);
+    });
+  });
+
+  /**
+   * brain-audit skill install.
+   *
+   * Every test here MUST pass skillTargetDirs. Without it the real
+   * getSkillTargetDirs(registeredTools) resolves against homedir() and the
+   * suite writes brain-audit into the developer's actual ~/.claude/skills.
+   * That is not hypothetical — the project registry did exactly this and
+   * polluted a real home directory with ~180 entries.
+   */
+  describe("brain-audit skill install", () => {
+    function makeInstalledRegistrar(name: string): AIToolRegistrar {
+      return {
+        name,
+        isInstalled: async () => true,
+        register: async () => {},
+        writeRules: async () => {},
+      };
+    }
+
+    it('skillInstall: "yes" installs without prompting', async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      let prompted = false;
+
+      const result = await runSetup({
+        dataDir: join(tempDir, "data"),
+        skipOllama: true,
+        registrars: [makeInstalledRegistrar("Claude Code")],
+        modelRouting: "no",
+        skillInstall: "yes",
+        skillTargetDirs: [join(tempDir, "skills")],
+        promptSkillInstall: async () => {
+          prompted = true;
+          return true;
+        },
+      });
+
+      expect(prompted).toBe(false);
+      expect(result.skillTargets).toEqual([join(tempDir, "skills", "brain-audit")]);
+      expect(result.skillSkipped).toEqual([]);
+
+      const skillMd = await readFile(
+        join(tempDir, "skills", "brain-audit", "SKILL.md"),
+        "utf8"
+      );
+      expect(skillMd).toContain("name: brain-audit");
+    });
+
+    it('skillInstall: "no" skips entirely', async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+
+      const result = await runSetup({
+        dataDir: join(tempDir, "data"),
+        skipOllama: true,
+        registrars: [makeInstalledRegistrar("Claude Code")],
+        modelRouting: "no",
+        skillInstall: "no",
+        skillTargetDirs: [join(tempDir, "skills")],
+      });
+
+      expect(result.skillTargets).toEqual([]);
+      expect(existsSync(join(tempDir, "skills", "brain-audit"))).toBe(false);
+    });
+
+    it('skillInstall: "ask" defers to promptSkillInstall — declining writes nothing', async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      let prompted = false;
+
+      const result = await runSetup({
+        dataDir: join(tempDir, "data"),
+        skipOllama: true,
+        registrars: [makeInstalledRegistrar("Claude Code")],
+        modelRouting: "no",
+        skillInstall: "ask",
+        skillTargetDirs: [join(tempDir, "skills")],
+        promptSkillInstall: async () => {
+          prompted = true;
+          return false;
+        },
+      });
+
+      expect(prompted).toBe(true);
+      expect(result.skillTargets).toEqual([]);
+      expect(existsSync(join(tempDir, "skills", "brain-audit"))).toBe(false);
+    });
+
+    it("reports no targets when no tools were registered", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+
+      const result = await runSetup({
+        dataDir: join(tempDir, "data"),
+        skipOllama: true,
+        skipRegistration: true,
+        skillInstall: "yes",
+      });
+
+      expect(result.registeredTools).toEqual([]);
+      expect(result.skillTargets).toEqual([]);
+    });
+
+    /** Design §7: a hand-written brain-audit/ is left alone and setup still succeeds. */
+    it("warns and continues when the target is foreign, leaving it untouched", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const skillsRoot = join(tempDir, "skills");
+      const skillDir = join(skillsRoot, "brain-audit");
+      await mkdir(skillDir, { recursive: true });
+      const mine = "---\nname: brain-audit\n---\nhand-written, do not touch\n";
+      await writeFile(join(skillDir, "SKILL.md"), mine);
+
+      const result = await runSetup({
+        dataDir: join(tempDir, "data"),
+        skipOllama: true,
+        registrars: [makeInstalledRegistrar("Claude Code")],
+        modelRouting: "no",
+        skillInstall: "yes",
+        skillTargetDirs: [skillsRoot],
+      });
+
+      expect(result.skillTargets).toEqual([]);
+      expect(result.skillSkipped).toEqual([{ dir: skillDir, reason: "foreign" }]);
+      expect(await readFile(join(skillDir, "SKILL.md"), "utf8")).toBe(mine);
     });
   });
 });

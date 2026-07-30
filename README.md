@@ -71,7 +71,21 @@ Once `project-brain setup` has registered the MCP server in your AI tool, you ca
 | `/brain-reindex` | `project-brain reindex` | Drop and rebuild full index |
 | `/brain-health` | `project-brain health` | Diagnose Ollama, index staleness, git hook |
 
-The slash commands are Claude Code skills installed globally at `~/.claude/skills/brain-*/SKILL.md`. They work in any session regardless of the current project.
+These five are thin wrappers over the CLI. **project-brain does not install them** — write them yourself as skills in your assistant's global skills directory if you want the shortcuts, or just run the CLI.
+
+### `/brain-audit` — the one skill setup does install
+
+| Skill | Equivalent CLI | What it does |
+|---|---|---|
+| `/brain-audit` | *(none — host skill)* | Whole-project audit: dead code, orphan UI, broken flows, coverage gaps, plus findings by severity across security, performance and architecture |
+
+Unlike the `/brain-*` commands above, `brain-audit` has no CLI equivalent. It is a host skill: its logic lives in `SKILL.md` and runs inside the assistant, which calls project-brain's MCP tools to do the work. That is what lets it answer "is this export dead?" with `find_callers` instead of guessing from a grep.
+
+`project-brain setup` installs it into each registered tool's global skills directory (`~/.claude/skills/`, `~/.codex/skills/`, or the shared `~/.agents/skills/`). Opt out with `project-brain setup --no-brain-audit`.
+
+It runs discovery first, proposes an audit module set from what it found, and **waits for you to confirm** before loading anything — 34 modules exist, and loading all of them every time is what makes an audit expensive.
+
+Setup never overwrites a `brain-audit/` directory it did not create. If you have your own skill by that name, setup leaves it untouched and tells you.
 
 ## MCP Tools
 

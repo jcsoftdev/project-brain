@@ -32,6 +32,19 @@ export function parseModelRoutingFlag(args: string[]): "ask" | "yes" | "no" {
 }
 
 /**
+ * Resolve the non-interactive override for the brain-audit skill install.
+ *
+ * Mirrors `parseModelRoutingFlag`, but the default differs downstream: "ask"
+ * resolves to INSTALL in a non-interactive context, because the skill is part
+ * of what `setup` delivers. Only `--no-brain-audit` suppresses it.
+ */
+export function parseSkillInstallFlag(args: string[]): "ask" | "yes" | "no" {
+  if (args.includes("--brain-audit")) return "yes";
+  if (args.includes("--no-brain-audit")) return "no";
+  return "ask";
+}
+
+/**
  * Collect positional (non-flag) arguments, skipping both a valued flag AND
  * its following value. Flags not listed in `valuedFlags` are simply excluded
  * from the positionals themselves — they are not treated as consuming a
