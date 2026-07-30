@@ -122,6 +122,87 @@ describe("auditBundle — coverage", () => {
   });
 });
 
+describe("auditBundle — line-range anchors", () => {
+  /** One big orchestrator spanning the file, plus a small symbol inside it. */
+  function orchestratorGraph(): GraphStore {
+    const store = new GraphStore(openGraphDb(":memory:"));
+    store.replaceFile("src/big.ts", "typescript", "h", 0, [
+      {
+        name: "orchestrate",
+        kind: "function",
+        signature: "",
+        start_line: 1,
+        end_line: 500,
+        edges: [{ dst_name: "beta", edge_type: "call" }],
+      },
+      { name: "tiny", kind: "function", signature: "", start_line: 600, end_line: 610, edges: [] },
+    ]);
+    store.replaceFile("src/b.ts", "typescript", "h", 0, [
+      { name: "beta", kind: "function", signature: "", start_line: 1, end_line: 5, edges: [] },
+    ]);
+    store.resolveEdgesForFiles(["src/big.ts", "src/b.ts"]);
+    return store;
+  }
+
+  it("claims only the symbols that fit inside the range, not the whole file", () => {
+    // A range covers what LIVES in it. Treating it as a file-level anchor would
+    // let a ten-line citation claim a 500-line module.
+    const report = auditBundle(
+      bundle([concept("d/a.md", { type: "Decision", resource: "../src/big.ts#L600-L610" })]),
+      LAYOUT,
+      deps(orchestratorGraph(), 20)
+    );
+
+    const gaps = report.coverage.map((c) => c.name);
+    expect(gaps).not.toContain("tiny");
+    expect(gaps).toContain("orchestrate");
+  });
+
+  it("claims nothing when the range sits inside one big symbol", () => {
+    // The case that forced this: a ten-line block inside a 500-line function has
+    // no finer symbol to name. Claiming `orchestrate` would make the concept
+    // responsible for every call that function makes.
+    const report = auditBundle(
+      bundle([concept("d/a.md", { type: "Decision", resource: "../src/big.ts#L100-L110" })]),
+      LAYOUT,
+      deps(orchestratorGraph(), 20)
+    );
+
+    // Nothing is claimed, so every symbol — including the enclosing function —
+    // stays on the backlog, and no link can be inferred from the concept.
+    expect(report.coverage.map((c) => c.name).sort()).toEqual(["beta", "orchestrate", "tiny"]);
+    expect(report.links).toEqual([]);
+  });
+
+  it("still tracks staleness on the cited lines even when it claims no symbol", () => {
+    // Coverage and staleness are independent: the range goes straight to the
+    // clock, so a sub-function citation is still watched for drift.
+    const seen: { path: string; lines: { start: number; end: number } | null }[] = [];
+    auditBundle(
+      bundle([
+        concept("d/a.md", {
+          type: "Decision",
+          resource: "../src/big.ts#L100-L110",
+          generated: { by: "human:x", at: "2026-01-01T00:00:00Z" },
+        }),
+      ]),
+      LAYOUT,
+      {
+        graph: orchestratorGraph(),
+        clock: {
+          lastChanged: (path, lines) => {
+            seen.push({ path, lines: lines ?? null });
+            return { at: null, uncommitted: false };
+          },
+        },
+        exists: allOnDisk,
+      }
+    );
+
+    expect(seen).toContainEqual({ path: "src/big.ts", lines: { start: 100, end: 110 } });
+  });
+});
+
 describe("auditBundle — coverage excludes tests", () => {
   function graphWithTests(): GraphStore {
     const store = new GraphStore(openGraphDb(":memory:"));

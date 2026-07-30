@@ -148,6 +148,13 @@ interface CoveredSymbol {
  * anchor as covering only itself would put every symbol of an explained file
  * back on the backlog. Broken anchors cover nothing — they explain code that
  * is no longer there.
+ *
+ * A LINE-RANGE anchor covers only the symbols that fit inside it. A ten-line
+ * citation must not claim a 500-line module, and — the case this exists for — a
+ * range sitting inside one big function claims nothing at all, because naming
+ * the enclosing function would make the concept responsible for every call that
+ * function makes. Staleness is unaffected: the range goes straight to the clock
+ * without passing through coverage, so a sub-function citation is still watched.
  */
 function buildCoverage(
   anchors: ResolvedAnchor[],
@@ -166,7 +173,11 @@ function buildCoverage(
     const inFile = byFile.get(anchor.path);
     if (!inFile) continue;
     if (anchor.symbol === null) {
-      for (const symbol of inFile) cover(symbol, anchor.concept);
+      const range = anchor.lines;
+      for (const symbol of inFile) {
+        if (range && (symbol.start_line < range.start || symbol.end_line > range.end)) continue;
+        cover(symbol, anchor.concept);
+      }
       continue;
     }
     const hit = inFile.find((s) => s.name === anchor.symbol);
