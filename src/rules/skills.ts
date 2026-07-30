@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import skillMd from "../../templates/skills/brain-audit/SKILL.md" with { type: "text" };
+import okfSkillMd from "../../templates/skills/brain-okf/SKILL.md" with { type: "text" };
 
 // A. Product & intent
 import functional from "../../templates/skills/brain-audit/references/functional.md" with { type: "text" };
@@ -101,8 +102,27 @@ export const BRAIN_AUDIT_FILES: Record<string, string> = {
   "references/versioning-compatibility.md": versioningCompatibility,
 };
 
-/** Directory name this skill occupies inside a skills root. */
-const SKILL_DIR_NAME = "brain-audit";
+/**
+ * brain-okf — how to write an Open Knowledge Format concept.
+ *
+ * Single file on purpose. brain-audit needs `references/` because it gates 34
+ * independent modules and loading all of them is the cost it exists to avoid;
+ * brain-okf is one coherent task, so splitting it would add indirection with
+ * nothing to defer.
+ */
+export const BRAIN_OKF_FILES: Record<string, string> = {
+  "SKILL.md": okfSkillMd,
+};
+
+/**
+ * Every skill setup installs, keyed by the directory name it occupies inside a
+ * skills root. Ownership is proven per skill directory, so a user's
+ * hand-written `brain-okf/` is left alone even while `brain-audit/` upgrades.
+ */
+export const SKILL_MANIFESTS: Record<string, Record<string, string>> = {
+  "brain-audit": BRAIN_AUDIT_FILES,
+  "brain-okf": BRAIN_OKF_FILES,
+};
 
 /**
  * Ownership marker written into SKILL.md's frontmatter. Only files
@@ -196,19 +216,21 @@ export async function installSkill(targetDirs: string[]): Promise<InstallResult>
   const skipped: SkippedTarget[] = [];
 
   for (const dir of targetDirs) {
-    const skillDir = join(dir, SKILL_DIR_NAME);
-    const ownership = await inspectOwnership(skillDir);
-    if (ownership !== "absent" && ownership !== "ours") {
-      skipped.push({ dir: skillDir, reason: ownership });
-      continue;
-    }
+    for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
+      const skillDir = join(dir, name);
+      const ownership = await inspectOwnership(skillDir);
+      if (ownership !== "absent" && ownership !== "ours") {
+        skipped.push({ dir: skillDir, reason: ownership });
+        continue;
+      }
 
-    for (const [rel, content] of Object.entries(BRAIN_AUDIT_FILES)) {
-      const dest = join(skillDir, rel);
-      await mkdir(dirname(dest), { recursive: true });
-      await writeFile(dest, content, "utf8");
+      for (const [rel, content] of Object.entries(manifest)) {
+        const dest = join(skillDir, rel);
+        await mkdir(dirname(dest), { recursive: true });
+        await writeFile(dest, content, "utf8");
+      }
+      written.push(skillDir);
     }
-    written.push(skillDir);
   }
 
   return { written, skipped };

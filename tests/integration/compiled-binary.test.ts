@@ -52,7 +52,7 @@ else console.log("STRUCT_FAIL", JSON.stringify({ sym: sym.length, callees }));
 // --compile, import.meta.dir is a virtual /$bunfs path with no traversal back
 // to a real templates/ directory, so every read fails with ENOENT.
 const SKILL_HARNESS = `
-import { installSkill, BRAIN_AUDIT_FILES } from "${REPO}/src/rules/skills.js";
+import { installSkill, SKILL_MANIFESTS } from "${REPO}/src/rules/skills.js";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,25 +60,30 @@ import { join } from "node:path";
 const dir = mkdtempSync(join(tmpdir(), "pb-skill-cbin-"));
 const { written, skipped } = await installSkill([dir]);
 
-// Every embedded file must survive the compile AND land non-empty on disk.
-// Count is not hardcoded: Work Unit 2 grows the manifest and this still holds.
+// Every embedded file of every registered skill must survive the compile AND
+// land non-empty on disk. Nothing here is hardcoded to a count or a skill name:
+// adding a skill or a reference file keeps this assertion honest by itself.
 let missing = [];
-for (const [rel, content] of Object.entries(BRAIN_AUDIT_FILES)) {
-  let onDisk = "";
-  try { onDisk = readFileSync(join(dir, "brain-audit", rel), "utf8"); } catch (e) { missing.push(rel + ":throw"); continue; }
-  if (onDisk.length === 0 || onDisk !== content) missing.push(rel);
+let nested = 0;
+for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
+  for (const [rel, content] of Object.entries(manifest)) {
+    if (rel.includes("/")) nested++;
+    let onDisk = "";
+    try { onDisk = readFileSync(join(dir, name, rel), "utf8"); } catch (e) { missing.push(name + "/" + rel + ":throw"); continue; }
+    if (onDisk.length === 0 || onDisk !== content) missing.push(name + "/" + rel);
+  }
 }
 
-const nested = Object.keys(BRAIN_AUDIT_FILES).filter((k) => k.startsWith("references/"));
+const skillNames = Object.keys(SKILL_MANIFESTS);
 const ok =
-  written.length === 1 &&
+  written.length === skillNames.length &&
   skipped.length === 0 &&
   missing.length === 0 &&
-  nested.length > 0 &&
-  BRAIN_AUDIT_FILES["SKILL.md"].includes("name: brain-audit");
+  nested > 0 &&
+  skillNames.every((n) => SKILL_MANIFESTS[n]["SKILL.md"].includes("name: " + n));
 
 if (ok) console.log("SKILL_OK");
-else console.log("SKILL_FAIL", JSON.stringify({ written, skipped, missing, nested: nested.length }));
+else console.log("SKILL_FAIL", JSON.stringify({ written, skipped, missing, nested, skills: skillNames }));
 `;
 
 let skillBinPath: string;

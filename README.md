@@ -73,19 +73,20 @@ Once `project-brain setup` has registered the MCP server in your AI tool, you ca
 
 These five are thin wrappers over the CLI. **project-brain does not install them** — write them yourself as skills in your assistant's global skills directory if you want the shortcuts, or just run the CLI.
 
-### `/brain-audit` — the one skill setup does install
+### Host skills setup installs
 
 | Skill | Equivalent CLI | What it does |
 |---|---|---|
 | `/brain-audit` | *(none — host skill)* | Whole-project audit: dead code, orphan UI, broken flows, coverage gaps, plus findings by severity across security, performance and architecture |
+| `/brain-okf` | *(none — host skill)* | Write an OKF concept: the reasoning behind code, anchored to a verified symbol and checkable by `okf audit` |
 
-Unlike the `/brain-*` commands above, `brain-audit` has no CLI equivalent. It is a host skill: its logic lives in `SKILL.md` and runs inside the assistant, which calls project-brain's MCP tools to do the work. That is what lets it answer "is this export dead?" with `find_callers` instead of guessing from a grep.
+Unlike the `/brain-*` commands above, these have no CLI equivalent. They are **host skills**: the logic lives in `SKILL.md` and runs inside the assistant, which calls project-brain's MCP tools to do the work. That is what lets `brain-audit` answer "is this export dead?" with `find_callers` instead of guessing from a grep, and what lets `brain-okf` verify an anchor with `find_symbol` before writing it.
 
-`project-brain setup` installs it into each registered tool's global skills directory (`~/.claude/skills/`, `~/.codex/skills/`, or the shared `~/.agents/skills/`). Opt out with `project-brain setup --no-brain-audit`.
+`project-brain setup` installs them into each registered tool's global skills directory (`~/.claude/skills/`, `~/.codex/skills/`, or the shared `~/.agents/skills/`). Opt out with `project-brain setup --no-skills` (`--no-brain-audit` still works as an alias).
 
-It runs discovery first, proposes an audit module set from what it found, and **waits for you to confirm** before loading anything — 34 modules exist, and loading all of them every time is what makes an audit expensive.
+**Both are offered, not scheduled.** Nothing invokes them for you and nothing fires on commit — you decide when. `brain-audit` runs discovery, proposes an audit module set, and waits for you to confirm before loading anything: 34 modules exist, and loading all of them every time is what makes an audit expensive. `brain-okf` proposes the type, title, and anchor and waits before creating a file, because whether an insight deserves a permanent home is your call, not the assistant's.
 
-Setup never overwrites a `brain-audit/` directory it did not create. If you have your own skill by that name, setup leaves it untouched and tells you.
+Setup never overwrites a skill directory it did not create. Ownership is proven per directory, so your own hand-written `brain-okf/` is left untouched — and reported — while `brain-audit/` upgrades beside it.
 
 ## MCP Tools
 

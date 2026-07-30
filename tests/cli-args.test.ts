@@ -74,6 +74,24 @@ describe("parseSkillInstallFlag", () => {
   it('does not read --no-brain-audit as a bare --brain-audit', () => {
     expect(parseSkillInstallFlag(["--no-brain-audit"])).toBe("no");
   });
+
+  it('returns "yes" for --skills', () => {
+    expect(parseSkillInstallFlag(["setup", "--skills"])).toBe("yes");
+  });
+
+  it('returns "no" for --no-skills', () => {
+    expect(parseSkillInstallFlag(["setup", "--no-skills"])).toBe("no");
+  });
+
+  it('does not read --no-skills as a bare --skills', () => {
+    expect(parseSkillInstallFlag(["--no-skills"])).toBe("no");
+  });
+
+  /** The old spelling was documented; scripts using it must keep working. */
+  it("treats the brain-audit spellings as aliases of the skills flags", () => {
+    expect(parseSkillInstallFlag(["--brain-audit"])).toBe("yes");
+    expect(parseSkillInstallFlag(["--no-brain-audit"])).toBe("no");
+  });
 });
 
 describe("collectPositionals", () => {

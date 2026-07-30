@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { UnparseableConfigError } from "../../src/registrars/json-config.js";
 import type { AIToolRegistrar } from "../../src/registrars/types.js";
+import { SKILL_MANIFESTS } from "../../src/rules/skills.js";
 
 describe("setup command", () => {
   let tempDir: string;
@@ -352,14 +353,18 @@ describe("setup command", () => {
       });
 
       expect(prompted).toBe(false);
-      expect(result.skillTargets).toEqual([join(tempDir, "skills", "brain-audit")]);
       expect(result.skillSkipped).toEqual([]);
-
-      const skillMd = await readFile(
-        join(tempDir, "skills", "brain-audit", "SKILL.md"),
-        "utf8"
+      // Every registered skill lands, not just the first one.
+      expect(result.skillTargets.sort()).toEqual(
+        Object.keys(SKILL_MANIFESTS)
+          .map((name) => join(tempDir, "skills", name))
+          .sort()
       );
-      expect(skillMd).toContain("name: brain-audit");
+
+      for (const name of Object.keys(SKILL_MANIFESTS)) {
+        const skillMd = await readFile(join(tempDir, "skills", name, "SKILL.md"), "utf8");
+        expect(skillMd, name).toContain(`name: ${name}`);
+      }
     });
 
     it('skillInstall: "no" skips entirely', async () => {
@@ -432,9 +437,11 @@ describe("setup command", () => {
         skillTargetDirs: [skillsRoot],
       });
 
-      expect(result.skillTargets).toEqual([]);
       expect(result.skillSkipped).toEqual([{ dir: skillDir, reason: "foreign" }]);
+      expect(result.skillTargets).not.toContain(skillDir);
       expect(await readFile(join(skillDir, "SKILL.md"), "utf8")).toBe(mine);
+      // Setup still completed: the other skills installed beside the foreign one.
+      expect(result.skillTargets.length).toBe(Object.keys(SKILL_MANIFESTS).length - 1);
     });
   });
 });

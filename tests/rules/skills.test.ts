@@ -17,6 +17,7 @@ import { join } from "node:path";
 import {
   BRAIN_AUDIT_FILES,
   GENERATOR_MARKER,
+  SKILL_MANIFESTS,
   getSkillTargetDirs,
   inspectOwnership,
   installSkill,
@@ -83,6 +84,43 @@ describe("BRAIN_AUDIT_FILES", () => {
   });
 });
 
+/**
+ * The manifest is hand-maintained, so a new skill directory added under
+ * templates/skills/ but never registered ships to nobody — silently, and with
+ * every test still green. This is the same drift brain-audit's parity test
+ * guards, one level up: skill directories rather than reference files.
+ */
+describe("SKILL_MANIFESTS registry parity", () => {
+  it("registers every skill directory under templates/skills", async () => {
+    const root = join(import.meta.dir, "../../templates/skills");
+    const onDisk = (await readdir(root, { withFileTypes: true }))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+    expect(Object.keys(SKILL_MANIFESTS).sort()).toEqual(onDisk);
+  });
+
+  it("every registered skill carries a SKILL.md with the ownership marker", () => {
+    for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
+      expect(manifest["SKILL.md"], `${name} has no SKILL.md`).toBeDefined();
+      expect(manifest["SKILL.md"], `${name} lacks the marker`).toContain(GENERATOR_MARKER);
+      expect(manifest["SKILL.md"], `${name} frontmatter name mismatch`).toContain(`name: ${name}`);
+    }
+  });
+
+  it("every manifest entry matches its file on disk", async () => {
+    for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
+      for (const rel of Object.keys(manifest)) {
+        const onDisk = await readFile(
+          join(import.meta.dir, "../../templates/skills", name, rel),
+          "utf8"
+        );
+        expect(onDisk, `${name}/${rel} drifted from the manifest`).toBe(manifest[rel]);
+      }
+    }
+  });
+});
+
 describe("installSkill", () => {
   let dirA: string;
   let dirB: string;
@@ -122,10 +160,24 @@ describe("installSkill", () => {
     );
   });
 
-  it("reports written targets", async () => {
+  it("reports one written directory per skill per target", async () => {
     const { written, skipped } = await installSkill([dirA]);
-    expect(written).toEqual([join(dirA, "brain-audit")]);
+    expect(written.sort()).toEqual(
+      Object.keys(SKILL_MANIFESTS)
+        .map((name) => join(dirA, name))
+        .sort()
+    );
     expect(skipped).toEqual([]);
+  });
+
+  it("installs every skill in the registry, not just the first", async () => {
+    await installSkill([dirA]);
+    for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
+      for (const rel of Object.keys(manifest)) {
+        const content = await readFile(join(dirA, name, rel), "utf8");
+        expect(content, `${name}/${rel}`).toBe(manifest[rel]);
+      }
+    }
   });
 });
 
@@ -258,10 +310,26 @@ describe("ownership guard (design §7 — Defect 3)", () => {
 
     const { written, skipped } = await installSkill([dirA]);
 
-    expect(written).toEqual([]);
     expect(skipped).toEqual([{ dir: skillDir, reason: "foreign" }]);
+    expect(written).not.toContain(skillDir);
     expect(await readFile(join(skillDir, "SKILL.md"), "utf8")).toBe(mine);
     expect(await readFile(join(skillDir, "references", "custom.md"), "utf8")).toBe("mine too");
+  });
+
+  /**
+   * Ownership is per skill DIRECTORY, not per skills root. A hand-written
+   * brain-audit/ must not stop brain-okf/ from installing beside it — they are
+   * independent directories that happen to share a parent the user owns.
+   */
+  it("a foreign skill does not block a sibling skill in the same root", async () => {
+    await mkdir(join(dirA, "brain-audit"), { recursive: true });
+    await writeFile(join(dirA, "brain-audit", "SKILL.md"), "hand-written");
+
+    const { written, skipped } = await installSkill([dirA]);
+
+    expect(skipped.map((s) => s.dir)).toEqual([join(dirA, "brain-audit")]);
+    expect(written).toContain(join(dirA, "brain-okf"));
+    expect(await readFile(join(dirA, "brain-audit", "SKILL.md"), "utf8")).toBe("hand-written");
   });
 
   it("a foreign target does not block a sibling target", async () => {
@@ -270,8 +338,8 @@ describe("ownership guard (design §7 — Defect 3)", () => {
 
     const { written, skipped } = await installSkill([dirA, dirB]);
 
-    expect(written).toEqual([join(dirB, "brain-audit")]);
     expect(skipped.map((s) => s.dir)).toEqual([join(dirA, "brain-audit")]);
+    expect(written).toContain(join(dirB, "brain-audit"));
     expect(await readFile(join(dirB, "brain-audit", "SKILL.md"), "utf8")).toBe(
       BRAIN_AUDIT_FILES["SKILL.md"]
     );
