@@ -5,8 +5,8 @@ description: Filesystem mtimes break on clone; a declared attestation alone flag
 tags: [okf, audit, staleness, git]
 resource: ../src/git/last-changed.ts
 sources:
-  - resource: ../src/okf/audit.ts
-    title: findStale
+  - resource: ../src/okf/audit.ts#findStale
+    title: The staleness pass itself
 status: stable
 generated: { by: "human:jcsoftdev", at: 2026-07-29T20:50:00-05:00 }
 ---

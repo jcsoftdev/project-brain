@@ -45,6 +45,25 @@ anchors are untouched.
   the symbol branch would look up a "symbol" named `L25-L10`, turning a broken
   anchor into a missing one.
 
+# Anchor as narrowly as the prose actually explains
+
+A file-level anchor claims every symbol in the file, and link inference reads
+that claim literally: the concept becomes responsible for every outbound call
+that file makes. Anchor a 300-line module to explain one function in it and the
+audit will propose links to every concept that owns any of that module's
+dependencies.
+
+This is not a defect in the inference — it is the inference reporting an
+over-broad claim. It happened immediately here. `coverage-backlog-skips-tests`
+anchored all of `src/okf/audit.ts` while explaining one filter, and the audit
+proposed two links from it, including one to a git gotcha it has nothing to do
+with. Narrowing the anchor to `#findCoverageGaps` plus a `sources[]` entry for
+`#looksLikeTest` removed both suggestions, because the claim then matched the
+prose.
+
+Use a file-level anchor when the concept really is about the whole module; reach
+for `#symbol` the moment it is not.
+
 # Where a symbol anchor is NOT called broken
 
 If the graph holds no symbols at all for the anchored file, a `#fragment` is left

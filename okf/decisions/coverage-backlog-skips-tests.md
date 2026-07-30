@@ -3,7 +3,10 @@ type: Decision
 title: The coverage backlog skips tests, and nothing else does
 description: PageRank ranks test helpers highly, but a helper has no why worth recording — while knowledge about a test is legitimate.
 tags: [okf, audit, coverage, testing]
-resource: ../src/okf/audit.ts
+resource: ../src/okf/audit.ts#findCoverageGaps
+sources:
+  - resource: ../src/okf/audit.ts#looksLikeTest
+    title: The path matching this decision describes
 status: stable
 generated: { by: "human:jcsoftdev", at: 2026-07-29T20:50:00-05:00 }
 ---
@@ -53,3 +56,7 @@ Trivial accessors still reach the backlog: `get`, `set`, and `key` on a cache
 class rank highly and explain nothing. A span-length or accessor heuristic would
 cut them, but every version tried also cut legitimate small functions. Left
 unfiltered on purpose — a little noise beats silently hiding real gaps.
+
+This document is deliberately anchored to two symbols rather than to
+`src/okf/audit.ts` as a whole; see
+[Anchor as narrowly as the prose actually explains](/decisions/anchors-resolve-from-the-bundle-root.md).
