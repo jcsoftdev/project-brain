@@ -1,6 +1,10 @@
 # Knowledge Update Log
 
 ## 2026-07-30
+* **Creation**: [The hook and the MCP server run what is installed](/gotchas/the-hook-runs-what-is-installed.md) —
+  the real cause of the bundle's index pollution: the routing was correct all
+  along, but the installed binary predated it and overwrote the projection on
+  every commit.
 * **Creation**: [A skipped file keeps its chunks](/gotchas/a-skipped-file-keeps-its-chunks.md) —
   found by running the new cross-graph audit against this bundle: `log.md` itself
   was in the vector index, orphaned by the OKF routing that skips it.
