@@ -9,3 +9,10 @@
 * **Creation**: [Language.load ignores Bun's /$bunfs](/gotchas/language-load-ignores-bunfs.md).
 * **Creation**: [new Worker() can throw synchronously](/gotchas/worker-constructor-throws.md).
 * **Creation**: [mockRejectedValueOnce rejects eagerly](/gotchas/mock-rejected-value-is-eager.md).
+* **Creation**: [Staleness compares git commit dates, and the baseline is two dates](/decisions/staleness-baseline-is-two-dates.md).
+* **Creation**: [The coverage backlog skips tests, and nothing else does](/decisions/coverage-backlog-skips-tests.md).
+* **Creation**: [Anchors resolve from the bundle root, not from the document](/decisions/anchors-resolve-from-the-bundle-root.md).
+* **Creation**: [git log -L errors when the range runs past the end of the file](/gotchas/git-log-L-fails-past-end-of-file.md).
+* **Update**: [A regression guard must be seen failing](/constraints/guards-must-be-seen-failing.md) —
+  added "break one thing at a time" after five simultaneous breaks masked each
+  other, and the note that a negative test is only as strong as its positive twin.

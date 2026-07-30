@@ -43,3 +43,26 @@ The same failure mode bit the worker-candidate fallback from the other side: a
 guard pinned to one runtime behaviour kept passing while the thing it guarded
 stopped working. See
 [new Worker() can throw synchronously](/gotchas/worker-constructor-throws.md).
+
+# Break ONE thing at a time
+
+Disabling several guards in one pass hides the result. Verifying the cross-graph
+audit, five behaviours were broken together — file-level coverage, backlog
+ordering, prose-link suppression, the self-link check, and impact filtering — and
+only two tests went red. It read as "three assertions are worthless."
+
+They were fine. The first break emptied the coverage index, and the other three
+guards only run on covered symbols, so their tests could not fail no matter how
+broken the code was. Re-running with those three breaks alone turned all five
+remaining tests red.
+
+A break that disables an early stage masks every guard downstream of it. Break
+one behaviour, run, restore, repeat — or at minimum only group breaks that cannot
+feed each other.
+
+# Negative tests are only as strong as their positive twin
+
+A test asserting `toEqual([])` passes against a stub that returns `[]`. It proves
+nothing alone. What makes it real is a positive test in the same suite that the
+same implementation must also satisfy — together they pin that the code
+*discriminates*. When a negative assertion has no positive twin, it is decoration.
