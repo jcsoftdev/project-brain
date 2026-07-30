@@ -313,6 +313,16 @@ describe("setup command", () => {
    * suite writes brain-audit into the developer's actual ~/.claude/skills.
    * That is not hypothetical — the project registry did exactly this and
    * polluted a real home directory with ~180 entries.
+   *
+   * And do NOT reach for a scratch $HOME instead. Bun caches os.homedir() on
+   * its first call, so redirecting HOME afterwards is silently ignored:
+   *
+   *   const before = homedir();        // primes the cache with the real home
+   *   process.env.HOME = scratch;
+   *   homedir() === before             // true — isolation lost, no error
+   *
+   * An end-to-end run of runSetup written that way wrote into three real home
+   * directories while reporting success. Injection is the only sound seam here.
    */
   describe("brain-audit skill install", () => {
     function makeInstalledRegistrar(name: string): AIToolRegistrar {
