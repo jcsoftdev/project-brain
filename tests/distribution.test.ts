@@ -91,9 +91,17 @@ describe("README.md (T-10)", () => {
     expect(content).toContain("bun install -g project-brain");
   });
 
-  it("contains bun build ./src/cli.ts --compile", async () => {
+  /**
+   * The build command MUST pass worker.ts as a second entrypoint. Without it
+   * `--compile` does not bundle the parser worker pool's module graph or its
+   * embedded WASM, and the resulting binary silently extracts zero symbols —
+   * every structural tool returns empty with no error. The README documented
+   * the single-entrypoint form for a while, which is a recipe for a broken build.
+   */
+  it("documents the build with BOTH entrypoints, not just cli.ts", async () => {
     const content = await loadReadme();
-    expect(content).toContain("bun build ./src/cli.ts --compile");
+    expect(content).toContain("bun build ./src/cli.ts ./src/parser/worker.ts --compile");
+    expect(content).not.toMatch(/bun build \.\/src\/cli\.ts --compile/);
   });
 
   it("contains setup command reference", async () => {

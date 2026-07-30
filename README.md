@@ -42,14 +42,43 @@ bun install -g project-brain
 npm install -g project-brain
 ```
 
-### Standalone binary (no runtime required)
+### No package manager
+
+The published binary is a `bun build --compile` artifact with the runtime, WASM grammars and templates embedded, so it needs no Node, no Bun, and nothing else at runtime.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jcsoftdev/project-brain/main/scripts/install.sh | sh
+```
+
+Installs to `~/.local/bin` (override with `BRAIN_INSTALL_DIR`). Pin a version with `BRAIN_VERSION=v0.16.0`. To update, re-run it.
+
+Apple Silicon, Linux x64 and Linux arm64 have published binaries. **Intel macOS does not** — the script says so instead of handing you an arm64 binary; use a registry install there.
+
+### Homebrew / Scoop
+
+Each release attaches a generated `project-brain.rb` and `project-brain.json`, checksummed against the real assets. Once a tap and bucket exist:
+
+```bash
+brew install jcsoftdev/tap/project-brain     # macOS (Apple Silicon), Linux
+scoop install project-brain                  # Windows
+```
+
+Whichever channel you use, `project-brain update` reads the binary's own path to work out how it was installed and prints the right command — `brew upgrade`, `scoop update`, or the package manager's. For a channel it cannot drive it says so rather than guessing, because a guessed `npm install -g` would leave a second copy shadowing the first.
+
+### Build it yourself
 
 ```bash
 git clone https://github.com/jcsoftdev/project-brain
 cd project-brain
-bun build ./src/cli.ts --compile --outfile project-brain
+bun build ./src/cli.ts ./src/parser/worker.ts --compile --outfile project-brain
 ./project-brain --help
 ```
+
+`worker.ts` is a required second entrypoint — without it the parser's worker pool cannot resolve its own imports inside the compiled binary and silently extracts zero symbols.
+
+### Keeping the host skills current
+
+Skills live in your assistant's global skills directory, not in the package, so upgrading the binary does not move them. project-brain compares the installed skill content against what the running binary carries and refreshes any directory it originally created — whichever way you upgraded. It never creates one (that is `setup`'s job) and never touches a directory it cannot prove it wrote. Opt out with `BRAIN_NO_SKILL_REFRESH=1`.
 
 ## Usage modes
 
