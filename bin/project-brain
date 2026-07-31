@@ -42,7 +42,19 @@ try {
     // Setting process.env mid-process (in this parent, or inside cli.ts)
     // is too late and the "vector index statistics include centroids" WARN
     // still fires.
-    env: { ...process.env, LANCE_INCLUDE_VECTOR_CENTROIDS: process.env.LANCE_INCLUDE_VECTOR_CENTROIDS ?? "false" },
+    env: {
+      ...process.env,
+      LANCE_INCLUDE_VECTOR_CENTROIDS: process.env.LANCE_INCLUDE_VECTOR_CENTROIDS ?? "false",
+      // Which pid the long-running `serve` should treat as its client.
+      //
+      // execFileSync blocks this shim for the child's whole life, so the child's
+      // parent is THIS process, not the AI tool that launched it. A server that
+      // watched its parent would see the shim alive forever and never notice the
+      // tool crashing — the leak that left servers running for days. Hand down
+      // our own parent so it watches the tool. Already-set wins, so a caller can
+      // point it somewhere deliberately.
+      BRAIN_CLIENT_PID: process.env.BRAIN_CLIENT_PID ?? String(process.ppid),
+    },
   });
 } catch (err) {
   if (err && typeof err.status === "number") process.exit(err.status);

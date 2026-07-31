@@ -145,7 +145,15 @@ switch (command) {
       // it is useless; asking whether the ORIGINAL parent still exists is the
       // check that works. Signal 0 performs the permission and existence test
       // without delivering anything.
-      const parentPid = process.ppid;
+      //
+      // The pid to watch is the CLIENT's, which is not always our parent. The
+      // npm install path puts `bin/project-brain` in between: it runs this
+      // binary through execFileSync and blocks, so our parent is that shim. If
+      // the AI tool dies while the shim sits blocked, a parent check sees a live
+      // parent and we leak anyway. The shim hands its own parent down as
+      // BRAIN_CLIENT_PID precisely so we watch the tool instead. Fixing this end
+      // fixes the pair — once we exit, execFileSync returns and the shim exits.
+      const parentPid = Number(process.env.BRAIN_CLIENT_PID) || process.ppid;
       const orphanCheck = setInterval(() => {
         try {
           process.kill(parentPid, 0);
