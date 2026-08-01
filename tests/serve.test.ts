@@ -198,4 +198,80 @@ describe("createShutdownHandler", () => {
 
     expect<number | null>(exitCode).toBe(0);
   });
+
+  it("closes every closeable it is given, not just the first", async () => {
+    const { createShutdownHandler } = await import("../src/serve.js");
+
+    let ownClosed = 0, foreignClosed = 0;
+    const shutdown = createShutdownHandler(
+      null,
+      () => {},
+      [{ close: () => { ownClosed++; } }, { close: () => { foreignClosed++; } }]
+    );
+    await shutdown();
+
+    expect(ownClosed).toBe(1);
+    expect(foreignClosed, "second closeable was never released").toBe(1);
+  });
+
+  /**
+   * Shutdown has three independent triggers — SIGINT, SIGTERM, and the orphan
+   * interval — and the orphan interval keeps firing every ORPHAN_CHECK_MS
+   * while the FIRST shutdown is still awaiting watcher.stop()'s drain, which
+   * blocks for as long as an in-flight sync takes. Without a guard that is a
+   * double watcher.stop() and a double graph.close() on a live SQLite handle.
+   */
+  it("runs its teardown once even when called repeatedly", async () => {
+    const { createShutdownHandler } = await import("../src/serve.js");
+
+    let stops = 0, closes = 0, exits = 0;
+    const watcher = { stop: async () => { stops++; } };
+    const shutdown = createShutdownHandler(
+      watcher,
+      () => { exits++; },
+      { close: () => { closes++; } }
+    );
+
+    await shutdown();
+    await shutdown();
+    await shutdown();
+
+    expect(stops, "watcher stopped more than once").toBe(1);
+    expect(closes, "graph handle closed more than once").toBe(1);
+    expect(exits).toBe(1);
+  });
+
+  /** The realistic race: a slow drain, with more triggers landing mid-flight. */
+  it("collapses concurrent calls onto the first teardown", async () => {
+    const { createShutdownHandler } = await import("../src/serve.js");
+
+    let stops = 0, closes = 0, exits = 0;
+    let releaseDrain: (() => void) | null = null;
+    const watcher = {
+      stop: async () => {
+        stops++;
+        await new Promise<void>((resolve) => { releaseDrain = resolve; });
+      },
+    };
+    const shutdown = createShutdownHandler(
+      watcher,
+      () => { exits++; },
+      { close: () => { closes++; } }
+    );
+
+    const first = shutdown();
+    await Promise.resolve();
+    const second = shutdown();   // lands while the drain is still blocked
+    const third = shutdown();
+
+    expect(stops, "a concurrent call started a second teardown").toBe(1);
+    expect(closes, "closed the graph while the watcher was still draining").toBe(0);
+
+    releaseDrain!();
+    await Promise.all([first, second, third]);
+
+    expect(stops).toBe(1);
+    expect(closes).toBe(1);
+    expect(exits).toBe(1);
+  });
 });

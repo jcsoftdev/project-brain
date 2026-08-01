@@ -77,19 +77,41 @@ interface Closeable {
 }
 
 /**
- * Builds a graceful-shutdown handler: stops the watcher (if any), closes the
- * shared graph connection (if any), then exits.
+ * Builds a graceful-shutdown handler: stops the watcher (if any), closes every
+ * handle it was given (if any), then exits.
  * Extracted from cli.ts so the shutdown path is unit-testable — `exit` is
  * injectable to avoid killing the test process.
+ *
+ * `graphs` accepts a list because the server owns more than one handle: its own
+ * project graph plus the cache of foreign project graphs the structural tools
+ * opened on demand. Both must be released, and neither may be skipped because
+ * an earlier one threw on close.
+ *
+ * The returned handler is IDEMPOTENT, and deliberately so. Three independent
+ * triggers call it — SIGINT, SIGTERM, and the orphan-check interval — and the
+ * interval keeps firing every ORPHAN_CHECK_MS while the first call is still
+ * awaiting watcher.stop(), which drains any in-flight sync and can therefore
+ * block for minutes. Unguarded, that is a second watcher.stop() and a
+ * close() on a handle the first call already released. Repeat calls return the
+ * first teardown's promise instead of starting their own.
  */
 export function createShutdownHandler(
   watcher: Stoppable | null,
   exit: (code: number) => void = (code) => process.exit(code),
-  graph: Closeable | null = null
+  graphs: Closeable | Closeable[] | null = null
 ): () => Promise<void> {
-  return async () => {
-    if (watcher) await watcher.stop();
-    if (graph) { try { graph.close(); } catch {} }
-    exit(0);
+  const handles = graphs === null ? [] : Array.isArray(graphs) ? graphs : [graphs];
+  let inFlight: Promise<void> | null = null;
+
+  return () => {
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      if (watcher) await watcher.stop();
+      for (const handle of handles) {
+        try { handle.close(); } catch {}
+      }
+      exit(0);
+    })();
+    return inFlight;
   };
 }
