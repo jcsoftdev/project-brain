@@ -38,7 +38,8 @@ function printHelp() {
   console.log(`project-brain — MCP server for codebase knowledge
 
 Usage: project-brain [command]
-Env: BRAIN_EMBED_BATCH_SIZE, BRAIN_EMBED_CONCURRENCY, BRAIN_OLLAMA_HOSTS, BRAIN_EMBED_MODEL (see README "Tuning")
+Env: BRAIN_EMBED_BATCH_SIZE, BRAIN_EMBED_CONCURRENCY, BRAIN_OLLAMA_HOSTS, BRAIN_EMBED_MODEL,
+     BRAIN_SYNC_WINDOW_FILES (see README "Tuning")
 
 Commands:
   serve              Start MCP server over stdio (default)
