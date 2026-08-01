@@ -12,6 +12,7 @@ import {
   EMBEDDING_MODEL,
   MAX_TEXT_FILE_BYTES,
   MAX_DOC_FILE_BYTES,
+  SYNC_WINDOW_FILES,
 } from "../constants.js";
 import { mapLimit } from "../indexer/concurrency.js";
 import type { EmbeddingClient, VectorStore, Chunk, TableMeta } from "../types.js";
@@ -66,6 +67,17 @@ export interface SyncOptions {
    * indexed as curated concepts instead of raw markdown. Defaults to "okf".
    */
   okfDir?: string;
+  /**
+   * How many files may be in flight at once. Defaults to SYNC_WINDOW_FILES.
+   * Lower it to assert the bound in tests without writing a repo-sized fixture.
+   */
+  windowFiles?: number;
+  /**
+   * Injectable sleep for the final rescue pass's exponential backoff — the
+   * seam src/embeddings/rescue.ts already documents, wired through so a test
+   * covering embed failures does not have to wait out real seconds of it.
+   */
+  rescueSleeps?: (ms: number) => Promise<void>;
 }
 
 /** Resolved embedding batch/concurrency configuration for a sync run. */
@@ -406,13 +418,43 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
     let totalChanged = 0;
     let readDone = 0;
-
-    // Phase A: stat first (mtime fast-path), read only if mtime changed
-    const pendingEntries: FileEntry[] = [];
     const { stat } = await import("node:fs/promises");
 
-    for (let i = 0; i < filePaths.length; i += READ_CONCURRENCY) {
-      const batch = filePaths.slice(i, i + READ_CONCURRENCY);
+    // Everything below runs per WINDOW of files rather than once over the whole
+    // repo. A window's file contents, chunk texts, reused vectors and freshly
+    // embedded vectors are live together and released when the window is
+    // stored, so peak memory tracks the window size instead of the repository
+    // size. Before this, nothing was stored until the LAST chunk of the run had
+    // embedded, which forced the entire run to stay resident — invisible in a
+    // CLI process that exits, permanent in the MCP server, where `sync_project`
+    // runs a full walk in-process.
+    const windowFiles = Math.max(1, options.windowFiles ?? SYNC_WINDOW_FILES);
+
+    // State that must OUTLIVE a window. Kept deliberately small: counters, and
+    // strings for work that can only be done once every file has been seen.
+    let embedFailed = 0;
+    /** Chunk texts handed to the embedder across the whole run — only the
+     * count survives, so total-failure stays a whole-run verdict. */
+    let totalTextsToEmbed = 0;
+    /** Relative paths of every file changed this run. Edge resolution needs all
+     * of them AFTER every window has written its symbols (see below), and the
+     * dangling-edge prune needs to know whether anything changed at all. */
+    const changedRelPaths: string[] = [];
+    /** "source:startLine-endLine" per chunk still null after the retry ladder,
+     * accumulated per window because the arrays holding them are released. */
+    const embedFailedSources: string[] = [];
+
+    /**
+     * Read, embed and store ONE window, start to finish. Everything it
+     * allocates is unreachable once it returns; only the counters and path
+     * strings declared above survive.
+     */
+    async function processWindow(windowFilePaths: string[]): Promise<void> {
+    // Phase A: stat first (mtime fast-path), read only if mtime changed
+    const pendingEntries: FileEntry[] = [];
+
+    for (let i = 0; i < windowFilePaths.length; i += READ_CONCURRENCY) {
+      const batch = windowFilePaths.slice(i, i + READ_CONCURRENCY);
       const results = await Promise.all(
         batch.map(async (filePath) => {
           // Fast path: check mtime via stat (no content read)
@@ -548,11 +590,23 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       for (const r of results) {
         if (r === null) continue;
         if (r === "skipped") { skipped++; }
-        else { pendingEntries.push(r); totalChanged++; }
+        else {
+          pendingEntries.push(r);
+          totalChanged++;
+          // Outlives the window: edge resolution runs once, after every window
+          // has written its symbols.
+          changedRelPaths.push(r.relPath);
+        }
       }
       readDone += batch.length;
+      // Cumulative across windows against the whole-run file total, so the
+      // reading bar stays the run's real progress spine now that reading,
+      // embedding and storing interleave.
       onProgress?.({ phase: "reading", current: readDone, total: filePaths.length });
     }
+
+    // Nothing changed in this window — no chunks to diff, embed or store.
+    if (pendingEntries.length === 0) return;
 
     // Phase B: per-chunk hash diff — identify which chunks actually need re-embedding.
     // For each changed file, compare each chunk's content_hash against the stored manifest.
@@ -626,7 +680,13 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // Embed only the changed/new chunks in EMBED_BATCH_SIZE batches
     const embeddedVectors: (number[] | null)[] = new Array(textsToEmbed.length).fill(null);
     let embedDone = 0;
-    let embedFailed = 0;
+    // Per-window tally. Folded into the run-wide `embedFailed` once the retry
+    // ladder below has settled, since the ladder recomputes it as it recovers.
+    let windowEmbedFailed = 0;
+    totalTextsToEmbed += textsToEmbed.length;
+    // Window-local totals: the chunk count for the rest of the run is not known
+    // yet, and a total that grows mid-run reads worse than a bar that fills
+    // once per window. `reading` above carries whole-run progress.
     onProgress?.({ phase: "embedding", current: 0, total: textsToEmbed.length });
 
     if (embeddings.model === "none") {
@@ -651,7 +711,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           embedDone = Math.min(embedDone + vecs.length, textsToEmbed.length);
           onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
         } else {
-          embedFailed += texts.length;
+          windowEmbedFailed += texts.length;
         }
       });
 
@@ -673,7 +733,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       // only matters for clients WITH a breaker). The breaker's normal-operation
       // purpose (don't hammer a genuinely-down Ollama) stays intact: we only
       // bypass it for this single explicit recovery attempt, never routinely.
-      if (embedFailed > 0) {
+      if (windowEmbedFailed > 0) {
         const failedIndices: number[] = [];
         for (let i = 0; i < embeddedVectors.length; i++) {
           if (embeddedVectors[i] === null) failedIndices.push(i);
@@ -700,7 +760,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
             if (vecs) {
               for (let j = 0; j < vecs.length; j++) {
                 embeddedVectors[indices[j]] = vecs[j];
-                embedFailed--;
+                windowEmbedFailed--;
               }
               embedDone = Math.min(embedDone + vecs.length, textsToEmbed.length);
               onProgress?.({ phase: "embedding", current: embedDone, total: textsToEmbed.length });
@@ -719,7 +779,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           // the backoff/breaker-bypass details.
           const stillFailedIndices = failedIndices.filter((idx) => embeddedVectors[idx] === null);
           if (stillFailedIndices.length > 0) {
-            await rescueEmbedPass(embeddings, textsToEmbed, stillFailedIndices, embeddedVectors);
+            await rescueEmbedPass(embeddings, textsToEmbed, stillFailedIndices, embeddedVectors, { sleeps: options.rescueSleeps });
 
             for (const idx of stillFailedIndices) {
               if (embeddedVectors[idx] !== null) {
@@ -731,7 +791,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
             // Only successfully embedded vectors are stored (unchanged
             // invariant) — embedFailed reflects whatever is STILL null now,
             // after every rung of the ladder has been tried.
-            embedFailed = failedIndices.filter((idx) => embeddedVectors[idx] === null).length;
+            windowEmbedFailed = failedIndices.filter((idx) => embeddedVectors[idx] === null).length;
           }
         }
       }
@@ -818,10 +878,43 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     }
     await flushStore(); // flush remainder
 
-    // Resolve cross-file call edges for every file that was parsed this run,
-    // batched into a single transaction instead of one autocommit pair of
-    // UPDATEs per file.
-    graph.resolveEdgesForFiles(pendingEntries.map((entry) => entry.relPath));
+    // Fold this window's results into the run-wide tallies BEFORE everything
+    // above goes out of scope. Failed chunks are resolved to source:line here
+    // for the same reason — `pendingEntries` and `embeddedVectors` are the only
+    // things that can name them, and they do not survive this function.
+    embedFailed += windowEmbedFailed;
+    if (windowEmbedFailed > 0) {
+      for (let i = 0; i < embeddedVectors.length; i++) {
+        if (embeddedVectors[i] !== null) continue;
+        const { entryIdx, chunkIdx } = changedChunkInfos[i];
+        const entry = pendingEntries[entryIdx];
+        const chunk = entry.rawChunks[chunkIdx];
+        const lines = chunk.start_line
+          ? `:${chunk.start_line}-${chunk.end_line ?? chunk.start_line}`
+          : "";
+        embedFailedSources.push(`${entry.relPath}${lines}`);
+      }
+    }
+    }
+
+    for (let windowStart = 0; windowStart < filePaths.length; windowStart += windowFiles) {
+      await processWindow(filePaths.slice(windowStart, windowStart + windowFiles));
+    }
+
+    // Resolve cross-file call edges for every file parsed this run, batched
+    // into a single transaction instead of one autocommit pair of UPDATEs per
+    // file. That single transaction is the reason this stays here rather than
+    // moving inside the window loop, which is also why the (cheap, strings-only)
+    // path list is the one thing accumulated across windows.
+    //
+    // Correctness does NOT depend on the placement, and it is worth writing
+    // down because the obvious worry is wrong: a caller in an early window
+    // referencing a symbol defined in a later one still links, even resolving
+    // per window. resolveEdgesForFile runs a SECOND update — "edges anywhere
+    // whose target name was (re)defined in this file" — so the later window
+    // repairs the earlier one on its way past. Verified by mutation: resolving
+    // per window, with pruneDanglingEdges disabled too, still links the edge.
+    graph.resolveEdgesForFiles(changedRelPaths);
 
     // 5. Detect deleted files (in manifest but no longer on disk).
     //    ONLY the authoritative full walk can do this: on the incremental
@@ -878,7 +971,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // unchanged files (not in pendingEntries) are never revisited by
     // resolveEdgesForFile. So prune whenever anything was replaced or deleted.
     // Pure no-op syncs (nothing changed) skip the two full-table scans.
-    if (deleted > 0 || pendingEntries.length > 0) {
+    if (deleted > 0 || changedRelPaths.length > 0) {
       graph.pruneDanglingEdges();
     }
 
@@ -890,31 +983,21 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // directly via ManifestStore's own transactions. No wholesale rewrite
     // step needed anymore.
 
-    // Detect total embed failure: had texts to embed but every vector is null
-    const totalEmbedFailure = textsToEmbed.length > 0 && embedFailed === textsToEmbed.length;
+    // Detect total embed failure: had texts to embed but every vector is null.
+    // A whole-run verdict, not a per-window one — one window failing entirely
+    // while others succeed is a PARTIAL failure, and reporting "nothing was
+    // stored" would be false.
+    //
+    // embedFailedSources is accumulated per window (see processWindow): the
+    // arrays that can map a null vector back to its chunk are released with
+    // their window, so the mapping has to happen while they are still alive.
+    // The retry ladder (concurrent -> sequential -> one-by-one rescue) has
+    // already ruled out transient blips by then, so anything listed is a
+    // genuine, reproducible-on-every-sync failure worth fixing at the source.
+    const totalEmbedFailure = totalTextsToEmbed > 0 && embedFailed === totalTextsToEmbed;
     const error = totalEmbedFailure
-      ? `Embedding failed: 0/${textsToEmbed.length} vectors produced (Ollama timeout or model unavailable). Nothing was stored.`
+      ? `Embedding failed: 0/${totalTextsToEmbed} vectors produced (Ollama timeout or model unavailable). Nothing was stored.`
       : undefined;
-
-    // Map every still-null vector back to its source chunk so the CLI can
-    // report WHICH chunk failed, not just how many — the retry ladder
-    // (concurrent -> sequential -> one-by-one rescue) already ruled out
-    // transient blips, so a chunk that's still null here is a genuine,
-    // reproducible-on-every-sync failure (e.g. a request Ollama rejects for
-    // that specific content) worth surfacing to fix at the source.
-    const embedFailedSources: string[] = [];
-    if (embedFailed > 0) {
-      for (let i = 0; i < embeddedVectors.length; i++) {
-        if (embeddedVectors[i] !== null) continue;
-        const { entryIdx, chunkIdx } = changedChunkInfos[i];
-        const entry = pendingEntries[entryIdx];
-        const chunk = entry.rawChunks[chunkIdx];
-        const lines = chunk.start_line
-          ? `:${chunk.start_line}-${chunk.end_line ?? chunk.start_line}`
-          : "";
-        embedFailedSources.push(`${entry.relPath}${lines}`);
-      }
-    }
 
     return {
       ingested,

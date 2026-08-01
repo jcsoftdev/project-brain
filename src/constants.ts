@@ -35,6 +35,22 @@ export const WATCHER_DEBOUNCE_MS = 300;
 /** Maximum number of paths per wave when splitting large batches (anti-storm). */
 export const WATCHER_MAX_BATCH = 200;
 
+/**
+ * How many files a sync may hold in memory at once — their content, chunks,
+ * reused vectors and freshly embedded vectors are all live together, and are
+ * released when the window is stored.
+ *
+ * This is what keeps peak memory a function of the WINDOW rather than of the
+ * repository. It matters because `sync_project` runs a full walk inside the
+ * long-lived MCP server: without a bound, one cold index left that process
+ * holding the whole repo's high-water mark for the rest of its life.
+ *
+ * 200 keeps embedding saturated — at even a handful of chunks per file a
+ * window yields well over EMBED_BATCH_SIZE x EMBED_CONCURRENCY chunks, so the
+ * batching never starves waiting for the next window.
+ */
+export const SYNC_WINDOW_FILES = Number(process.env.BRAIN_SYNC_WINDOW_FILES) || 200;
+
 /** Section markers for rule injection. */
 export const SECTION_MARKER_START = "<!-- project-brain:start -->";
 export const SECTION_MARKER_END = "<!-- project-brain:end -->";
