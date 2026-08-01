@@ -23,6 +23,7 @@ import { register as registerArchitecture } from "./tools/architecture.js";
 import { register as registerSyncProject } from "./tools/sync-project.js";
 import { openGraphDb } from "./graph/db.js";
 import { GraphStore } from "./graph/store.js";
+import { GraphCache } from "./graph/cache.js";
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
 import type { EmbeddingClient, ToolDeps } from "./types.js";
@@ -81,12 +82,19 @@ export async function createServer(options: ServerOptions = {}) {
 
   // Structural tools may target ANOTHER project by id. The graph is a
   // project-local file, so resolving one means going through the registry that
-  // `init` writes: id → root → that root's graph.db. Opened lazily and cached
-  // for the process lifetime; a project with no graph.db yet resolves to null,
-  // which the tools surface as PROJECT_NOT_FOUND rather than an empty answer.
+  // `init` writes: id → root → that root's graph.db. Opened lazily; a project
+  // with no graph.db yet resolves to null, which the tools surface as
+  // PROJECT_NOT_FOUND rather than an empty answer.
+  //
+  // Held in a BOUNDED cache that closes what it evicts, and returned so the
+  // shutdown path can release the rest. `project` is an arbitrary string per
+  // MCP call and this process is long-lived, so a plain Map meant one open
+  // SQLite handle per project the session was ever asked about, kept until the
+  // process died — the same growth LanceDbStore's TABLE_CACHE_MAX prevents for
+  // its own handles.
   const ownProjectId = await resolveProjectId(projectRoot);
   const registryDir = options.dataDir ?? DATA_DIR;
-  const foreignGraphs = new Map<string, GraphStore>();
+  const foreignGraphs = new GraphCache<GraphStore>();
   const graphFor = async (project: string): Promise<GraphStore | null> => {
     if (project === ownProjectId) return graph;
     const cached = foreignGraphs.get(project);
@@ -160,5 +168,7 @@ export async function createServer(options: ServerOptions = {}) {
     "sync_project",
   ];
 
-  return { server, store, embeddings, graph, toolNames, instructions: SERVER_INSTRUCTIONS };
+  // foreignGraphs is returned, not kept private: it holds live SQLite handles
+  // the caller owns for the process lifetime and must release on shutdown.
+  return { server, store, embeddings, graph, foreignGraphs, toolNames, instructions: SERVER_INSTRUCTIONS };
 }

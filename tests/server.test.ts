@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "../src/server.js";
@@ -47,6 +47,59 @@ describe("Server", () => {
       expect(graph.listFiles()).toEqual(["after-rebuild.ts"]);
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Structural tools can target another project by id, and each resolution
+   * opens that project's graph.db. Those handles used to live in a plain Map:
+   * no bound, and nothing in the shutdown path ever closed them, so a
+   * long-lived `serve` accumulated a SQLite connection per project it was ever
+   * asked about. Driven through the REAL registered tool so the cache is
+   * exercised by the same `graphFor` the server hands its tools — asserting on
+   * the returned object alone would not prove it is the one actually used.
+   */
+  it("caches foreign project graphs in a closeable, bounded cache", async () => {
+    const { registerProject } = await import("../src/store/project-registry.js");
+    const home = await mkdtemp(join(tmpdir(), "pb-foreign-"));
+    try {
+      const ownRoot = join(home, "own");
+      const foreignRoot = join(home, "other");
+      const dataDir = join(home, "registry");
+
+      // A real foreign project: graph.db with one symbol, registered by id.
+      const foreignGraphPath = join(foreignRoot, ".project-brain", GRAPH_DB_FILE);
+      await mkdir(join(foreignRoot, ".project-brain"), { recursive: true });
+      const seed = new GraphStore(openGraphDb(foreignGraphPath));
+      seed.replaceFile("other.ts", "typescript", "h", 1, [
+        { name: "elsewhere", kind: "function", signature: "fn elsewhere", start_line: 1, end_line: 2, edges: [] },
+      ]);
+      seed.close();
+      await registerProject(dataDir, "other-project", foreignRoot);
+
+      const { server, foreignGraphs } = await createServer({
+        dbPath: join(home, "store"),
+        embeddings: stubEmbeddings,
+        projectRoot: ownRoot,
+        dataDir,
+      });
+
+      const findSymbol = (server as any)._registeredTools["find_symbol"];
+      const result = await findSymbol.handler({ name: "elsewhere", project: "other-project" }, {});
+
+      // Resolution really went through the foreign graph, not a silent empty answer.
+      expect(JSON.stringify(result)).toContain("elsewhere");
+      expect(foreignGraphs.size, "foreign graph handle was not cached").toBe(1);
+
+      // Second lookup reuses the handle rather than opening another.
+      await findSymbol.handler({ name: "elsewhere", project: "other-project" }, {});
+      expect(foreignGraphs.size).toBe(1);
+
+      // And the server can actually release it — the part that was missing.
+      foreignGraphs.close();
+      expect(foreignGraphs.size).toBe(0);
+    } finally {
+      await rm(home, { recursive: true, force: true });
     }
   });
 

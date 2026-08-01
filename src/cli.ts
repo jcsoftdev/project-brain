@@ -115,14 +115,15 @@ switch (command) {
       const dbPath = process.env.BRAIN_DATA_DIR || undefined;
       const embedModel = process.env.BRAIN_EMBED_MODEL || undefined;
       const cwd = process.cwd();
-      const { server, store, embeddings, graph } = await createServer({ dbPath, embedModel, projectRoot: cwd });
+      const { server, store, embeddings, graph, foreignGraphs } = await createServer({ dbPath, embedModel, projectRoot: cwd });
 
       // Attempt to start file watcher if project config exists.
       // Pass the server's shared graph so the watcher writes the SAME graph.db.
       const watcher = await maybeStartWatcher(cwd, { store, embeddings, graph });
 
-      // Graceful shutdown — also close the shared graph connection.
-      const shutdown = createShutdownHandler(watcher, undefined, graph);
+      // Graceful shutdown — closes the shared graph connection AND every
+      // foreign project graph the structural tools opened along the way.
+      const shutdown = createShutdownHandler(watcher, undefined, [graph, foreignGraphs]);
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
 

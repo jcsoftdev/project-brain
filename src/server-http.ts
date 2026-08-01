@@ -94,7 +94,7 @@ export async function createHttpServer(
 
   // Create the MCP server (registers all 11 tools via createServer — ADR-1).
   // Capture `graph` so close() can release the SQLite/WAL handle the server owns.
-  const { server, graph } = await createServer({
+  const { server, graph, foreignGraphs } = await createServer({
     dbPath: opts.dbPath,
     ollamaHost: opts.ollamaHost,
     embedModel: opts.embedModel,
@@ -141,9 +141,11 @@ export async function createHttpServer(
     async close(): Promise<void> {
       await transport.close();
       bunServer.stop(true);
-      // Release the shared SQLite/WAL handle owned by this server (matches the
-      // stdio path's createShutdownHandler, which closes graph after teardown).
+      // Release the shared SQLite/WAL handle owned by this server, plus every
+      // foreign project graph the structural tools opened (matches the stdio
+      // path's createShutdownHandler, which closes both after teardown).
       try { graph.close(); } catch {}
+      foreignGraphs.close();
     },
   };
 }
