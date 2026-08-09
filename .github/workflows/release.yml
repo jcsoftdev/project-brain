@@ -288,7 +288,11 @@ jobs:
     # `always()` for the same reason publish-npm uses it: a hung platform must not
     # withhold the channels whose binaries did upload. Missing assets fail this
     # job loudly rather than emitting a formula with a blank checksum.
-    if: always() && startsWith(github.ref, 'refs/tags/')
+    #
+    # `!= 'skipped'` distinguishes "some platforms failed" from "the test gate
+    # failed, so nothing was built at all". always() alone treats them the same
+    # and this job then fails on every missing asset, which is noise, not signal.
+    if: always() && startsWith(github.ref, 'refs/tags/') && needs.build.result != 'skipped'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -359,7 +363,13 @@ jobs:
     # release from every platform that DID build. The safety property is kept by
     # the dist-tag below, not by refusing to publish: a partial release goes out
     # under `next`, never `latest`.
-    if: always() && startsWith(github.ref, 'refs/tags/')
+    #
+    # But `build` being *skipped* means the test gate failed and there are no
+    # binaries at all. Publishing then burns a version number on a package whose
+    # optionalDependencies point at platform packages that were never published —
+    # installable, and broken. npm versions are immutable, so each such run costs
+    # a real version. Publish only when a build actually ran.
+    if: always() && startsWith(github.ref, 'refs/tags/') && needs.build.result != 'skipped'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
