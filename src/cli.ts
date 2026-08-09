@@ -35,9 +35,14 @@ if (!SKIPS_PREAMBLE.includes(command as string)) {
   if (!process.env.BRAIN_NO_SKILL_REFRESH) {
     try {
       const { refreshStaleSkills, knownSkillRoots } = await import("./rules/skills.js");
-      const { refreshed } = await refreshStaleSkills(knownSkillRoots());
+      const { refreshed, added } = await refreshStaleSkills(knownSkillRoots());
       if (refreshed.length > 0) {
         console.error(`  project-brain: refreshed ${refreshed.length} skill(s) to match this version`);
+      }
+      // Reported separately from a refresh: a skill appearing for the first
+      // time is news, and the host may need a reload before it is usable.
+      if (added.length > 0) {
+        console.error(`  project-brain: installed ${added.length} new skill(s) — reload your agent to pick them up`);
       }
     } catch {
       /* fail-silent — a skills directory must never break a command */
