@@ -299,6 +299,8 @@ export async function installSkill(targetDirs: string[]): Promise<InstallResult>
 export interface RefreshResult {
   /** Skill directories rewritten because their stamp was stale or missing. */
   refreshed: string[];
+  /** Skill directories created because this build ships a skill the root lacked. */
+  added: string[];
   /** Skill directories already carrying this build's stamp. */
   upToDate: string[];
   /** Existing directories left alone because ownership could not be proven. */
@@ -306,7 +308,22 @@ export interface RefreshResult {
 }
 
 /**
- * Bring already-installed skills up to this build's content.
+ * Has setup ever populated this root?
+ *
+ * The question gates directory creation, so it is answered by ownership, not by
+ * existence: a root full of hand-written skills and none of ours is a root we
+ * were never invited into.
+ */
+async function rootIsAdopted(dir: string): Promise<boolean> {
+  for (const name of Object.keys(SKILL_MANIFESTS)) {
+    if ((await inspectOwnership(join(dir, name))) === "ours") return true;
+  }
+  return false;
+}
+
+/**
+ * Bring already-installed skills up to this build's content, and complete the
+ * set in any root setup has already adopted.
  *
  * This closes a path that was built and never walked. The ownership marker
  * exists so setup can overwrite its own directories, but `update` only spawns
@@ -316,19 +333,50 @@ export interface RefreshResult {
  * dropping in a binary, never runs `update` at all. Comparing content on disk
  * against content in the binary is the only check that works for every channel.
  *
- * **Never creates a directory.** Installing into a skills root is setup's job,
- * with a prompt. This only refreshes what setup already put there, and only when
- * it can still prove the directory is ours.
+ * **Never creates a skills ROOT.** Adopting `~/.claude/skills` is setup's job,
+ * with a prompt — an absent or unadopted root is left completely alone.
+ *
+ * Within an adopted root it does create missing skill DIRECTORIES, and that is
+ * a deliberate widening of the original rule. Refreshing content but not adding
+ * skills reopened the same bug one level up: a release that ships a NEW skill
+ * reached nobody who already ran setup, silently, because "refresh" only ever
+ * looked at directories that existed. Every upgrade channel hit it.
+ *
+ * The cost, stated plainly: a skill deleted on purpose comes back on the next
+ * command. Adoption is the mitigation — we only complete roots that already
+ * carry our marker, never one the user never opted into — but inside such a
+ * root, "missing" and "unwanted" are indistinguishable on disk. Someone who
+ * wants a skill gone should decline the root, not delete one directory.
  */
 export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshResult> {
   const refreshed: string[] = [];
+  const added: string[] = [];
   const upToDate: string[] = [];
   const skipped: SkippedTarget[] = [];
 
   for (const dir of targetDirs) {
+    const adopted = await rootIsAdopted(dir);
+
     for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
       const skillDir = join(dir, name);
-      if (!existsSync(skillDir)) continue; // setup never installed here — not ours to create
+
+      if (!existsSync(skillDir)) {
+        // A root we were never invited into is not ours to populate.
+        if (!adopted) continue;
+        try {
+          for (const [rel, content] of Object.entries(manifest)) {
+            const dest = join(skillDir, rel);
+            await mkdir(dirname(dest), { recursive: true });
+            await writeFile(dest, content, "utf8");
+          }
+          await writeFile(join(skillDir, STAMP_FILE), `${MANIFEST_STAMP}\n`, "utf8");
+          added.push(skillDir);
+        } catch {
+          // Same rule as below: a read-only or vanished directory must not
+          // break the command that happened to trigger this check.
+        }
+        continue;
+      }
 
       const ownership = await inspectOwnership(skillDir);
       if (ownership !== "ours") {
@@ -362,5 +410,5 @@ export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshR
     }
   }
 
-  return { refreshed, upToDate, skipped };
+  return { refreshed, added, upToDate, skipped };
 }

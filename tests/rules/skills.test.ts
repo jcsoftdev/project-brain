@@ -440,15 +440,76 @@ describe("refreshStaleSkills", () => {
   /**
    * The load-bearing property. A lazy check must never start installing into a
    * root the user did not opt into — that is setup's job, with a prompt.
+   *
+   * "Opted in" is proven by ownership, not by the directory existing: an empty
+   * root, or one holding only hand-written skills, is untouched.
    */
-  it("NEVER creates a skill directory that does not already exist", async () => {
+  it("NEVER creates anything in a root it has not already adopted", async () => {
     const result = await refreshStaleSkills([root]);
 
     expect(result.refreshed).toEqual([]);
+    expect(result.added).toEqual([]);
     expect(result.upToDate).toEqual([]);
     for (const name of Object.keys(SKILL_MANIFESTS)) {
       expect(existsSync(join(root, name)), `${name} must not be created`).toBe(false);
     }
+  });
+
+  it("does not adopt a root holding only hand-written skills", async () => {
+    const foreign = join(root, "brain-audit");
+    await mkdir(foreign, { recursive: true });
+    await writeFile(join(foreign, "SKILL.md"), "---\nname: brain-audit\n---\nhand-written\n");
+
+    const result = await refreshStaleSkills([root]);
+
+    expect(result.added).toEqual([]);
+    for (const name of Object.keys(SKILL_MANIFESTS)) {
+      if (name === "brain-audit") continue;
+      expect(existsSync(join(root, name)), `${name} must not be created`).toBe(false);
+    }
+  });
+
+  /**
+   * The gap this widening closes: refreshing content but never adding a
+   * directory meant a release shipping a NEW skill reached nobody who had
+   * already run setup — silently, through every upgrade channel. Same bug the
+   * refresh itself was written for, one level up.
+   */
+  describe("completing an adopted root", () => {
+    it("installs a skill the adopted root is missing", async () => {
+      await installSkill([root]);
+      const missing = join(root, "brain-commit");
+      await rm(missing, { recursive: true, force: true });
+
+      const result = await refreshStaleSkills([root]);
+
+      expect(result.added).toEqual([missing]);
+      expect(existsSync(join(missing, "SKILL.md"))).toBe(true);
+      expect(await readFile(join(missing, STAMP_FILE), "utf8")).toBe(`${MANIFEST_STAMP}\n`);
+    });
+
+    it("adds nothing when the adopted root is already complete", async () => {
+      await installSkill([root]);
+      const result = await refreshStaleSkills([root]);
+      expect(result.added).toEqual([]);
+    });
+
+    it("adopts on any owned skill, not one specific name", async () => {
+      await installSkill([root]);
+      // Leave only brain-okf behind: adoption must not hinge on brain-audit.
+      for (const name of Object.keys(SKILL_MANIFESTS)) {
+        if (name !== "brain-okf") await rm(join(root, name), { recursive: true, force: true });
+      }
+
+      const result = await refreshStaleSkills([root]);
+
+      expect(result.added.sort()).toEqual(
+        Object.keys(SKILL_MANIFESTS)
+          .filter((n) => n !== "brain-okf")
+          .map((n) => join(root, n))
+          .sort()
+      );
+    });
   });
 
   it("leaves a foreign skill directory alone even when it looks stale", async () => {
