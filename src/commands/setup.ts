@@ -39,10 +39,13 @@ export interface SetupResult {
   dataDir: string;
   env: Environment;
   registeredTools: string[];
+  /** Every detected tool, whether or not its MCP registration succeeded.
+   *  Skill targets derive from this, not from registeredTools. */
+  installedTools: string[];
   /** Human-readable manual-setup instructions for registrars that could not
    *  safely auto-register (e.g. an unparseable config file). */
   manualInstructions: string[];
-  /** brain-audit directories actually written. Empty when the install was
+  /** Skill directories actually written. Empty when the install was
    *  declined, skipped, or had no target. */
   skillTargets: string[];
   /** Targets left untouched because ownership could not be proven. */
@@ -105,6 +108,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
 
   // 4. Register in AI tools
   const registeredTools: string[] = [];
+  /** Every detected tool, whether or not its MCP registration succeeded. */
+  const installedTools: string[] = [];
   const manualInstructions: string[] = [];
 
   if (!options.skipRegistration) {
@@ -116,6 +121,14 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     for (const registrar of registrars) {
       const installed = await registrar.isInstalled();
       if (!installed) continue;
+
+      // Skill targets follow INSTALLED, not REGISTERED.
+      //
+      // A skill is a directory of markdown the host reads on its own; it needs
+      // no MCP server behind it. Gating it on registration success meant one
+      // unparseable config file silently cost the user every skill for that
+      // tool — two unrelated failures welded together.
+      installedTools.push(registrar.name);
 
       let registered = false;
       try {
@@ -174,7 +187,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   let skillSkipped: SkippedTarget[] = [];
 
   const skillMode = options.skillInstall ?? "ask";
-  const skillDirs = options.skillTargetDirs ?? getSkillTargetDirs(registeredTools);
+  const skillDirs = options.skillTargetDirs ?? getSkillTargetDirs(installedTools);
 
   if (skillMode !== "no" && skillDirs.length > 0) {
     try {
@@ -187,8 +200,15 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
         skillSkipped = outcome.skipped;
       }
     } catch (e: any) {
-      console.warn(`Warning: Failed to install brain-audit skill: ${e.message}`);
+      console.warn(`Warning: Failed to install skills: ${e.message}`);
     }
+  } else if (skillMode !== "no") {
+    // Say so. A silent skip here is indistinguishable from a broken install:
+    // the user runs setup, sees nothing about skills, and has no thread to pull.
+    console.warn(
+      "Warning: No skill targets found — no supported AI tool was detected," +
+        " so no skills were installed."
+    );
   }
 
   for (const target of skillSkipped) {
@@ -198,7 +218,15 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     );
   }
 
-  return { dataDir, env, registeredTools, manualInstructions, skillTargets, skillSkipped };
+  return {
+    dataDir,
+    env,
+    registeredTools,
+    installedTools,
+    manualInstructions,
+    skillTargets,
+    skillSkipped,
+  };
 }
 
 /** CLI entry point for the setup command. */
@@ -225,6 +253,13 @@ export async function execute(args: string[]): Promise<void> {
 
   if (result.registeredTools.length > 0) {
     console.log(`\nRegistered in: ${result.registeredTools.join(", ")}`);
+  }
+
+  if (result.skillTargets.length === 0) {
+    // Reported unconditionally: "nothing about skills" used to be the output
+    // for both "you declined" and "detection failed", which is the whole
+    // reason a broken install could go unnoticed.
+    console.log(`\nSkills: none installed.`);
   }
 
   if (result.skillTargets.length > 0) {

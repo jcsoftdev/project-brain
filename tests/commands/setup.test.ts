@@ -122,6 +122,72 @@ describe("setup command", () => {
     expect(result.registeredTools).toEqual(["Cursor"]);
   });
 
+  /**
+   * Skills are markdown a host reads on its own — no MCP server behind them.
+   * Deriving their targets from registeredTools welded two unrelated failures
+   * together: one unparseable config file silently cost the user every skill
+   * for that tool, with nothing in the output to explain it.
+   */
+  describe("skill targets follow installed, not registered", () => {
+    const failing: AIToolRegistrar = {
+      name: "Zed",
+      isInstalled: async () => true,
+      register: async () => {
+        throw new Error("config is a mess");
+      },
+      writeRules: async () => {},
+    };
+
+    it("records a detected tool in installedTools even when registration fails", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const result = await runSetup({
+        dataDir: join(tempDir, "data"),
+        skipOllama: true,
+        registrars: [failing],
+        skillInstall: "no",
+      });
+
+      expect(result.registeredTools).toEqual([]);
+      expect(result.installedTools).toEqual(["Zed"]);
+    });
+
+    it("still installs skills for a tool whose registration failed", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const skillRoot = join(tempDir, "skills-root");
+
+      const result = await runSetup({
+        dataDir: join(tempDir, "data"),
+        skipOllama: true,
+        registrars: [failing],
+        skillInstall: "yes",
+        skillTargetDirs: [skillRoot],
+      });
+
+      expect(result.registeredTools).toEqual([]);
+      expect(result.skillTargets.length).toBeGreaterThan(0);
+      expect(existsSync(join(skillRoot, "brain-commit", "SKILL.md"))).toBe(true);
+    });
+
+    it("leaves installedTools empty when nothing is detected", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const absent: AIToolRegistrar = {
+        name: "Cursor",
+        isInstalled: async () => false,
+        register: async () => {},
+        writeRules: async () => {},
+      };
+
+      const result = await runSetup({
+        dataDir: join(tempDir, "data"),
+        skipOllama: true,
+        registrars: [absent],
+        skillInstall: "no",
+      });
+
+      expect(result.installedTools).toEqual([]);
+    });
+  });
+
   it("reports manual-instructions for an UnparseableConfigError without throwing out of runSetup", async () => {
     const { runSetup } = await import("../../src/commands/setup.js");
     const dataDir = join(tempDir, "data");
