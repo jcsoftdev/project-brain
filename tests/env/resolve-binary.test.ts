@@ -84,4 +84,90 @@ describe("resolveBinary", () => {
     const found = await resolveBinary("claude", { home, which: () => null, systemDirs: [] });
     expect(found).toBeNull();
   });
+
+  /**
+   * The second false negative, found the same way as the first: an agent CLI
+   * that is not a CLI. The OpenAI ChatGPT extension ships `codex` inside its
+   * own extension directory — off PATH, and not under ~/.codex/bin either — so
+   * every fixed-directory lookup reported the tool absent while it was in
+   * active use. Undetected means unregistered, and unregistered used to mean
+   * no skills.
+   */
+  describe("editor extension bundles", () => {
+    const roots = [[".vscode", "extensions"], [".trae", "extensions"]];
+
+    it("finds a binary under <ext>/bin/<arch>/<name>", async () => {
+      const path = await makeExecutable(
+        ".vscode",
+        "extensions",
+        "openai.chatgpt-26.803.41515-darwin-arm64",
+        "bin",
+        "macos-aarch64",
+        "codex"
+      );
+      const found = await resolveBinary("codex", {
+        home,
+        which: () => null,
+        systemDirs: [],
+        extensionRoots: roots,
+      });
+      expect(found).toBe(path);
+    });
+
+    it("finds a binary under <ext>/bin/<name>", async () => {
+      const path = await makeExecutable(".trae", "extensions", "some.ext-1.0.0", "bin", "codex");
+      const found = await resolveBinary("codex", {
+        home,
+        which: () => null,
+        systemDirs: [],
+        extensionRoots: roots,
+      });
+      expect(found).toBe(path);
+    });
+
+    it("prefers a fixed directory over an extension bundle", async () => {
+      const stable = await makeExecutable(".local", "bin", "codex");
+      await makeExecutable(".vscode", "extensions", "some.ext-1.0.0", "bin", "codex");
+      const found = await resolveBinary("codex", {
+        home,
+        which: () => null,
+        systemDirs: [],
+        extensionRoots: roots,
+      });
+      expect(found).toBe(stable);
+    });
+
+    it("returns null when no extension ships the binary", async () => {
+      await makeExecutable(".vscode", "extensions", "unrelated.ext-1.0.0", "bin", "something-else");
+      const found = await resolveBinary("codex", {
+        home,
+        which: () => null,
+        systemDirs: [],
+        extensionRoots: roots,
+      });
+      expect(found).toBeNull();
+    });
+
+    it("survives an extension directory without a bin/", async () => {
+      await mkdir(join(home, ".vscode", "extensions", "plain.ext-1.0.0"), { recursive: true });
+      const found = await resolveBinary("codex", {
+        home,
+        which: () => null,
+        systemDirs: [],
+        extensionRoots: roots,
+      });
+      expect(found).toBeNull();
+    });
+
+    it("skips the scan entirely when extensionRoots is empty", async () => {
+      await makeExecutable(".vscode", "extensions", "some.ext-1.0.0", "bin", "codex");
+      const found = await resolveBinary("codex", {
+        home,
+        which: () => null,
+        systemDirs: [],
+        extensionRoots: [],
+      });
+      expect(found).toBeNull();
+    });
+  });
 });

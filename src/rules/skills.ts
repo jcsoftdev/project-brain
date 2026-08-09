@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import skillMd from "../../templates/skills/brain-audit/SKILL.md" with { type: "text" };
 import okfSkillMd from "../../templates/skills/brain-okf/SKILL.md" with { type: "text" };
+import commitSkillMd from "../../templates/skills/brain-commit/SKILL.md" with { type: "text" };
 
 // A. Product & intent
 import functional from "../../templates/skills/brain-audit/references/functional.md" with { type: "text" };
@@ -115,12 +116,26 @@ export const BRAIN_OKF_FILES: Record<string, string> = {
 };
 
 /**
+ * brain-commit — write the commit message this repository would have written.
+ *
+ * Single file, for brain-okf's reason: one coherent task with nothing to defer.
+ *
+ * The convention lives in `git log`, not in this file. Shipping a fixed style
+ * would be wrong in every repo that chose the other one — and both are common
+ * enough that a guess is a coin flip. Detection is the feature.
+ */
+export const BRAIN_COMMIT_FILES: Record<string, string> = {
+  "SKILL.md": commitSkillMd,
+};
+
+/**
  * Every skill setup installs, keyed by the directory name it occupies inside a
  * skills root. Ownership is proven per skill directory, so a user's
  * hand-written `brain-okf/` is left alone even while `brain-audit/` upgrades.
  */
 export const SKILL_MANIFESTS: Record<string, Record<string, string>> = {
   "brain-audit": BRAIN_AUDIT_FILES,
+  "brain-commit": BRAIN_COMMIT_FILES,
   "brain-okf": BRAIN_OKF_FILES,
 };
 
