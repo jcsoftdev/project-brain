@@ -301,10 +301,9 @@ jobs:
         shell: bash
         run: bun scripts/gen-packages.ts "${{ github.ref_name }}" --out dist/packages
 
-      # Attached to the release rather than pushed to a tap: the tap and bucket
-      # are separate repositories, so publishing there needs a cross-repo token
-      # that this workflow deliberately does not hold. Copy these across, or add
-      # the token and a push step once the tap exists.
+      # Always attached to the release, whether or not the tap push below runs:
+      # the release asset is the fallback install path and the record of what
+      # was generated for this tag.
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
@@ -313,6 +312,45 @@ jobs:
             dist/packages/project-brain.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pushes the formula to jcsoftdev/homebrew-tap so `brew upgrade` sees the
+      # new version. Needs a cross-repo token: GITHUB_TOKEN is scoped to this
+      # repository only. Create a fine-grained PAT with Contents: read+write on
+      # jcsoftdev/homebrew-tap and store it as the TAP_GITHUB_TOKEN secret.
+      #
+      # Skipped, not failed, when the secret is absent — a missing tap token must
+      # not withhold a release from the channels that do not need it. The release
+      # asset above still carries the formula for a manual copy. The guard lives
+      # in the script, not in `if:`, because the `secrets` context is not
+      # available to a step-level conditional.
+      - name: Push formula to Homebrew tap
+        shell: bash
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_GITHUB_TOKEN:-}" ]; then
+            echo "TAP_GITHUB_TOKEN is not set; skipping tap push."
+            echo "The formula is attached to the release — copy it to jcsoftdev/homebrew-tap by hand."
+            exit 0
+          fi
+          git clone --depth 1 \
+            "https://x-access-token:${TAP_GITHUB_TOKEN}@github.com/jcsoftdev/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp dist/packages/project-brain.rb tap/Formula/project-brain.rb
+          cd tap
+          # No commit when the formula is byte-identical — re-running a release
+          # workflow must not produce empty commits.
+          if git diff --quiet -- Formula/project-brain.rb; then
+            echo "formula unchanged for ${VERSION}; nothing to push"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/project-brain.rb
+          git commit -m "project-brain ${VERSION}"
+          git push origin HEAD:main
 
   publish-npm:
     name: Publish to npm

@@ -6,25 +6,34 @@ project-brain indexes your project files into a local LanceDB vector store using
 
 ## Quick Start
 
+**1. Install globally.** Pick *one* line — they all deliver the same self-contained binary:
+
 ```bash
-# 1. Install globally — pick one
-curl -fsSL https://raw.githubusercontent.com/jcsoftdev/project-brain/main/scripts/install.sh | sh
-bun install -g project-brain          # or npm / pnpm / yarn
-brew install jcsoftdev/tap/project-brain
+brew install jcsoftdev/tap/project-brain                                              # Homebrew
+curl -fsSL https://raw.githubusercontent.com/jcsoftdev/project-brain/main/scripts/install.sh | sh   # no package manager
+bun install -g project-brain                                                          # or npm / pnpm / yarn
+```
 
-# 2. One-time: register in your AI tools (Claude, Codex, Cursor, Gemini, Windsurf, Zed, VS Code)
-#    Also installs the brain-audit and brain-okf host skills. --no-skills to opt out.
+**2. Register in your AI tools.** Once per machine — Claude, Codex, Cursor, Gemini, Windsurf, Zed, VS Code. Also installs the `brain-audit` and `brain-okf` host skills (`--no-skills` to opt out):
+
+```bash
 project-brain setup
+```
 
-# 3. Per-project: initialize, index, and install git hook
+**3. Initialize a project.** Detects the stack, indexes it, installs the git hook:
+
+```bash
 cd my-project
 project-brain init
+```
 
-# 4. Optional, per-project: start a knowledge bundle for the *why*
+**4. Optional — start a knowledge bundle** for the *why*, not the *what*:
+
+```bash
 project-brain okf init
 ```
 
-The `curl` line needs no package manager at all — the binary ships self-contained. See [Install](#install) for every channel and the platforms each covers.
+See [Install](#install) for every channel, the platforms each covers, and how upgrades work.
 
 After `init`, the following run **automatically** without any extra steps:
 
@@ -42,44 +51,46 @@ After `init`, the following run **automatically** without any extra steps:
 
 ## Install
 
-### Registry (recommended)
+Every channel ships the same artifact: a `bun build --compile` binary with the
+runtime, WASM grammars and templates embedded. Nothing else is needed at runtime.
 
-```bash
-bun install -g project-brain
-# or
-npm install -g project-brain
-```
+| Channel | Command | Platforms | Upgrade with |
+|---|---|---|---|
+| **Homebrew** | `brew install jcsoftdev/tap/project-brain` | macOS (Apple Silicon), Linux | `brew upgrade project-brain` |
+| **curl** | see [below](#curl-no-package-manager) | macOS (Apple Silicon), Linux x64/arm64 | re-run the installer |
+| **Registry** | `bun install -g project-brain` (or npm / pnpm / yarn) | all, including Intel macOS and Windows | `project-brain update` |
+| **Scoop** | `scoop install project-brain` — *bucket not published yet* | Windows | `scoop update project-brain` |
 
-### No package manager
+**Intel macOS**: no prebuilt binary. Homebrew and curl both refuse rather than
+hand you an arm64 binary — use a registry install there.
 
-The published binary is a `bun build --compile` artifact with the runtime, WASM grammars and templates embedded, so it needs no Node, no Bun, and nothing else at runtime.
+`project-brain update` reads the binary's own path to work out which channel
+installed it and prints the matching command. For a channel it cannot drive it
+says so rather than guessing: a guessed `npm install -g` would leave a second
+copy shadowing the first.
+
+### curl (no package manager)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jcsoftdev/project-brain/main/scripts/install.sh | sh
 ```
 
-Installs to `~/.local/bin` (override with `BRAIN_INSTALL_DIR`). Pin a version with `BRAIN_VERSION=v0.16.0`. To update, re-run it.
+| Variable | Default | Purpose |
+|---|---|---|
+| `BRAIN_INSTALL_DIR` | `~/.local/bin` | Where the binary lands |
+| `BRAIN_VERSION` | latest release | Pin a tag, e.g. `v0.17.0` |
 
-Apple Silicon, Linux x64 and Linux arm64 have published binaries. **Intel macOS does not** — the script says so instead of handing you an arm64 binary; use a registry install there.
-
-### Homebrew / Scoop
-
-Each release attaches a generated `project-brain.rb` and `project-brain.json`, checksummed against the real assets. Once a tap and bucket exist:
-
-```bash
-brew install jcsoftdev/tap/project-brain     # macOS (Apple Silicon), Linux
-scoop install project-brain                  # Windows
-```
-
-Whichever channel you use, `project-brain update` reads the binary's own path to work out how it was installed and prints the right command — `brew upgrade`, `scoop update`, or the package manager's. For a channel it cannot drive it says so rather than guessing, because a guessed `npm install -g` would leave a second copy shadowing the first.
+The script verifies the downloaded binary actually runs on your machine before
+moving it onto your PATH, so a wrong-arch or truncated download fails at install
+time instead of at first use.
 
 ### Build it yourself
 
 ```bash
-git clone https://github.com/jcsoftdev/project-brain
+git clone git@github.com:jcsoftdev/project-brain.git   # or https://github.com/jcsoftdev/project-brain.git
 cd project-brain
 bun build ./src/cli.ts ./src/parser/worker.ts --compile --outfile project-brain
-./project-brain --help
+./project-brain --version
 ```
 
 `worker.ts` is a required second entrypoint — without it the parser's worker pool cannot resolve its own imports inside the compiled binary and silently extracts zero symbols.
