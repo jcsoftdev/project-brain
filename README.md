@@ -6,36 +6,79 @@ project-brain indexes your project files into a local LanceDB vector store using
 
 ## Quick Start
 
-**1. Install globally.** Pick *one* line — they all deliver the same self-contained binary:
+Three commands, roughly two minutes:
 
 ```bash
-brew install jcsoftdev/tap/project-brain                                              # Homebrew
-curl -fsSL https://raw.githubusercontent.com/jcsoftdev/project-brain/main/scripts/install.sh | sh   # no package manager
-bun install -g project-brain                                                          # or npm / pnpm / yarn
+brew install jcsoftdev/tap/project-brain   # 1. install (see below for other channels)
+project-brain setup                        # 2. register in your AI tools — once per machine
+cd my-project && project-brain init        # 3. index this project
 ```
 
-**2. Register in your AI tools.** Once per machine — Claude, Codex, Cursor, Gemini, Windsurf, Zed, VS Code. Also installs the `brain-audit` and `brain-okf` host skills (`--no-skills` to opt out):
+That is the whole setup. The rest of this section explains what each step did and how to confirm it worked.
+
+### 1. Install
+
+Pick **one**. All three deliver the same self-contained binary — no Node, no Bun, nothing else at runtime:
+
+```bash
+brew install jcsoftdev/tap/project-brain                                                            # Homebrew
+curl -fsSL https://raw.githubusercontent.com/jcsoftdev/project-brain/main/scripts/install.sh | sh   # no package manager
+bun install -g project-brain                                                                        # or npm / pnpm / yarn
+```
+
+Confirm it landed:
+
+```bash
+project-brain --version
+```
+
+See [Install](#install) for platform coverage and how upgrades work per channel.
+
+### 2. Register in your AI tools
 
 ```bash
 project-brain setup
 ```
 
-**3. Initialize a project.** Detects the stack, indexes it, installs the git hook:
+Detects and registers project-brain with Claude, Codex, Cursor, Gemini, Windsurf, Zed and VS Code, and installs the `brain-audit` and `brain-okf` host skills. Run it **once per machine**, not per project. Skip the skills with `--no-skills`.
+
+### 3. Index a project
 
 ```bash
 cd my-project
 project-brain init
 ```
 
-**4. Optional — start a knowledge bundle** for the *why*, not the *what*:
+Detects the stack, writes a `CLAUDE.md` with MCP instructions, installs a `git commit` hook, scaffolds module stubs, and runs the first index.
+
+No Ollama running? Use `project-brain init --no-embed`. Everything structural still works — see [What you get without Ollama](#what-you-get-without-ollama).
+
+### 4. Check it worked
 
 ```bash
-project-brain okf init
+project-brain health
 ```
 
-See [Install](#install) for every channel, the platforms each covers, and how upgrades work.
+Reports embedding service, index counts and staleness. If chunks are `0` or semantic results come back empty, this is the command that tells you why.
 
-After `init`, the following run **automatically** without any extra steps:
+### 5. Use it
+
+From the terminal:
+
+```bash
+project-brain map                      # what matters in this codebase, ranked
+project-brain impact parseConfig       # what breaks if I change this
+project-brain callers runSync          # who depends on this
+```
+
+Or just ask your AI assistant in plain language — it picks the tool itself:
+
+> "What breaks if I change `parseConfig`?"
+> "How does authentication work here?"
+
+See [Recipes](#recipes--get-the-most-out-of-it) for the prompts that steer it best.
+
+### What runs automatically after `init`
 
 | Trigger | What happens |
 |---|---|
@@ -43,11 +86,33 @@ After `init`, the following run **automatically** without any extra steps:
 | File save (while server is running) | File watcher detects the change and re-indexes it |
 | AI tool connects | MCP server starts on stdio, tools are ready |
 
+### What you get without Ollama
+
+Ollama powers **semantic** search only. Everything else works offline with no model at all:
+
+| Works with no Ollama | Needs Ollama |
+|---|---|
+| `find`, `callers`, `callees`, `impact`, `trace`, `map` (structural graph) | `search_context` at full quality |
+| `code` (keyword/BM25 search) | |
+| `search_context`, degraded to a keyword floor and flagged `mode: "lexical"` | |
+
+### Optional — capture the *why*
+
+The index knows what the code does; it cannot know why it is that way. A knowledge bundle holds that half:
+
+```bash
+project-brain okf init
+```
+
+See [`okf`](#okf--knowledge-bundles-the-why-not-the-what).
+
 ## Prerequisites
 
-- **Nothing extra to run it.** Every channel ships the same self-contained, prebuilt binary per platform, with the runtime, WASM grammars and templates bundled in — you do **not** need Bun or Node installed to use project-brain. The `curl` installer does not even need one to *install* it.
-- **Bun** ≥ 1.3.14 — only needed to build/run **from source** ([install](https://bun.sh)).
-- **Ollama** (optional, only for semantic search) — download from [ollama.com](https://ollama.com). `project-brain init` **auto-pulls** the default embedding model `qwen3-embedding:0.6b` (1024-dim, fast, code-capable). To pre-pull it: `ollama pull qwen3-embedding:0.6b`. If it can't be pulled, project-brain falls back to `nomic-embed-text`. The structural tools work with **no** Ollama at all.
+| | Needed for | Notes |
+|---|---|---|
+| *nothing* | running project-brain | Every channel ships a self-contained prebuilt binary with the runtime, WASM grammars and templates bundled in. No Bun, no Node — the `curl` installer does not even need one to *install* it. |
+| [Ollama](https://ollama.com) | semantic search only | `init` auto-pulls `qwen3-embedding:0.6b` (1024-dim, fast, code-capable), falling back to `nomic-embed-text` if it cannot. Pre-pull with `ollama pull qwen3-embedding:0.6b`. Everything structural works without it. |
+| [Bun](https://bun.sh) ≥ 1.3.14 | building from source only | Not needed for any install channel. |
 
 ## Install
 
