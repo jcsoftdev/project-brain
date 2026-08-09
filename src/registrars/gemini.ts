@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { writeSection } from "../rules/section-marker.js";
 import type { AIToolRegistrar } from "./types.js";
 import { upsertJsonConfig, standardServerEntry } from "./json-config.js";
+import { resolveBinary } from "../env/resolve-binary.js";
 
 export class GeminiRegistrar implements AIToolRegistrar {
   name = "Gemini CLI";
@@ -13,7 +14,7 @@ export class GeminiRegistrar implements AIToolRegistrar {
   }
 
   async isInstalled(): Promise<boolean> {
-    return Bun.which("gemini") !== null;
+    return (await resolveBinary("gemini")) !== null;
   }
 
   async register(serverPath: string): Promise<void> {

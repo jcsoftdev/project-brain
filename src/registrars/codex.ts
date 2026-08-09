@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { writeSection } from "../rules/section-marker.js";
 import type { AIToolRegistrar } from "./types.js";
+import { resolveBinary } from "../env/resolve-binary.js";
 
 export class CodexRegistrar implements AIToolRegistrar {
   name = "Codex";
@@ -12,13 +13,15 @@ export class CodexRegistrar implements AIToolRegistrar {
   }
 
   async isInstalled(): Promise<boolean> {
-    return Bun.which("codex") !== null;
+    return (await resolveBinary("codex")) !== null;
   }
 
   async register(serverPath: string): Promise<void> {
     try {
+      // Resolved path, not the bare name — see the note in claude.ts.
+      const codexBin = (await resolveBinary("codex")) ?? "codex";
       const proc = Bun.spawn(
-        ["codex", "mcp", "add", "project-brain", "--", "bun", serverPath],
+        [codexBin, "mcp", "add", "project-brain", "--", "bun", serverPath],
         { stdout: "pipe", stderr: "pipe" }
       );
       const exitCode = await proc.exited;

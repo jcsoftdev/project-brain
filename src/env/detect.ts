@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { OLLAMA_HOST } from "../constants.js";
 import { dirExists } from "../registrars/json-config.js";
 import { defaultVSCodeUserDir } from "../registrars/vscode.js";
+import { resolveBinary } from "./resolve-binary.js";
 
 export interface AIToolInfo {
   name: string;
@@ -53,7 +54,7 @@ async function detectAITools(): Promise<AIToolInfo[]> {
   const tools: AIToolInfo[] = [];
 
   // Claude Code
-  const claudePath = Bun.which("claude");
+  const claudePath = await resolveBinary("claude");
   tools.push({
     name: "Claude Code",
     binaryPath: claudePath,
@@ -62,7 +63,7 @@ async function detectAITools(): Promise<AIToolInfo[]> {
   });
 
   // Codex
-  const codexPath = Bun.which("codex");
+  const codexPath = await resolveBinary("codex");
   tools.push({
     name: "Codex",
     binaryPath: codexPath,
@@ -71,7 +72,7 @@ async function detectAITools(): Promise<AIToolInfo[]> {
   });
 
   // Gemini CLI
-  const geminiPath = Bun.which("gemini");
+  const geminiPath = await resolveBinary("gemini");
   tools.push({
     name: "Gemini CLI",
     binaryPath: geminiPath,

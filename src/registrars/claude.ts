@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { writeSection, hasSection } from "../rules/section-marker.js";
 import type { AIToolRegistrar } from "./types.js";
 import { upsertJsonConfig, standardServerEntry } from "./json-config.js";
+import { resolveBinary } from "../env/resolve-binary.js";
 
 /** Registers the MCP server via the claude CLI. Returns true on success. */
 export type ClaudeCliRunner = (serverPath: string) => Promise<boolean>;
@@ -20,7 +21,7 @@ export class ClaudeRegistrar implements AIToolRegistrar {
   }
 
   async isInstalled(): Promise<boolean> {
-    return Bun.which("claude") !== null;
+    return (await resolveBinary("claude")) !== null;
   }
 
   async register(serverPath: string): Promise<void> {
@@ -63,9 +64,14 @@ export class ClaudeRegistrar implements AIToolRegistrar {
 /** Default runner: spawns the real `claude` CLI to register the server. */
 async function defaultCliRunner(serverPath: string): Promise<boolean> {
   try {
+    // Spawn the resolved absolute path, not the bare name. A binary found only
+    // by the ~/.local/bin fallback is by definition not on PATH, so spawning
+    // "claude" would fail and silently drop us into the JSON fallback.
+    const claudeBin = await resolveBinary("claude");
+    if (!claudeBin) return false;
     const proc = Bun.spawn(
       [
-        "claude",
+        claudeBin,
         "mcp",
         "add",
         "--transport",
