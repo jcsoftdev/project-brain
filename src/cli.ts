@@ -5,7 +5,18 @@ const [command, ...args] = process.argv.slice(2);
 // Update notifier: instant (reads a cached result only, no network) and
 // fail-silent. Skipped for hidden/internal commands so the detached background
 // refresh never re-triggers itself. Opt out with BRAIN_NO_UPDATE_CHECK=1.
-if (command !== "__update-check" && command !== "__parse-selftest" && command !== "__extract-selftest") {
+// `--version` is on this list because scripts/install.sh runs it to smoke-test a
+// freshly downloaded binary, and the Homebrew formula asserts on its output. It
+// has to be a bare, side-effect-free print: no network, no skill writes.
+const SKIPS_PREAMBLE = [
+  "__update-check",
+  "__parse-selftest",
+  "__extract-selftest",
+  "--version",
+  "-v",
+];
+
+if (!SKIPS_PREAMBLE.includes(command as string)) {
   try {
     const { notifyIfUpdateAvailable } = await import("./notifier.js");
     notifyIfUpdateAvailable();
@@ -79,7 +90,8 @@ Options for serve --http:
   BRAIN_HTTP_TOKEN   Required env var — bearer secret for HTTP auth
 
 Options:
-  --help, -h  Show this help message
+  --help, -h     Show this help message
+  --version, -v  Print the installed version
 `);
 }
 
@@ -281,6 +293,13 @@ switch (command) {
     // (latest published version) for the next invocation. Fail-silent.
     const { execute } = await import("./commands/update-check.js");
     await execute();
+    break;
+  }
+  case "--version":
+  case "-v": {
+    const { VERSION } = await import("./constants.js");
+    console.log(`project-brain ${VERSION}`);
+    process.exit(0);
     break;
   }
   case "--help":

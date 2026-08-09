@@ -59,6 +59,32 @@ describe("CLI entry point", () => {
     expect(stdout).toContain("project-brain");
   });
 
+  /**
+   * scripts/install.sh smoke-tests the downloaded binary with `--version` before
+   * putting it on PATH, and the generated Homebrew formula's `test do` block
+   * asserts on the same output. Without this case both channels fail — the
+   * installer reports a bogus "wrong architecture" error.
+   */
+  it("'--version' prints the package version and exits 0", async () => {
+    const pkg = JSON.parse(await readFile(join(CWD, "package.json"), "utf-8"));
+    const proc = spawnCli(["--version"]);
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain(pkg.version);
+  });
+
+  it("'-v' prints the package version and exits 0", async () => {
+    const pkg = JSON.parse(await readFile(join(CWD, "package.json"), "utf-8"));
+    const proc = spawnCli(["-v"]);
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain(pkg.version);
+  });
+
   it("unknown command exits 1 with error on stderr", async () => {
     const proc = spawnCli(["foobar"]);
     const exitCode = await proc.exited;
