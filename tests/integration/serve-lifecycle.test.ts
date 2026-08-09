@@ -74,8 +74,17 @@ describe("serve — stdio lifecycle", () => {
     // spawned handle would BE the server and killing it would prove nothing.
     // An earlier version of this test did exactly that and passed against the
     // unfixed build. Background the server, print its pid, keep the shell alive.
+    //
+    // `<&0` is load-bearing. POSIX gives an asynchronous command's stdin
+    // /dev/null when job control is off, so a bare `serve &` reads EOF the
+    // instant it starts and the stdio transport shuts the server down — the
+    // test then fails at "server died before we orphaned it", never reaching
+    // the orphan check it exists to exercise. The explicit redirection hands
+    // the shell's own stdin (our pipe) down instead. That pipe's write end
+    // lives in THIS process, so it stays open after the shell is killed and
+    // the server still has to notice the orphaning by itself.
     const shell = Bun.spawn(
-      ["sh", "-c", `bun ${CLI} serve & echo $! && wait`],
+      ["sh", "-c", `bun ${CLI} serve <&0 & echo $! && wait`],
       {
         cwd: REPO,
         stdin: "pipe",

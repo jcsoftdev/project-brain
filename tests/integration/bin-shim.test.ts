@@ -16,16 +16,32 @@ import { join } from "node:path";
 
 const SHIM = join(import.meta.dir, "../../bin/project-brain");
 
+/**
+ * Mirrors the map in bin/project-brain. The stub package has to be named for
+ * the platform the test is RUNNING on, not a fixed one — the shim resolves
+ * `${process.platform}-${process.arch}`, so a hardcoded darwin-arm64 fixture
+ * makes every assertion here fail on Linux CI with an empty stdout.
+ */
+const PKG_BY_PLATFORM: Record<string, string> = {
+  "darwin-arm64": "project-brain-darwin-arm64",
+  "linux-x64": "project-brain-linux-x64",
+  "linux-arm64": "project-brain-linux-arm64",
+  "win32-x64": "project-brain-windows-x64",
+  "win32-arm64": "project-brain-windows-arm64",
+};
+const PLATFORM_KEY = `${process.platform}-${process.arch}`;
+const PKG_NAME = PKG_BY_PLATFORM[PLATFORM_KEY];
+
 let dir: string;
 let shim: string;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "pb-shim-"));
-  const pkgDir = join(dir, "node_modules", "project-brain-darwin-arm64");
+  const pkgDir = join(dir, "node_modules", PKG_NAME);
   await mkdir(join(pkgDir, "bin"), { recursive: true });
   await writeFile(
     join(pkgDir, "package.json"),
-    JSON.stringify({ name: "project-brain-darwin-arm64", version: "0.0.0" })
+    JSON.stringify({ name: PKG_NAME, version: "0.0.0" })
   );
   // Stub "native binary": reports the environment it was handed and exits.
   const native = join(pkgDir, "bin", "project-brain-native");
@@ -55,7 +71,10 @@ async function runShim(args: string[] = [], env: Record<string, string> = {}) {
   return { stdout, exitCode };
 }
 
-describe("bin/project-brain shim", () => {
+// The stub native binary is a /bin/sh script, and the shim appends `.exe` on
+// Windows — neither holds there. The shim's Windows path is covered by the
+// platform-package matrix in release.yml, not here.
+describe.skipIf(process.platform === "win32")("bin/project-brain shim", () => {
   it("hands its own parent down as BRAIN_CLIENT_PID", async () => {
     const { stdout } = await runShim();
     const pid = Number(stdout.match(/CLIENT_PID=(\d+)/)?.[1]);
