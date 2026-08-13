@@ -74,7 +74,37 @@ export async function upsertJsonConfig(
   }
 }
 
+/** Entrypoints bun must interpret. Anything else is a compiled executable. */
+const SCRIPT_EXTENSIONS = [".ts", ".js", ".mjs", ".cjs", ".mts", ".cts"];
+
+/**
+ * How a host should spawn the MCP server for a given resolved server path.
+ *
+ * Two shapes reach this function, and they must be launched differently:
+ *
+ * - A source entrypoint (`src/cli.ts`, the dev fallback) is JavaScript/TypeScript
+ *   and needs the bun runtime in front of it.
+ * - An installed `project-brain` (Homebrew, or any `bun build --compile` output)
+ *   is a native executable. Prefixing THAT with bun makes bun parse the Mach-O/ELF
+ *   header as source and exit immediately — which every MCP client surfaces only
+ *   as the useless `CONNECTION_CLOSED`.
+ *
+ * Since `Bun.which("project-brain")` is the primary branch in setup, the second
+ * case is what nearly every installed user gets.
+ */
+export function launchCommand(serverPath: string): {
+  command: string;
+  args: string[];
+} {
+  const lower = serverPath.toLowerCase();
+  const isScript = SCRIPT_EXTENSIONS.some((ext) => lower.endsWith(ext));
+  return isScript
+    ? { command: "bun", args: [serverPath] }
+    : { command: serverPath, args: [] };
+}
+
 /** The standard mcpServers entry every JSON-config registrar writes. */
 export function standardServerEntry(serverPath: string): Record<string, unknown> {
-  return { command: "bun", args: [serverPath], transport: "stdio" };
+  const { command, args } = launchCommand(serverPath);
+  return { command, args, transport: "stdio" };
 }

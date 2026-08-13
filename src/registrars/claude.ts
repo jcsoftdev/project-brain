@@ -4,7 +4,11 @@ import { writeSection } from "../rules/section-marker.js";
 import { readWrittenRoutingVersion, writeRoutingSection } from "./routing-section.js";
 import { DEFAULT_HOST_MODELS } from "../constants.js";
 import type { AIToolRegistrar, RoutingDescriptor } from "./types.js";
-import { upsertJsonConfig, standardServerEntry } from "./json-config.js";
+import {
+  upsertJsonConfig,
+  standardServerEntry,
+  launchCommand,
+} from "./json-config.js";
 import { resolveBinary } from "../env/resolve-binary.js";
 
 /** Registers the MCP server via the claude CLI. Returns true on success. */
@@ -74,6 +78,30 @@ export class ClaudeRegistrar implements AIToolRegistrar {
   }
 }
 
+/**
+ * The argv for `claude mcp add`. Extracted from the spawn call so the launch
+ * command after `--` is assertable without spawning the real CLI.
+ */
+export function buildClaudeAddArgv(
+  claudeBin: string,
+  serverPath: string
+): string[] {
+  const { command, args } = launchCommand(serverPath);
+  return [
+    claudeBin,
+    "mcp",
+    "add",
+    "--transport",
+    "stdio",
+    "--scope",
+    "user",
+    "project-brain",
+    "--",
+    command,
+    ...args,
+  ];
+}
+
 /** Default runner: spawns the real `claude` CLI to register the server. */
 async function defaultCliRunner(serverPath: string): Promise<boolean> {
   try {
@@ -82,22 +110,10 @@ async function defaultCliRunner(serverPath: string): Promise<boolean> {
     // "claude" would fail and silently drop us into the JSON fallback.
     const claudeBin = await resolveBinary("claude");
     if (!claudeBin) return false;
-    const proc = Bun.spawn(
-      [
-        claudeBin,
-        "mcp",
-        "add",
-        "--transport",
-        "stdio",
-        "--scope",
-        "user",
-        "project-brain",
-        "--",
-        "bun",
-        serverPath,
-      ],
-      { stdout: "pipe", stderr: "pipe" }
-    );
+    const proc = Bun.spawn(buildClaudeAddArgv(claudeBin, serverPath), {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
     const exitCode = await proc.exited;
     return exitCode === 0;
   } catch {

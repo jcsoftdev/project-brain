@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { ClaudeRegistrar } from "../../src/registrars/claude.js";
+import {
+  ClaudeRegistrar,
+  buildClaudeAddArgv,
+} from "../../src/registrars/claude.js";
 
 describe("ClaudeRegistrar", () => {
   let registrar: ClaudeRegistrar;
@@ -42,10 +45,10 @@ describe("ClaudeRegistrar", () => {
 
     expect(config.mcpServers).toBeDefined();
     expect(config.mcpServers["project-brain"]).toBeDefined();
-    expect(config.mcpServers["project-brain"].command).toBe("bun");
-    expect(config.mcpServers["project-brain"].args).toContain(
+    expect(config.mcpServers["project-brain"].command).toBe(
       "/usr/local/bin/project-brain"
     );
+    expect(config.mcpServers["project-brain"].args).toEqual([]);
   });
 
   it("register preserves existing JSON keys in fallback", async () => {
@@ -113,6 +116,26 @@ describe("ClaudeRegistrar", () => {
 
       expect(content).toContain("Use project-brain for context.");
       expect(content).toContain("Route sub-agents by task type.");
+    });
+  });
+
+  describe("buildClaudeAddArgv", () => {
+    it("spawns a compiled binary directly, with no bun prefix", () => {
+      const argv = buildClaudeAddArgv("/usr/bin/claude", "/opt/homebrew/bin/project-brain");
+
+      expect(argv).not.toContain("bun");
+      expect(argv.slice(argv.indexOf("--") + 1)).toEqual([
+        "/opt/homebrew/bin/project-brain",
+      ]);
+    });
+
+    it("keeps the bun runtime in front of a source entrypoint", () => {
+      const argv = buildClaudeAddArgv("/usr/bin/claude", "/repo/src/cli.ts");
+
+      expect(argv.slice(argv.indexOf("--") + 1)).toEqual([
+        "bun",
+        "/repo/src/cli.ts",
+      ]);
     });
   });
 });

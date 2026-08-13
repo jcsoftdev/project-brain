@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { AIToolRegistrar } from "./types.js";
-import { dirExists, upsertJsonConfig } from "./json-config.js";
+import { dirExists, upsertJsonConfig, launchCommand } from "./json-config.js";
 
 /**
  * Doc-verified 2026-07 against code.visualstudio.com/docs/agents/reference/mcp-configuration:
@@ -38,8 +38,7 @@ export class VSCodeRegistrar implements AIToolRegistrar {
       config.servers ??= {};
       config.servers["project-brain"] = {
         type: "stdio",
-        command: "bun",
-        args: [serverPath],
+        ...launchCommand(serverPath),
       };
     });
   }

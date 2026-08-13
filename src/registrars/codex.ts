@@ -5,6 +5,19 @@ import { readWrittenRoutingVersion, writeRoutingSection } from "./routing-sectio
 import { DEFAULT_HOST_MODELS } from "../constants.js";
 import type { AIToolRegistrar, RoutingDescriptor } from "./types.js";
 import { resolveBinary } from "../env/resolve-binary.js";
+import { launchCommand } from "./json-config.js";
+
+/**
+ * The argv for `codex mcp add`. Extracted from the spawn call so the launch
+ * command after `--` is assertable without spawning the real CLI.
+ */
+export function buildCodexAddArgv(
+  codexBin: string,
+  serverPath: string
+): string[] {
+  const { command, args } = launchCommand(serverPath);
+  return [codexBin, "mcp", "add", "project-brain", "--", command, ...args];
+}
 
 export class CodexRegistrar implements AIToolRegistrar {
   name = "Codex";
@@ -22,10 +35,10 @@ export class CodexRegistrar implements AIToolRegistrar {
     try {
       // Resolved path, not the bare name — see the note in claude.ts.
       const codexBin = (await resolveBinary("codex")) ?? "codex";
-      const proc = Bun.spawn(
-        [codexBin, "mcp", "add", "project-brain", "--", "bun", serverPath],
-        { stdout: "pipe", stderr: "pipe" }
-      );
+      const proc = Bun.spawn(buildCodexAddArgv(codexBin, serverPath), {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
       const exitCode = await proc.exited;
       if (exitCode !== 0) {
         const stderr = await new Response(proc.stderr).text();

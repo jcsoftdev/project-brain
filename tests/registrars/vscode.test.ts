@@ -39,10 +39,23 @@ describe("VSCodeRegistrar", () => {
     const config = JSON.parse(await Bun.file(configPath).text());
 
     expect(config.servers).toBeDefined();
-    expect(config.servers["project-brain"].command).toBe("bun");
-    expect(config.servers["project-brain"].args).toContain(
+    // An installed project-brain is a compiled binary — it must be spawned
+    // directly. Prefixing it with `bun` makes bun parse the executable header
+    // as source and exit at startup.
+    expect(config.servers["project-brain"].command).toBe(
       "/usr/local/bin/project-brain"
     );
+    expect(config.servers["project-brain"].args).toEqual([]);
+  });
+
+  it("register runs a source entrypoint through bun", async () => {
+    await registrar.register("/repo/src/cli.ts");
+
+    const config = JSON.parse(
+      await Bun.file(join(tempDir, "mcp.json")).text()
+    );
+    expect(config.servers["project-brain"].command).toBe("bun");
+    expect(config.servers["project-brain"].args).toEqual(["/repo/src/cli.ts"]);
   });
 
   // VS Code MCP schema uses `type: "stdio"`, not `transport: "stdio"`

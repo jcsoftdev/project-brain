@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { CodexRegistrar } from "../../src/registrars/codex.js";
+import {
+  CodexRegistrar,
+  buildCodexAddArgv,
+} from "../../src/registrars/codex.js";
 
 describe("CodexRegistrar", () => {
   let registrar: CodexRegistrar;
@@ -42,5 +45,25 @@ describe("CodexRegistrar", () => {
     expect(content).toContain("<!-- project-brain:start -->");
     expect(content).toContain("Use project-brain MCP tools.");
     expect(content).toContain("<!-- project-brain:end -->");
+  });
+
+  describe("buildCodexAddArgv", () => {
+    it("spawns a compiled binary directly, with no bun prefix", () => {
+      const argv = buildCodexAddArgv("/usr/bin/codex", "/opt/homebrew/bin/project-brain");
+
+      expect(argv).not.toContain("bun");
+      expect(argv.slice(argv.indexOf("--") + 1)).toEqual([
+        "/opt/homebrew/bin/project-brain",
+      ]);
+    });
+
+    it("keeps the bun runtime in front of a source entrypoint", () => {
+      const argv = buildCodexAddArgv("/usr/bin/codex", "/repo/src/cli.ts");
+
+      expect(argv.slice(argv.indexOf("--") + 1)).toEqual([
+        "bun",
+        "/repo/src/cli.ts",
+      ]);
+    });
   });
 });
