@@ -30,6 +30,10 @@ export class ZedRegistrar implements AIToolRegistrar {
     });
   }
 
+  mcpConfigTarget(): { path: string; containerKey: string } {
+    return { path: join(this.baseDir, "settings.json"), containerKey: "context_servers" };
+  }
+
   async writeRules(_rulesContent: string): Promise<void> {
     // Zed has no equivalent rules/instructions directory — no-op.
   }

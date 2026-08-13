@@ -38,6 +38,10 @@ export class ClaudeRegistrar implements AIToolRegistrar {
     }
   }
 
+  mcpConfigTarget(): { path: string; containerKey: string } {
+    return { path: join(this.homeDir, ".claude.json"), containerKey: "mcpServers" };
+  }
+
   async writeRules(rulesContent: string): Promise<void> {
     const rulesPath = join(this.baseDir, "CLAUDE.md");
     await writeSection(rulesPath, rulesContent);

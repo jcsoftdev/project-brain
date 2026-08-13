@@ -26,6 +26,10 @@ export class OpencodeRegistrar implements AIToolRegistrar {
     });
   }
 
+  mcpConfigTarget(): { path: string; containerKey: string } {
+    return { path: join(this.baseDir, "settings.json"), containerKey: "mcpServers" };
+  }
+
   async writeRules(rulesContent: string): Promise<void> {
     await mkdir(join(this.baseDir, "rules"), { recursive: true });
     await writeSection(this.rulesPath(), rulesContent);

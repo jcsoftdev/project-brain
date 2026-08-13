@@ -48,6 +48,30 @@ if (!SKIPS_PREAMBLE.includes(command as string)) {
       /* fail-silent — a skills directory must never break a command */
     }
   }
+
+  // Repair host configs still launching the compiled binary through `bun`
+  // (written by setup before 0.20.1 — see registrars/repair.ts).
+  //
+  // This CANNOT live in the MCP server's startup: such a config never launches
+  // the server at all, so nothing inside it would ever run. A plain CLI
+  // invocation is the only code path that executes in the broken state,
+  // because it runs the binary directly and never reads the MCP config.
+  //
+  // stderr, like the blocks above: `serve` reaches here too, and stdout is the
+  // JSON-RPC channel. Opt out with BRAIN_NO_CONFIG_REPAIR=1.
+  if (!process.env.BRAIN_NO_CONFIG_REPAIR) {
+    try {
+      const { repairAllConfigs } = await import("./registrars/repair.js");
+      const repaired = await repairAllConfigs();
+      if (repaired.length > 0) {
+        console.error(
+          `  project-brain: fixed the MCP launch command for ${repaired.join(", ")} — restart to reconnect`
+        );
+      }
+    } catch {
+      /* fail-silent — a host config must never break a command */
+    }
+  }
 }
 
 function printHelp() {

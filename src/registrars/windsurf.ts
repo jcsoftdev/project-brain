@@ -26,6 +26,10 @@ export class WindsurfRegistrar implements AIToolRegistrar {
     });
   }
 
+  mcpConfigTarget(): { path: string; containerKey: string } {
+    return { path: join(this.baseDir, "mcp_config.json"), containerKey: "mcpServers" };
+  }
+
   async writeRules(rulesContent: string): Promise<void> {
     await mkdir(join(this.baseDir, "rules"), { recursive: true });
     await writeSection(this.rulesPath(), rulesContent);
