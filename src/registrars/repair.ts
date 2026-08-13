@@ -1,3 +1,4 @@
+import { rename, unlink } from "node:fs/promises";
 import { launchCommand, upsertJsonConfig } from "./json-config.js";
 import { getRegistrars, type AIToolRegistrar } from "./types.js";
 
@@ -96,8 +97,16 @@ export async function repairAllConfigs(
   for (const registrar of list) {
     try {
       const target = registrar.mcpConfigTarget?.();
-      if (!target) continue; // Codex (TOML via its own CLI) and anything new
-      if (await repairConfigFile(target.path, target.containerKey)) {
+      if (target) {
+        if (await repairConfigFile(target.path, target.containerKey)) {
+          repaired.push(registrar.name);
+        }
+        continue;
+      }
+
+      // Codex keeps its server map in TOML, repaired by targeted text edit.
+      const tomlPath = registrar.mcpTomlConfigPath?.();
+      if (tomlPath && (await repairTomlFile(tomlPath))) {
         repaired.push(registrar.name);
       }
     } catch {
@@ -107,4 +116,83 @@ export async function repairAllConfigs(
   }
 
   return repaired;
+}
+
+/** The `[mcp_servers.project-brain]` table header, and the end of that table. */
+const TOML_TABLE = "[mcp_servers.project-brain]";
+
+/**
+ * Repair a stale bun-prefixed launch inside Codex's TOML config.
+ *
+ * Edits the text surgically rather than parsing and re-serialising: a
+ * round-trip would drop the user's comments and reorder their tables, the same
+ * trade this project already refuses for JSONC in upsertJsonConfig.
+ *
+ * Returns the repaired document, or null when there is nothing to fix.
+ */
+export function repairTomlLaunch(toml: string): string | null {
+  const lines = toml.split("\n");
+  const start = lines.findIndex((l) => l.trim() === TOML_TABLE);
+  if (start === -1) return null;
+
+  // The table ends at the next table header — including its own `.env`
+  // subtable, which must be left untouched.
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i]!.trimStart().startsWith("[")) {
+      end = i;
+      break;
+    }
+  }
+
+  const commandAt = lines.findIndex(
+    (l, i) => i > start && i < end && /^\s*command\s*=/.test(l)
+  );
+  const argsAt = lines.findIndex(
+    (l, i) => i > start && i < end && /^\s*args\s*=/.test(l)
+  );
+  if (commandAt === -1 || argsAt === -1) return null;
+
+  if (!/^\s*command\s*=\s*"bun"\s*$/.test(lines[commandAt]!)) return null;
+
+  // Exactly one string element — the shape setup wrote. Anything else is a
+  // customization we must not touch.
+  const argsMatch = lines[argsAt]!.match(/^\s*args\s*=\s*\[\s*"([^"]*)"\s*\]\s*$/);
+  if (!argsMatch) return null;
+
+  const serverPath = argsMatch[1]!;
+  const repaired = launchCommand(serverPath);
+  if (repaired.command === "bun") return null; // real source entrypoint
+
+  const out = [...lines];
+  out[commandAt] = `command = ${JSON.stringify(repaired.command)}`;
+  out.splice(argsAt, 1); // direct spawn takes no args
+  return out.join("\n");
+}
+
+/**
+ * Apply repairTomlLaunch to a file on disk. Written atomically (tmp + rename)
+ * for the same reason upsertJsonConfig is: a crash mid-write must not leave a
+ * half-written host config behind.
+ */
+export async function repairTomlFile(configPath: string): Promise<boolean> {
+  let raw: string;
+  try {
+    raw = await Bun.file(configPath).text();
+  } catch {
+    return false;
+  }
+
+  const repaired = repairTomlLaunch(raw);
+  if (repaired === null) return false;
+
+  const tmpPath = `${configPath}.tmp-${process.pid}`;
+  try {
+    await Bun.write(tmpPath, repaired);
+    await rename(tmpPath, configPath);
+  } catch {
+    await unlink(tmpPath).catch(() => {});
+    return false;
+  }
+  return true;
 }

@@ -60,6 +60,13 @@ export interface AIToolRegistrar {
   mcpConfigTarget?(): { path: string; containerKey: string };
 
   /**
+   * Path to this host's TOML config, for hosts whose server map is not JSON.
+   * Repaired by targeted text edit rather than parse-and-reserialise, which
+   * would drop the user's comments and reorder their tables.
+   */
+  mcpTomlConfigPath?(): string;
+
+  /**
    * The content version of the model-routing section already written, or null
    * when there is none.
    *
