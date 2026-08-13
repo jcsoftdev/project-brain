@@ -43,6 +43,10 @@ export class VSCodeRegistrar implements AIToolRegistrar {
     });
   }
 
+  mcpConfigTarget(): { path: string; containerKey: string } {
+    return { path: join(this.baseDir, "mcp.json"), containerKey: "servers" };
+  }
+
   async writeRules(_rulesContent: string): Promise<void> {
     // VS Code has no equivalent rules/instructions directory — no-op.
   }

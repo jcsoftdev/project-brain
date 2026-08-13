@@ -47,6 +47,19 @@ export interface AIToolRegistrar {
   writeRules(rulesContent: string): Promise<void>;
 
   /**
+   * The JSON file and container key holding this host's MCP server map, so an
+   * unattended repair pass can find an entry it did not write.
+   *
+   * Undefined where the config is not a JSON map we own — Codex is registered
+   * by spawning `codex mcp add` against its TOML, which only that CLI can
+   * safely rewrite.
+   *
+   * Must agree with where `register()` writes; a drift here makes the repair
+   * silently no-op, which is the one failure mode the user cannot see.
+   */
+  mcpConfigTarget?(): { path: string; containerKey: string };
+
+  /**
    * The content version of the model-routing section already written, or null
    * when there is none.
    *

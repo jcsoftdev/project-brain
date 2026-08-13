@@ -26,6 +26,10 @@ export class GeminiRegistrar implements AIToolRegistrar {
     });
   }
 
+  mcpConfigTarget(): { path: string; containerKey: string } {
+    return { path: join(this.baseDir, "settings.json"), containerKey: "mcpServers" };
+  }
+
   async writeRules(rulesContent: string): Promise<void> {
     const rulesPath = join(this.baseDir, "GEMINI.md");
     await writeSection(rulesPath, rulesContent);
