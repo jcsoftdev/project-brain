@@ -49,6 +49,10 @@ export class CodexRegistrar implements AIToolRegistrar {
     }
   }
 
+  mcpTomlConfigPath(): string {
+    return join(this.baseDir, "config.toml");
+  }
+
   async writeRules(rulesContent: string): Promise<void> {
     const rulesPath = join(this.baseDir, "instructions.md");
     await writeSection(rulesPath, rulesContent);
