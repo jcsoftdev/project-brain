@@ -5,7 +5,7 @@ import { detectEnvironment, type Environment } from "../env/detect.js";
 import { getRegistrars, type AIToolRegistrar } from "../registrars/types.js";
 import { UnparseableConfigError, standardServerEntry } from "../registrars/json-config.js";
 import { getGlobalRules } from "../rules/global.js";
-import { parseModelRoutingFlag, parseSkillInstallFlag } from "../cli-args.js";
+import { parseModelRoutingFlag, parseRoutingHookFlag, parseSkillInstallFlag } from "../cli-args.js";
 import { getSkillTargetDirs, installSkill, type SkippedTarget } from "../rules/skills.js";
 
 export interface SetupOptions {
@@ -14,8 +14,14 @@ export interface SetupOptions {
   skipRegistration?: boolean;
   /** Injectable for testing; defaults to the real getRegistrars(). */
   registrars?: AIToolRegistrar[];
-  /** Non-interactive override for the opt-in model-routing prompt. Defaults to "ask". */
+  /** Non-interactive override for the model-routing prompt. Defaults to "ask". */
   modelRouting?: "ask" | "yes" | "no";
+  /** Injectable for testing; defaults to the real ~/.project-brain/model-routing.json. */
+  routingConfigPath?: string;
+  /** Whether to install the routing hooks into Claude Code's global settings. */
+  routingHook?: { mode: "ask" | "yes" | "no"; strict: boolean };
+  /** Injectable for testing; defaults to ~/.claude/settings.json. */
+  claudeSettingsPath?: string;
   /** Injectable for testing; defaults to the real promptModelRouting from src/interactive.js. */
   promptModelRouting?: () => Promise<boolean>;
   /**
@@ -50,10 +56,138 @@ export interface SetupResult {
   skillTargets: string[];
   /** Targets left untouched because ownership could not be proven. */
   skillSkipped: SkippedTarget[];
+  /** Which routing hooks were installed into Claude Code's global settings. */
+  routingHooks: { installed: boolean; strict: boolean };
 }
 
 /** Tool names whose settings file is commonly hand-edited as JSONC (comments allowed). */
 const JSONC_TOOLS = new Set(["Zed", "VS Code"]);
+
+/**
+ * Install the routing hooks into Claude Code's GLOBAL settings.json.
+ *
+ * Global, not project-level, because the routing rules are global — unlike the
+ * `init` context hook, which is about one indexed project.
+ *
+ * Claude Code only: it is the one host verified to fire PreToolUse on a
+ * sub-agent spawn and to accept `additionalContext` on SessionStart. Writing a
+ * hook for a host that silently never fires it is worse than writing none.
+ */
+async function installRoutingHooks(
+  targets: AIToolRegistrar[],
+  options: SetupOptions,
+  routingAccepted: boolean
+): Promise<{ installed: boolean; strict: boolean }> {
+  const { mode, strict } = options.routingHook ?? { mode: "ask", strict: false };
+  if (mode === "no") return { installed: false, strict: false };
+
+  // With no flag, the hooks ride on the ONE decision already made about
+  // routing. Someone who declined the guidance did not ask to be reminded of
+  // it every session, and asking a second question to install a reminder for
+  // the answer to the first is how prompts get clicked through.
+  if (mode === "ask" && !routingAccepted) return { installed: false, strict: false };
+
+  const claude = targets.find((r) => r.routing?.hostKey === "claude");
+  if (!claude) return { installed: false, strict: false };
+
+  const settingsPath = options.claudeSettingsPath ?? join(homedir(), ".claude", "settings.json");
+
+  try {
+    const { upsertRoutingHooks } = await import("../hooks/claude-settings.js");
+
+    let existing: object | null = null;
+    try {
+      existing = JSON.parse(await Bun.file(settingsPath).text());
+    } catch {
+      // Absent or unparseable. Absent is normal; unparseable is not ours to
+      // repair — upsert starts from scratch rather than destroying it, so bail
+      // out instead if there was real content.
+      const raw = await Bun.file(settingsPath)
+        .text()
+        .catch(() => "");
+      if (raw.trim().length > 0) {
+        console.warn(
+          `Warning: ${settingsPath} is not valid JSON — routing hooks not installed.`
+        );
+        return { installed: false, strict: false };
+      }
+    }
+
+    await mkdir(join(settingsPath, ".."), { recursive: true });
+    await Bun.write(settingsPath, `${JSON.stringify(upsertRoutingHooks(existing, { strict }), null, 2)}\n`);
+    return { installed: true, strict };
+  } catch (e: any) {
+    console.warn(`Warning: Failed to install routing hooks: ${e.message}`);
+    return { installed: false, strict: false };
+  }
+}
+
+/**
+ * Write the model-routing section to every eligible host, asking at most once.
+ *
+ * Three states, three behaviours:
+ *   - nothing written  → ask (opt-out: the default answer is yes)
+ *   - stale version    → rewrite silently; consent was already given, and
+ *                        re-asking on every content update teaches people to
+ *                        decline
+ *   - current version  → leave it alone
+ *
+ * A failure on one host is reported and skipped, never fatal: a full disk in
+ * ~/.codex must not cost the user their CLAUDE.md section.
+ */
+async function writeRoutingGuidance(
+  targets: AIToolRegistrar[],
+  options: SetupOptions
+): Promise<boolean> {
+  const mode = options.modelRouting ?? "ask";
+  if (mode === "no") return false;
+
+  const eligible = targets.filter((r) => r.routing && r.writeModelRouting);
+  if (eligible.length === 0) return false;
+
+  // Version state is read before prompting: if every host is already current
+  // there is nothing to ask about.
+  const states = await Promise.all(
+    eligible.map(async (registrar) => {
+      try {
+        return { registrar, written: (await registrar.writtenRoutingVersion?.()) ?? null };
+      } catch {
+        return { registrar, written: null };
+      }
+    })
+  );
+
+  const { ROUTING_CONTENT_VERSION } = await import("../constants.js");
+  const pending = states.filter((s) => s.written === null || s.written < ROUTING_CONTENT_VERSION);
+  // Everything already current still counts as accepted — the guidance IS in
+  // place, which is what the caller is asking about.
+  if (pending.length === 0) return true;
+
+  if (mode === "ask" && pending.some((s) => s.written === null)) {
+    const prompt =
+      options.promptModelRouting ?? (await import("../interactive.js")).promptModelRouting;
+    if (!(await prompt())) return false;
+  }
+
+  const { loadRoutingConfig } = await import("../rules/model-routing-config.js");
+  const resolved = await loadRoutingConfig(options.routingConfigPath);
+  for (const warning of resolved.warnings) console.warn(`Warning: ${warning}`);
+
+  const { getModelRoutingSection } = await import("../rules/model-routing.js");
+
+  let wrote = false;
+  for (const { registrar } of pending) {
+    try {
+      await registrar.writeModelRouting!(await getModelRoutingSection(registrar, resolved));
+      wrote = true;
+    } catch (e: any) {
+      console.warn(
+        `Warning: Failed to write model-routing guidance for ${registrar.name}: ${e.message}`
+      );
+    }
+  }
+  return wrote;
+}
 
 function buildManualInstructions(
   toolName: string,
@@ -111,6 +245,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   /** Every detected tool, whether or not its MCP registration succeeded. */
   const installedTools: string[] = [];
   const manualInstructions: string[] = [];
+  /** Registered hosts that can carry a model-routing section. */
+  const routingTargets: AIToolRegistrar[] = [];
 
   if (!options.skipRegistration) {
     const registrars = options.registrars ?? (await getRegistrars());
@@ -152,32 +288,20 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
         }
       }
 
-      if (registered && registrar.hasModelRouting && registrar.writeModelRouting) {
-        try {
-          const mode = options.modelRouting ?? "ask";
-          if (mode === "no") {
-            // skip entirely
-          } else if (mode === "yes") {
-            const { getModelRoutingSection } = await import("../rules/model-routing.js");
-            await registrar.writeModelRouting(await getModelRoutingSection());
-          } else {
-            const already = await registrar.hasModelRouting();
-            if (!already) {
-              const prompt =
-                options.promptModelRouting ?? (await import("../interactive.js")).promptModelRouting;
-              const accepted = await prompt();
-              if (accepted) {
-                const { getModelRoutingSection } = await import("../rules/model-routing.js");
-                await registrar.writeModelRouting(await getModelRoutingSection());
-              }
-            }
-          }
-        } catch (e: any) {
-          console.warn(`Warning: Failed to write model-routing guidance for ${registrar.name}: ${e.message}`);
-        }
+      if (registered) {
+        routingTargets.push(registrar);
       }
     }
   }
+
+  // 4b. Model-routing guidance, once across every eligible host.
+  //
+  // Deliberately AFTER the registrar loop, not inside it: the decision is one
+  // decision. Asking per host turned a single yes into six chances to
+  // accidentally say no, and the answer is never host-specific — only the
+  // rendered text is.
+  const routingAccepted = await writeRoutingGuidance(routingTargets, options);
+  const routingHooks = await installRoutingHooks(routingTargets, options, routingAccepted);
 
   // 5. Install the brain-audit skill.
   //
@@ -226,6 +350,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     manualInstructions,
     skillTargets,
     skillSkipped,
+    routingHooks,
   };
 }
 
@@ -235,7 +360,8 @@ export async function execute(args: string[]): Promise<void> {
 
   const modelRouting = parseModelRoutingFlag(args);
   const skillInstall = parseSkillInstallFlag(args);
-  const result = await runSetup({ modelRouting, skillInstall });
+  const routingHook = parseRoutingHookFlag(args);
+  const result = await runSetup({ modelRouting, skillInstall, routingHook });
 
   console.log(`Environment:`);
   console.log(`  Bun: ${result.env.bun}`);
@@ -264,6 +390,14 @@ export async function execute(args: string[]): Promise<void> {
 
   if (result.skillTargets.length > 0) {
     console.log(`\nSkill installed in: ${result.skillTargets.join(", ")}`);
+  }
+
+  if (result.routingHooks.installed) {
+    console.log(
+      `\nModel-routing hooks: SessionStart reminder installed${
+        result.routingHooks.strict ? ", PreToolUse guard enforcing" : ""
+      }.`
+    );
   }
 
   if (result.manualInstructions.length > 0) {

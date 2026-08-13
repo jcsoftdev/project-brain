@@ -31,21 +31,28 @@ export async function promptSkillInstall(): Promise<boolean> {
 }
 
 /**
- * Ask whether to write the opt-in model-routing section to CLAUDE.md.
+ * Ask whether to write the model-routing section into every detected host's
+ * rules file.
+ *
+ * Opt-OUT, like promptSkillInstall: a non-interactive run resolves TRUE, so
+ * scripted and CI installs get the guidance. It is part of what setup
+ * delivers, not a bonus — `--no-model-routing` is the way out.
+ *
  * Only prompts in a real interactive TTY session (both stdio streams attached,
- * not CI) — otherwise resolves false without touching stdin, so scripted/CI
- * runs never hang waiting on input.
+ * not CI), so scripted runs never hang waiting on input. Cancelling means no:
+ * an interrupted user did not consent to a home-directory write.
  */
 export async function promptModelRouting(): Promise<boolean> {
   const interactive =
     Boolean(process.stdout.isTTY) && Boolean(process.stdin.isTTY) && !process.env.CI;
-  if (!interactive) return false;
+  if (!interactive) return true;
 
   const clack = await import("@clack/prompts");
   const answer = await clack.confirm({
     message:
-      "Add model-routing guidance for delegated agents to CLAUDE.md? (tells Claude Code which model — haiku/sonnet/opus — to use per task type)",
-    initialValue: false,
+      "Add model-routing guidance for delegated agents to your AI tools' rules files? " +
+      "(which tier — fast/balanced/deep — to use per task type, and how to set it on each host)",
+    initialValue: true,
   });
   if (clack.isCancel(answer)) return false;
   return answer;

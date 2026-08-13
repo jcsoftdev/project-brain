@@ -199,6 +199,18 @@ switch (command) {
     await execute(args);
     break;
   }
+  // Hook entry points. Not for humans — these are the commands `setup` writes
+  // into Claude Code's settings.json.
+  case "routing-rules": {
+    const { execute } = await import("./hooks/routing-rules.js");
+    await execute();
+    break;
+  }
+  case "routing-guard": {
+    const { execute } = await import("./hooks/routing-guard.js");
+    await execute();
+    break;
+  }
   case "sync": {
     const { execute } = await import("./commands/sync.js");
     await execute(args);

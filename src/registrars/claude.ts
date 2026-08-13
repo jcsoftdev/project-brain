@@ -1,7 +1,9 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { writeSection, hasSection } from "../rules/section-marker.js";
-import type { AIToolRegistrar } from "./types.js";
+import { writeSection } from "../rules/section-marker.js";
+import { readWrittenRoutingVersion, writeRoutingSection } from "./routing-section.js";
+import { DEFAULT_HOST_MODELS } from "../constants.js";
+import type { AIToolRegistrar, RoutingDescriptor } from "./types.js";
 import { upsertJsonConfig, standardServerEntry } from "./json-config.js";
 import { resolveBinary } from "../env/resolve-binary.js";
 
@@ -37,14 +39,25 @@ export class ClaudeRegistrar implements AIToolRegistrar {
     await writeSection(rulesPath, rulesContent);
   }
 
-  async hasModelRouting(): Promise<boolean> {
-    const rulesPath = join(this.baseDir, "CLAUDE.md");
-    return hasSection(rulesPath, "project-brain-model-routing");
+  // The only host with a PER-CALL label: the Agent/Task tool's `description`
+  // is chosen at delegation time, so the model can be prefixed into it.
+  routing: RoutingDescriptor = {
+    hostKey: "claude",
+    mechanism: "per-spawn",
+    howToApply:
+      "pass `model` on the Agent/Task call, or set `model:` in a sub-agent's frontmatter. " +
+      "Omit it only when inheriting the session model is the deliberate choice. " +
+      "Workflow steps take the same value via `opts.model`, and `opts.effort` for the second axis.",
+    labelField: "the Agent tool's `description` (and `opts.label` in Workflow scripts)",
+    models: DEFAULT_HOST_MODELS.claude!,
+  };
+
+  async writtenRoutingVersion(): Promise<number | null> {
+    return readWrittenRoutingVersion(join(this.baseDir, "CLAUDE.md"));
   }
 
   async writeModelRouting(content: string): Promise<void> {
-    const rulesPath = join(this.baseDir, "CLAUDE.md");
-    await writeSection(rulesPath, content, "project-brain-model-routing");
+    await writeRoutingSection(join(this.baseDir, "CLAUDE.md"), content);
   }
 
   private async fallbackJsonWrite(serverPath: string): Promise<void> {

@@ -32,6 +32,25 @@ export function parseModelRoutingFlag(args: string[]): "ask" | "yes" | "no" {
 }
 
 /**
+ * Resolve the routing-hook flags: whether to install the SessionStart reminder,
+ * and whether to add the PreToolUse guard that blocks an unrouted delegation.
+ *
+ * `--routing-hook-strict` implies installation — asking for the guard and then
+ * being prompted whether to install hooks at all is one question too many. An
+ * explicit `--no-routing-hook` still wins over it: contradictory flags resolve
+ * to the reading that writes nothing.
+ */
+export function parseRoutingHookFlag(args: string[]): {
+  mode: "ask" | "yes" | "no";
+  strict: boolean;
+} {
+  if (args.includes("--no-routing-hook")) return { mode: "no", strict: false };
+  if (args.includes("--routing-hook-strict")) return { mode: "yes", strict: true };
+  if (args.includes("--routing-hook")) return { mode: "yes", strict: false };
+  return { mode: "ask", strict: false };
+}
+
+/**
  * Resolve the non-interactive override for the bundled-skill install.
  *
  * Mirrors `parseModelRoutingFlag`, but the default differs downstream: "ask"

@@ -230,27 +230,95 @@ Call \`search_context\` first for fuzzy/conceptual questions → it returns rank
  * Data-driven, same pattern as TOOL_ROUTING, so the markdown table rendered
  * into templates/model-routing.claude.md never drifts from this source.
  */
-export const MODEL_ROUTING: ReadonlyArray<{
-  task: string;
-  model: "haiku" | "sonnet" | "opus";
-  why: string;
-}> = [
-  { task: "Read-only web/MCP/grep lookup", model: "haiku", why: "no synthesis, just fetch" },
-  { task: 'Codebase exploration — locate ("where is X")', model: "haiku", why: "no analysis needed" },
-  { task: 'Codebase exploration — explain ("how does X work")', model: "sonnet", why: "needs synthesis across files" },
-  { task: "Write or edit code", model: "sonnet", why: "multi-file logic, implementation" },
-  { task: "Review a diff/PR for obvious issues", model: "sonnet", why: "pattern matching against conventions" },
-  { task: "Adversarial / blind verification review", model: "opus", why: "must genuinely try to refute, not rubber-stamp" },
-  { task: "Architecture or design decision", model: "opus", why: "weighs competing tradeoffs" },
-  { task: "Mechanical compact/archive/copy", model: "haiku", why: "no analysis, just transcription" },
-  { task: "Resolve a git conflict", model: "sonnet", why: "needs surrounding context + logic" },
+/**
+ * A tier is a claim about the WORK, not about a vendor's current lineup.
+ *
+ * Naming models directly (haiku/sonnet/opus) made every row wrong on the next
+ * release, and wrong six times over once the guidance shipped to six hosts.
+ * Tiers survive renames; only DEFAULT_HOST_MODELS has to move.
+ */
+export type RoutingTier = "fast" | "balanced" | "deep";
+
+/**
+ * What each tier means, stated so a reader on a host we have never heard of can
+ * still map it onto whatever models they do have.
+ */
+export const ROUTING_TIERS: ReadonlyArray<{ tier: RoutingTier; meaning: string }> = [
+  { tier: "fast", meaning: "retrieval, transcription, mechanical edits — no judgment" },
+  { tier: "balanced", meaning: "synthesis, implementation, review against known conventions" },
+  { tier: "deep", meaning: "genuine tradeoffs, adversarial verification, unknown root causes" },
 ];
 
-/** Markdown table (header + separator + one row per entry) for MODEL_ROUTING. */
-export function renderModelRoutingTable(): string {
-  const header = "| Task | Model | Why |";
-  const separator = "| --- | --- | --- |";
-  const rows = MODEL_ROUTING.map((r) => `| ${r.task} | ${r.model} | ${r.why} |`);
+export const MODEL_ROUTING: ReadonlyArray<{
+  task: string;
+  tier: RoutingTier;
+  why: string;
+}> = [
+  { task: "Read-only web/MCP/grep lookup", tier: "fast", why: "no synthesis, just fetch" },
+  { task: 'Codebase exploration — locate ("where is X")', tier: "fast", why: "no analysis needed" },
+  { task: "Mechanical compact/archive/copy", tier: "fast", why: "no analysis, just transcription" },
+  { task: "Extract or summarize from one known file", tier: "fast", why: "the hard part — finding it — is already done" },
+  { task: 'Codebase exploration — explain ("how does X work")', tier: "balanced", why: "needs synthesis across files" },
+  { task: "Write or edit code", tier: "balanced", why: "multi-file logic, implementation" },
+  { task: "Review a diff/PR for obvious issues", tier: "balanced", why: "pattern matching against conventions" },
+  { task: "Resolve a git conflict", tier: "balanced", why: "needs surrounding context + logic" },
+  { task: "Debug a failure with a known cause", tier: "balanced", why: "the diagnosis is done; this is the fix" },
+  { task: "Debug a failure whose root cause is unknown", tier: "deep", why: "cheap models pattern-match a plausible cause and stop" },
+  { task: "Adversarial / blind verification review", tier: "deep", why: "must genuinely try to refute, not rubber-stamp" },
+  { task: "Architecture or design decision", tier: "deep", why: "weighs competing tradeoffs" },
+  { task: "Choose between competing approaches", tier: "deep", why: "the answer is a judgment, not a lookup" },
+];
+
+/**
+ * Bumped whenever the rendered section's CONTENT changes, so `setup` can tell a
+ * stale written section from a current one.
+ *
+ * Without it, `hasSection()` conflated "already there" with "already right":
+ * a user who accepted the section once kept that text forever, and every later
+ * improvement stopped at their machine.
+ */
+export const ROUTING_CONTENT_VERSION = 2;
+
+/** Concrete model id per tier for one host. `null` = no verifiable stable name. */
+export type HostRoutingModels = Record<RoutingTier, string | null>;
+
+/**
+ * Per-host tier→model defaults, keyed by the same tool key `setup` derives from
+ * a registrar name.
+ *
+ * `null` is a deliberate answer, not a gap. opencode ids are provider-scoped
+ * (`provider/model-id`) and depend on the user's configured provider; Gemini's
+ * and Devin Desktop's lineups move faster than our release cadence. Shipping a
+ * guessed model id would hand the agent a config that silently fails — worse
+ * than shipping the tier and pointing at the user config.
+ */
+export const DEFAULT_HOST_MODELS: Record<string, HostRoutingModels> = {
+  claude: { fast: "haiku", balanced: "sonnet", deep: "opus" },
+  // Codex has one flagship: depth comes from reasoning effort, not a third model.
+  codex: { fast: "gpt-5.4-mini", balanced: "gpt-5.4", deep: "gpt-5.4" },
+  gemini: { fast: null, balanced: null, deep: null },
+  // Cursor exposes a literal "fast" tier; anything deeper is `inherit` or a pinned id.
+  cursor: { fast: "fast", balanced: null, deep: null },
+  opencode: { fast: null, balanced: null, deep: null },
+  windsurf: { fast: null, balanced: null, deep: null },
+};
+
+/**
+ * Markdown table (header + separator + one row per entry) for MODEL_ROUTING.
+ *
+ * The Model column appears only when the host has at least one verifiable id —
+ * a column of blanks teaches nothing and reads like a bug.
+ */
+export function renderModelRoutingTable(models?: HostRoutingModels): string {
+  const named = models && Object.values(models).some((m) => m !== null);
+
+  const header = named ? "| Task | Tier | Model | Why |" : "| Task | Tier | Why |";
+  const separator = named ? "| --- | --- | --- | --- |" : "| --- | --- | --- |";
+  const rows = MODEL_ROUTING.map((r) =>
+    named
+      ? `| ${r.task} | ${r.tier} | ${models![r.tier] ?? "—"} | ${r.why} |`
+      : `| ${r.task} | ${r.tier} | ${r.why} |`
+  );
   return [header, separator, ...rows].join("\n");
 }
 

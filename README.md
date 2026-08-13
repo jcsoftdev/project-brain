@@ -283,7 +283,37 @@ One-time global setup. Detects your environment and registers project-brain with
 project-brain setup
 ```
 
-On Claude Code, an interactive prompt (skipped outside a TTY/CI) offers to add opt-in model-routing guidance to `CLAUDE.md` — which model (`haiku`/`sonnet`/`opus`) to pass when spawning sub-agents. Force the answer non-interactively with `--model-routing` / `--no-model-routing`.
+#### Model routing for sub-agents
+
+Setup also writes model-routing guidance into each detected host's rules file: which **tier** — `fast`, `balanced`, or `deep` — a delegated sub-agent should run at for a given kind of task, and how to set that tier *on that host*.
+
+Tiers rather than model names, because four of the six supported hosts default sub-agents to inheriting the parent's model and set the model in an agent-definition file rather than at the call — so "pass the `model` param" is true on Claude Code and false almost everywhere else. Each host gets its own text:
+
+| Host | Where the model is chosen |
+| --- | --- |
+| Claude Code | per spawn — `model` on the Agent/Task call |
+| Codex | `~/.codex/agents/*.toml`; per-spawn needs `[features.multi_agent_v2]` |
+| Gemini CLI | `~/.gemini/agents/*.md` frontmatter `model:` |
+| Cursor | sub-agent definition: `fast`, `inherit`, or a pinned id |
+| opencode | `opencode.json` → `agent.<name>.model` (`provider/model-id`) |
+| Windsurf | Devin Local routes tiers on its own |
+
+It is opt-**out**: a non-interactive run installs it, and `--no-model-routing` is the way out. `--model-routing` forces it without prompting. The section carries a content version, so a later release updates it in place instead of leaving you on the text you first accepted.
+
+Override the table in `~/.project-brain/model-routing.json`:
+
+```json
+{
+  "models": { "claude": { "deep": "opus" } },
+  "rules": [{ "task": "Write a migration", "tier": "deep", "why": "irreversible" }]
+}
+```
+
+`models` remaps tiers per host, one tier at a time. `rules` adds a task, or retiers a built-in one by matching its `task` exactly. A malformed file warns and falls back to the defaults — it never fails setup.
+
+**Hooks (Claude Code only).** Accepting the guidance also installs a `SessionStart` hook that injects the tier table once per session. Claude Code is the only host verified to fire `PreToolUse` on a sub-agent spawn and to accept `additionalContext` on `SessionStart`; a hook that silently never fires is worse than none.
+
+Add `--routing-hook-strict` for enforcement: a `PreToolUse` hook that blocks a spawn naming no model and tells the model to re-issue it with one. Off by default — inheriting the session model is sometimes the right call, and the guard fails open on any payload it cannot parse. `--no-routing-hook` skips both.
 
 ### `init`
 

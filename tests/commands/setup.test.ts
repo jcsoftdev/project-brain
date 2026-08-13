@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { UnparseableConfigError } from "../../src/registrars/json-config.js";
 import type { AIToolRegistrar } from "../../src/registrars/types.js";
 import { SKILL_MANIFESTS } from "../../src/rules/skills.js";
+import { ROUTING_CONTENT_VERSION } from "../../src/constants.js";
 
 describe("setup command", () => {
   let tempDir: string;
@@ -221,59 +222,68 @@ describe("setup command", () => {
     expect(result.manualInstructions[0]).toContain("stdio");
   });
 
-  describe("model-routing opt-in", () => {
-    function makeFakeClaudeRegistrar() {
-      let hasSection = false;
-      const calls = { hasModelRouting: 0, writeModelRouting: 0 };
+  describe("model-routing", () => {
+    /**
+     * A registrar that carries a routing descriptor and remembers what version
+     * it has "written", so version transitions can be driven from a test.
+     */
+    function makeRoutingRegistrar(name = "Claude Code", version: number | null = null) {
+      const calls = { writtenRoutingVersion: 0, writeModelRouting: 0 };
+      let written: number | null = version;
+
       const registrar: AIToolRegistrar & {
         calls: typeof calls;
-        setHasSection(v: boolean): void;
+        lastContent: string | null;
       } = {
-        name: "Claude Code",
+        name,
         isInstalled: async () => true,
         register: async () => {},
         writeRules: async () => {},
-        hasModelRouting: async () => {
-          calls.hasModelRouting++;
-          return hasSection;
+        routing: {
+          hostKey: "claude",
+          mechanism: "per-spawn",
+          howToApply: "pass `model` on the call.",
+          labelField: "the description field",
+          models: { fast: "haiku", balanced: "sonnet", deep: "opus" },
         },
-        writeModelRouting: async () => {
+        writtenRoutingVersion: async () => {
+          calls.writtenRoutingVersion++;
+          return written;
+        },
+        writeModelRouting: async (content: string) => {
           calls.writeModelRouting++;
-          hasSection = true;
+          registrar.lastContent = content;
+          written = ROUTING_CONTENT_VERSION;
         },
         calls,
-        setHasSection: (v: boolean) => {
-          hasSection = v;
-        },
+        lastContent: null,
       };
       return registrar;
     }
 
-    it('modelRouting: "no" never calls hasModelRouting or writeModelRouting', async () => {
+    it('"no" touches nothing — not even the version check', async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
-      const dataDir = join(tempDir, "data");
-      const fake = makeFakeClaudeRegistrar();
+      const fake = makeRoutingRegistrar();
 
       await runSetup({
-        dataDir,
+        dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [fake],
         skillInstall: "no",
         modelRouting: "no",
       });
 
-      expect(fake.calls.hasModelRouting).toBe(0);
+      expect(fake.calls.writtenRoutingVersion).toBe(0);
       expect(fake.calls.writeModelRouting).toBe(0);
     });
 
-    it('modelRouting: "yes" calls writeModelRouting without calling promptModelRouting', async () => {
+    it('"yes" writes without prompting', async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
-      const dataDir = join(tempDir, "data");
-      const fake = makeFakeClaudeRegistrar();
+      const fake = makeRoutingRegistrar();
       let promptCalled = false;
 
       await runSetup({
-        dataDir,
+        dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [fake],
         skillInstall: "no",
@@ -288,17 +298,43 @@ describe("setup command", () => {
       expect(promptCalled).toBe(false);
     });
 
-    it('modelRouting: "ask" with hasModelRouting resolving true skips prompting entirely', async () => {
+    it('"ask" with nothing written prompts, and writes only on acceptance', async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
-      const dataDir = join(tempDir, "data");
-      const fake = makeFakeClaudeRegistrar();
-      fake.setHasSection(true);
+
+      const declined = makeRoutingRegistrar();
+      await runSetup({
+        dataDir: join(tempDir, "decline"),
+        skipOllama: true,
+        registrars: [declined],
+        skillInstall: "no",
+        modelRouting: "ask",
+        promptModelRouting: async () => false,
+      });
+      expect(declined.calls.writeModelRouting).toBe(0);
+
+      const accepted = makeRoutingRegistrar();
+      await runSetup({
+        dataDir: join(tempDir, "accept"),
+        skipOllama: true,
+        registrars: [accepted],
+        skillInstall: "no",
+        modelRouting: "ask",
+        promptModelRouting: async () => true,
+      });
+      expect(accepted.calls.writeModelRouting).toBe(1);
+    });
+
+    it("rewrites a stale section WITHOUT asking again", async () => {
+      // The user already consented to having this section. Re-asking on every
+      // content update would train them to say no.
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const stale = makeRoutingRegistrar("Claude Code", 1);
       let promptCalled = false;
 
       await runSetup({
-        dataDir,
+        dataDir: join(tempDir, "stale"),
         skipOllama: true,
-        registrars: [fake],
+        registrars: [stale],
         skillInstall: "no",
         modelRouting: "ask",
         promptModelRouting: async () => {
@@ -307,68 +343,191 @@ describe("setup command", () => {
         },
       });
 
-      expect(fake.calls.hasModelRouting).toBe(1);
+      expect(stale.calls.writeModelRouting).toBe(1);
       expect(promptCalled).toBe(false);
-      expect(fake.calls.writeModelRouting).toBe(0);
     });
 
-    it('modelRouting: "ask" with hasModelRouting resolving false calls the injected promptModelRouting, and writeModelRouting only if it resolves true', async () => {
+    it("leaves a current section alone", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
-      const dataDir = join(tempDir, "data");
+      const current = makeRoutingRegistrar("Claude Code", ROUTING_CONTENT_VERSION);
+      let promptCalled = false;
 
-      const declineFake = makeFakeClaudeRegistrar();
-      let declinePromptCalled = false;
       await runSetup({
-        dataDir: join(tempDir, "decline"),
+        dataDir: join(tempDir, "current"),
         skipOllama: true,
-        registrars: [declineFake],
+        registrars: [current],
         skillInstall: "no",
         modelRouting: "ask",
         promptModelRouting: async () => {
-          declinePromptCalled = true;
-          return false;
-        },
-      });
-      expect(declinePromptCalled).toBe(true);
-      expect(declineFake.calls.writeModelRouting).toBe(0);
-
-      const acceptFake = makeFakeClaudeRegistrar();
-      let acceptPromptCalled = false;
-      await runSetup({
-        dataDir: join(tempDir, "accept"),
-        skipOllama: true,
-        registrars: [acceptFake],
-        skillInstall: "no",
-        modelRouting: "ask",
-        promptModelRouting: async () => {
-          acceptPromptCalled = true;
+          promptCalled = true;
           return true;
         },
       });
-      expect(acceptPromptCalled).toBe(true);
-      expect(acceptFake.calls.writeModelRouting).toBe(1);
+
+      expect(current.calls.writeModelRouting).toBe(0);
+      expect(promptCalled).toBe(false);
     });
 
-    it("registrars without hasModelRouting/writeModelRouting (non-Claude) are skipped without error", async () => {
+    it("writes host-specific content, not one shared blob", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
-      const dataDir = join(tempDir, "data");
+      const fake = makeRoutingRegistrar();
+
+      await runSetup({
+        dataDir: join(tempDir, "content"),
+        skipOllama: true,
+        registrars: [fake],
+        skillInstall: "no",
+        modelRouting: "yes",
+      });
+
+      expect(fake.lastContent).toContain("Claude Code");
+      expect(fake.lastContent).toContain("haiku");
+      expect(fake.lastContent).toContain(`model-routing-version: ${ROUTING_CONTENT_VERSION}`);
+    });
+
+    it("skips a registrar with no routing descriptor without error", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
 
       const plainRegistrar: AIToolRegistrar = {
-        name: "Codex",
+        name: "Zed",
         isInstalled: async () => true,
         register: async () => {},
         writeRules: async () => {},
       };
 
       const result = await runSetup({
-        dataDir,
+        dataDir: join(tempDir, "plain"),
         skipOllama: true,
         registrars: [plainRegistrar],
         skillInstall: "no",
         modelRouting: "yes",
       });
 
-      expect(result.registeredTools).toEqual(["Codex"]);
+      expect(result.registeredTools).toEqual(["Zed"]);
+    });
+
+    it("one host throwing does not rob the others of their section", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const broken = makeRoutingRegistrar("Codex");
+      broken.writeModelRouting = async () => {
+        throw new Error("disk on fire");
+      };
+      const healthy = makeRoutingRegistrar("Claude Code");
+
+      await runSetup({
+        dataDir: join(tempDir, "partial"),
+        skipOllama: true,
+        registrars: [broken, healthy],
+        skillInstall: "no",
+        modelRouting: "yes",
+      });
+
+      expect(healthy.calls.writeModelRouting).toBe(1);
+    });
+
+    describe("routing hooks", () => {
+      async function runWithHooks(
+        routingHook: { mode: "ask" | "yes" | "no"; strict: boolean },
+        extra: Record<string, unknown> = {}
+      ) {
+        const { runSetup } = await import("../../src/commands/setup.js");
+        const dir = await mkdtemp(join(tmpdir(), "pb-hooks-"));
+        const settingsPath = join(dir, "settings.json");
+
+        const result = await runSetup({
+          dataDir: join(dir, "data"),
+          skipOllama: true,
+          registrars: [makeRoutingRegistrar()],
+          skillInstall: "no",
+          modelRouting: "yes",
+          routingHook,
+          claudeSettingsPath: settingsPath,
+          ...extra,
+        });
+
+        const written = existsSync(settingsPath)
+          ? JSON.parse(await readFile(settingsPath, "utf8"))
+          : null;
+        return { result, written, settingsPath };
+      }
+
+      it('writes nothing on "no"', async () => {
+        const { result, written } = await runWithHooks({ mode: "no", strict: false });
+        expect(result.routingHooks).toEqual({ installed: false, strict: false });
+        expect(written).toBeNull();
+      });
+
+      it("installs the SessionStart reminder without the guard by default", async () => {
+        const { result, written } = await runWithHooks({ mode: "yes", strict: false });
+
+        expect(result.routingHooks).toEqual({ installed: true, strict: false });
+        expect(JSON.stringify(written.hooks.SessionStart)).toContain("routing-rules");
+        expect(written.hooks.PreToolUse).toBeUndefined();
+      });
+
+      it("adds the guard in strict mode", async () => {
+        const { result, written } = await runWithHooks({ mode: "yes", strict: true });
+
+        expect(result.routingHooks.strict).toBe(true);
+        expect(JSON.stringify(written.hooks.PreToolUse)).toContain("routing-guard");
+      });
+
+      it("rides on the routing answer when no flag was given", async () => {
+        // Declining the guidance and then being reminded of it every session
+        // would be the worst of both.
+        const { result, written } = await runWithHooks(
+          { mode: "ask", strict: false },
+          { modelRouting: "ask", promptModelRouting: async () => false }
+        );
+
+        expect(result.routingHooks.installed).toBe(false);
+        expect(written).toBeNull();
+      });
+
+      it("refuses to touch a settings.json it cannot parse", async () => {
+        const dir = await mkdtemp(join(tmpdir(), "pb-hooks-bad-"));
+        const settingsPath = join(dir, "settings.json");
+        await writeFile(settingsPath, "{ definitely not json");
+
+        const { runSetup } = await import("../../src/commands/setup.js");
+        const result = await runSetup({
+          dataDir: join(dir, "data"),
+          skipOllama: true,
+          registrars: [makeRoutingRegistrar()],
+          skillInstall: "no",
+          modelRouting: "yes",
+          routingHook: { mode: "yes", strict: false },
+          claudeSettingsPath: settingsPath,
+        });
+
+        expect(result.routingHooks.installed).toBe(false);
+        // Hand-written content survives — we do not "repair" what we cannot read.
+        expect(await readFile(settingsPath, "utf8")).toBe("{ definitely not json");
+      });
+    });
+
+    it("asks once, then applies the answer to every eligible host", async () => {
+      // Six prompts for one decision is six chances to say no by accident.
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const a = makeRoutingRegistrar("Claude Code");
+      const b = makeRoutingRegistrar("Codex");
+      let prompts = 0;
+
+      await runSetup({
+        dataDir: join(tempDir, "once"),
+        skipOllama: true,
+        registrars: [a, b],
+        skillInstall: "no",
+        modelRouting: "ask",
+        promptModelRouting: async () => {
+          prompts++;
+          return true;
+        },
+      });
+
+      expect(prompts).toBe(1);
+      expect(a.calls.writeModelRouting).toBe(1);
+      expect(b.calls.writeModelRouting).toBe(1);
     });
   });
 

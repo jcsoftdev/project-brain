@@ -76,8 +76,8 @@ describe("ClaudeRegistrar", () => {
   });
 
   describe("model routing section", () => {
-    it("hasModelRouting returns false before writeModelRouting is called", async () => {
-      expect(await registrar.hasModelRouting?.()).toBe(false);
+    it("writtenRoutingVersion is null before writeModelRouting is called", async () => {
+      expect(await registrar.writtenRoutingVersion?.()).toBeNull();
     });
 
     it("writeModelRouting writes to CLAUDE.md under the project-brain-model-routing marker", async () => {
@@ -91,9 +91,17 @@ describe("ClaudeRegistrar", () => {
       expect(content).toContain("<!-- project-brain-model-routing:end -->");
     });
 
-    it("hasModelRouting returns true after writeModelRouting is called (round-trip)", async () => {
+    it("reads back the content version embedded in a written section", async () => {
+      await registrar.writeModelRouting?.("<!-- model-routing-version: 7 -->\nRoute by task type.");
+      expect(await registrar.writtenRoutingVersion?.()).toBe(7);
+    });
+
+    it("reports version 1 for a section written before versioning existed", async () => {
+      // The pre-versioning text carries no marker. Reporting `null` would read
+      // as "nothing written" and re-prompt; reporting 1 marks it stale, which
+      // is what it is.
       await registrar.writeModelRouting?.("Route sub-agents by task type.");
-      expect(await registrar.hasModelRouting?.()).toBe(true);
+      expect(await registrar.writtenRoutingVersion?.()).toBe(1);
     });
 
     it("writeModelRouting does not clobber a pre-existing writeRules section", async () => {

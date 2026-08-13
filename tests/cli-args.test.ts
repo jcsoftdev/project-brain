@@ -2,6 +2,7 @@ import { describe, it, expect } from "bun:test";
 import {
   parsePort,
   parseModelRoutingFlag,
+  parseRoutingHookFlag,
   parseSkillInstallFlag,
   collectPositionals,
   parseIntFlag,
@@ -32,6 +33,34 @@ describe("parsePort", () => {
 
   it("falls through to default when --port is the last argument with no value", () => {
     expect(parsePort(["--http", "--port"], {})).toBe(3000);
+  });
+});
+
+describe("parseRoutingHookFlag", () => {
+  it('defaults to "ask" with enforcement off', () => {
+    expect(parseRoutingHookFlag([])).toEqual({ mode: "ask", strict: false });
+  });
+
+  it("installs without asking on --routing-hook", () => {
+    expect(parseRoutingHookFlag(["--routing-hook"])).toEqual({ mode: "yes", strict: false });
+  });
+
+  it("skips entirely on --no-routing-hook", () => {
+    expect(parseRoutingHookFlag(["--no-routing-hook"])).toEqual({ mode: "no", strict: false });
+  });
+
+  it("implies installation when strict enforcement is asked for", () => {
+    // Asking for the guard and then being prompted whether to install hooks at
+    // all would be one question too many.
+    expect(parseRoutingHookFlag(["--routing-hook-strict"])).toEqual({ mode: "yes", strict: true });
+  });
+
+  it("lets an explicit opt-out win over strict", () => {
+    // Contradictory flags resolve to the SAFE reading: write nothing.
+    expect(parseRoutingHookFlag(["--routing-hook-strict", "--no-routing-hook"])).toEqual({
+      mode: "no",
+      strict: false,
+    });
   });
 });
 
