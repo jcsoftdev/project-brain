@@ -39,10 +39,11 @@ describe("ZedRegistrar", () => {
     const config = JSON.parse(await Bun.file(configPath).text());
 
     expect(config.context_servers).toBeDefined();
-    expect(config.context_servers["project-brain"].command).toBe("bun");
-    expect(config.context_servers["project-brain"].args).toContain(
+    // An installed project-brain is a compiled binary — spawn it directly.
+    expect(config.context_servers["project-brain"].command).toBe(
       "/usr/local/bin/project-brain"
     );
+    expect(config.context_servers["project-brain"].args).toEqual([]);
   });
 
   it("register preserves pre-existing unrelated settings.json keys", async () => {

@@ -39,10 +39,11 @@ describe("OpencodeRegistrar", () => {
 
     expect(config.mcpServers).toBeDefined();
     expect(config.mcpServers["project-brain"]).toBeDefined();
-    expect(config.mcpServers["project-brain"].command).toBe("bun");
-    expect(config.mcpServers["project-brain"].args).toContain(
+    // An installed project-brain is a compiled binary — spawn it directly.
+    expect(config.mcpServers["project-brain"].command).toBe(
       "/usr/local/bin/project-brain"
     );
+    expect(config.mcpServers["project-brain"].args).toEqual([]);
   });
 
   it("register preserves existing JSON keys", async () => {

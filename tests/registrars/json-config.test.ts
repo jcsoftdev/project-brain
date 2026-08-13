@@ -6,6 +6,7 @@ import {
   dirExists,
   upsertJsonConfig,
   standardServerEntry,
+  launchCommand,
   UnparseableConfigError,
 } from "../../src/registrars/json-config.js";
 
@@ -33,7 +34,9 @@ describe("json-config helper", () => {
 
       const config = JSON.parse(await Bun.file(configPath).text());
       expect(config.mcpServers["project-brain"]).toBeDefined();
-      expect(config.mcpServers["project-brain"].command).toBe("bun");
+      expect(config.mcpServers["project-brain"].command).toBe(
+        "/usr/local/bin/project-brain"
+      );
     });
 
     it("merges into existing JSON, preserving unrelated keys", async () => {
@@ -141,11 +144,50 @@ describe("json-config helper", () => {
     });
   });
 
+  describe("launchCommand", () => {
+    it("runs a .ts source entrypoint through the bun runtime", () => {
+      expect(launchCommand("/x/src/cli.ts")).toEqual({
+        command: "bun",
+        args: ["/x/src/cli.ts"],
+      });
+    });
+
+    it("runs an extensionless compiled binary directly, without a bun prefix", () => {
+      // `bun build --compile` emits a native executable. Prefixing it with the
+      // bun runtime makes bun parse the Mach-O/ELF header as JavaScript and die
+      // at startup, which the MCP client reports only as CONNECTION_CLOSED.
+      expect(launchCommand("/opt/homebrew/bin/project-brain")).toEqual({
+        command: "/opt/homebrew/bin/project-brain",
+        args: [],
+      });
+    });
+
+    it("runs a Windows .exe compiled binary directly", () => {
+      expect(launchCommand("C:\\tools\\project-brain.exe")).toEqual({
+        command: "C:\\tools\\project-brain.exe",
+        args: [],
+      });
+    });
+
+    it("runs .js and .mjs script entrypoints through bun", () => {
+      expect(launchCommand("/x/dist/cli.js").command).toBe("bun");
+      expect(launchCommand("/x/dist/cli.mjs").command).toBe("bun");
+    });
+  });
+
   describe("standardServerEntry", () => {
-    it("returns the standard mcpServers shape", () => {
+    it("returns the standard mcpServers shape for a source entrypoint", () => {
       expect(standardServerEntry("/x/cli.ts")).toEqual({
         command: "bun",
         args: ["/x/cli.ts"],
+        transport: "stdio",
+      });
+    });
+
+    it("launches a compiled binary directly instead of via bun", () => {
+      expect(standardServerEntry("/opt/homebrew/bin/project-brain")).toEqual({
+        command: "/opt/homebrew/bin/project-brain",
+        args: [],
         transport: "stdio",
       });
     });
