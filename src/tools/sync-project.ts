@@ -63,6 +63,8 @@ export function register(server: McpServer, deps: ToolDeps): void {
         ingested: z.number(),
         skipped: z.number(),
         deleted: z.number(),
+        excluded: z.number(),
+        excludedSources: z.array(z.string()),
         scanned: z.number(),
         embedFailed: z.number(),
         embedFailedSources: z.array(z.string()).optional(),

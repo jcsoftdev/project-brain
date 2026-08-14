@@ -203,6 +203,22 @@ export interface SyncResult {
   ingested: number;
   /** Files skipped due to unchanged content hash. */
   skipped: number;
+  /**
+   * Files scanned but never offered to the indexer: unreadable (stat threw),
+   * larger than the size ceiling for their kind, or content that is not
+   * indexable text (binary sniff, or a doc whose extraction failed).
+   *
+   * Distinct from `skipped`, which means "already indexed and unchanged".
+   * These previously incremented no counter at all, so `scanned` did not
+   * reconcile and silently dropped source files looked like a clean run —
+   * the same class of failure as the always-ignore substring bug, which hid
+   * 76 real files behind totals that appeared healthy.
+   *
+   * ingested + skipped + excluded === scanned.
+   */
+  excluded: number;
+  /** Relative path of every file counted in `excluded`. Empty when it is 0. */
+  excludedSources: string[];
   /** Files deleted from the store (source removed from disk). */
   deleted: number;
   /** Total files scanned. */
@@ -393,6 +409,13 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
 
     let ingested = 0;
     let skipped = 0;
+    // Files the walker scanned but no gate let through: unreadable (stat
+    // threw), over the size ceiling, or content that is not indexable text
+    // (binary sniff, failed doc extraction). Counted separately from
+    // `skipped`, which means "already up to date" — conflating the two would
+    // report dropped source files as healthy no-ops.
+    let excluded = 0;
+    const excludedSources: string[] = [];
 
     // Pipeline: read all files → embed in large batches → store per mini-wave.
     // mtime fast-path: stat() is ~10x cheaper than file.text() + hash.
@@ -457,6 +480,14 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       const batch = windowFilePaths.slice(i, i + READ_CONCURRENCY);
       const results = await Promise.all(
         batch.map(async (filePath) => {
+          // Normalize backslashes (Windows watcher delivers `\` paths) so graph
+          // files.path + manifest keys match the forward-slash keys used by the
+          // full-walk path (listAllFiles). Otherwise dedupe breaks on Windows.
+          // Computed BEFORE the stat so an unreadable file can still be named
+          // in excludedSources rather than vanishing as an anonymous drop.
+          const relPath = (filePath.startsWith(root + "/")
+            ? filePath.slice(root.length + 1) : filePath).replace(/\\/g, "/");
+
           // Fast path: check mtime via stat (no content read)
           let mtime = 0;
           let size = 0;
@@ -464,13 +495,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
             const s = await stat(filePath);
             size = s.size;
             mtime = s.mtimeMs;
-          } catch { return null; }
-
-          // Normalize backslashes (Windows watcher delivers `\` paths) so graph
-          // files.path + manifest keys match the forward-slash keys used by the
-          // full-walk path (listAllFiles). Otherwise dedupe breaks on Windows.
-          const relPath = (filePath.startsWith(root + "/")
-            ? filePath.slice(root.length + 1) : filePath).replace(/\\/g, "/");
+          } catch { return { excluded: relPath } as const; }
 
           // Extension must be known BEFORE the size gate below: doc formats
           // (pdf/docx/xlsx) get the more generous MAX_DOC_FILE_BYTES ceiling
@@ -481,7 +506,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           const dotIdx = relPath.lastIndexOf(".");
           const ext = dotIdx < 0 ? "" : relPath.slice(dotIdx);
           const sizeCeiling = isDocExtension(ext) ? MAX_DOC_FILE_BYTES : MAX_TEXT_FILE_BYTES;
-          if (size > sizeCeiling) return null;
+          if (size > sizeCeiling) return { excluded: relPath } as const;
 
           const entry = manifestStore.getEntry(relPath);
           if (entry && entry.mtime === mtime) return "skipped" as const; // mtime unchanged → skip
@@ -494,7 +519,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           // check". A null result (binary file, or a doc that failed to
           // extract) is treated exactly like a read error: skip this file.
           const content = await readIndexableText(filePath, ext);
-          if (content === null) return null;
+          if (content === null) return { excluded: relPath } as const;
           const hash = computeHash(content);
 
           if (entry && entry.hash === hash) {
@@ -588,8 +613,10 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       );
 
       for (const r of results) {
-        if (r === null) continue;
         if (r === "skipped") { skipped++; }
+        // `in` alone leaves the property `unknown` on the union members that
+        // do not declare it, so the typeof check is what narrows it to string.
+        else if ("excluded" in r && typeof r.excluded === "string") { excluded++; excludedSources.push(r.excluded); }
         else {
           pendingEntries.push(r);
           totalChanged++;
@@ -1050,6 +1077,8 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       ingested,
       skipped,
       deleted,
+      excluded,
+      excludedSources,
       scanned: filePaths.length,
       embedFailed,
       embedFailedSources,
@@ -1205,6 +1234,13 @@ export async function execute(args: string[]): Promise<void> {
   console.log(`  Skipped:  ${result.skipped} files (unchanged)`);
   if (result.deleted > 0) {
     console.log(`  Deleted:  ${result.deleted} files (removed from disk)`);
+  }
+  if (result.excluded > 0) {
+    // Named, not just counted: a file dropped for being unreadable, oversized
+    // or non-text is usually a surprise, and a bare count gives no way to tell
+    // an expected vendored blob from a source file that should have indexed.
+    console.log(`  Excluded: ${result.excluded} files (unreadable, oversized, or not indexable text)`);
+    for (const source of result.excludedSources) console.log(`            - ${source}`);
   }
   console.log(`  Model:    ${formatModelLabel(embeddings.model)}`);
   console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
