@@ -1,5 +1,6 @@
 import { dirname, join, basename } from "node:path";
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { readFile } from "node:fs/promises";
 import { GRAPH_DB_FILE } from "../constants.js";
 import { openGraphDb } from "../graph/db.js";
@@ -15,9 +16,17 @@ const CONFIG_FILE = "project.json";
  * Returns the project root, or null if none is found by the filesystem root.
  */
 export function findProjectRoot(start: string = process.cwd()): string | null {
+  // The GLOBAL data dir is `$HOME/.project-brain` — the same name this walk
+  // searches for. Without excluding it, every directory under $HOME that has
+  // no marker of its own resolved to $HOME as "the project", yielding a bogus
+  // project id (basename of the home dir) and a graph.db path that cannot
+  // exist. Computed per call so a test or subprocess overriding HOME is seen.
+  const globalDataDir = join(homedir(), CONFIG_DIR);
+
   let current = start;
   for (;;) {
-    if (existsSync(join(current, CONFIG_DIR))) return current;
+    const candidate = join(current, CONFIG_DIR);
+    if (candidate !== globalDataDir && existsSync(candidate)) return current;
     const parent = dirname(current);
     if (parent === current) return null; // reached filesystem root
     current = parent;
