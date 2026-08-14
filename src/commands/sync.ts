@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { readFile, readdir, mkdir } from "node:fs/promises";
+import { isAlwaysIgnored } from "../indexer/always-ignore.js";
 import type { Dirent } from "node:fs";
 import { computeHash } from "../indexer/hash.js";
 import { chunkContent } from "../indexer/parser.js";
@@ -267,11 +268,10 @@ async function listAllFiles(
     // any file that should be indexed is a real file, not a symlink.
     if (entry.isSymbolicLink()) continue;
 
-    // Apply always-ignore rules
-    const alwaysIgnored = WATCHER_ALWAYS_IGNORE.some(
-      (pattern) => relPath.startsWith(pattern) || relPath.includes("/" + pattern.replace(/\/$/, ""))
-    );
-    if (alwaysIgnored) continue;
+    // Apply always-ignore rules. Segment-bounded: a raw substring test drops
+    // real files whose names merely begin with an ignored directory name
+    // (`target/` removed `config/targets.js`; `build/` removed `builds/**`).
+    if (isAlwaysIgnored(relPath)) continue;
 
     // Apply .gitignore rules
     if (shouldIgnore(relPath, gitignorePatterns)) continue;

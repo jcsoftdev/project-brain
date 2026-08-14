@@ -1,6 +1,7 @@
 import { watch as fsWatch } from "node:fs";
 import { runSync } from "./commands/sync.js";
-import { WATCHER_DEBOUNCE_MS, WATCHER_ALWAYS_IGNORE, WATCHER_MAX_BATCH } from "./constants.js";
+import { WATCHER_DEBOUNCE_MS, WATCHER_MAX_BATCH } from "./constants.js";
+import { isAlwaysIgnored } from "./indexer/always-ignore.js";
 import type { EmbeddingClient, VectorStore } from "./types.js";
 import type { GraphStore } from "./graph/store.js";
 
@@ -188,11 +189,10 @@ export class FileWatcher {
 
         // Reject always-ignored paths
         const normalizedFilename = filename.replace(/\\/g, "/");
-        const shouldSkip = WATCHER_ALWAYS_IGNORE.some((pattern) =>
-          normalizedFilename.startsWith(pattern) ||
-          normalizedFilename.includes("/" + pattern.replace(/\/$/, ""))
-        );
-        if (shouldSkip) return;
+        // Segment-bounded — see indexer/always-ignore.ts. A substring test here
+        // silently stopped `config/targets.js` from ever re-indexing on save,
+        // because a rule exists for the `target/` directory.
+        if (isAlwaysIgnored(normalizedFilename)) return;
 
         this.debounced(filename);
       });

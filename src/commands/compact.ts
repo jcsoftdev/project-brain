@@ -23,8 +23,8 @@ const gb = (bytes: number) => (bytes / 1e9).toFixed(2) + " GB";
  * is reading this store, and no lock can establish that. A human running this
  * knowingly is the only guarantee available.
  */
-export async function compactCommand(project: string): Promise<void> {
-  const tablePath = `${DB_PATH}/${project.toLowerCase().replace(/[^a-z0-9]/g, "_")}_chunks.lance`;
+export async function compactCommand(project: string, dbPath: string = DB_PATH): Promise<void> {
+  const tablePath = `${dbPath}/${project.toLowerCase().replace(/[^a-z0-9]/g, "_")}_chunks.lance`;
 
   const before = await dirSize(tablePath);
   if (before === 0) {
@@ -37,7 +37,7 @@ export async function compactCommand(project: string): Promise<void> {
   console.log("Stop other project-brain servers first — this deletes files a");
   console.log("concurrent reader could still be holding open.\n");
 
-  const store = new LanceDbStore(DB_PATH);
+  const store = new LanceDbStore(dbPath);
   try {
     await store.compactAggressively(project, AGGRESSIVE_RETENTION_MS);
   } catch (err) {

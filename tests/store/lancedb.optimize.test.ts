@@ -223,3 +223,59 @@ describe("buildIndexes is serialized across processes too", () => {
     expect(a.calls.length).toBeGreaterThan(0);
   });
 });
+
+describe("listTables and compactAggressively", () => {
+  let dir: string;
+  let store: LanceDbStore;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "pb-compact-"));
+    store = new LanceDbStore(dir);
+    await store.ensureTable("proj", { model: "fake", dim: DIM });
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("listTables reports the stored tables prune classifies over", async () => {
+    expect(await store.listTables()).toContain("proj_chunks");
+  });
+
+  it("compactAggressively passes a short window and deleteUnverified", async () => {
+    const table: any = await (store as any).getTable("proj");
+    let opts: any;
+    table.optimize = async (o: any) => { opts = o; };
+
+    await store.compactAggressively("proj", 60_000);
+
+    // deleteUnverified is the entire reason this is a manual command: it
+    // removes files lance cannot prove are unreferenced.
+    expect(opts.deleteUnverified).toBe(true);
+    expect(opts.cleanupOlderThan).toBeInstanceOf(Date);
+    expect(Date.now() - opts.cleanupOlderThan.getTime()).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it("compactAggressively is a no-op for an unknown project", async () => {
+    await store.compactAggressively("never-indexed", 60_000);
+  });
+
+  it("refuses to compact while another process holds the lock", async () => {
+    // Silently skipping would tell the user their storage was reclaimed when
+    // it was not; this is the one path that throws rather than returning.
+    await Bun.write(
+      join(dir, "proj_chunks.optimize.lock"),
+      JSON.stringify({ pid: 999999, at: Date.now() })
+    );
+
+    await expect(store.compactAggressively("proj", 60_000)).rejects.toThrow(/another/);
+  });
+
+  it("releases the lock after compacting so a later run can take it", async () => {
+    const table: any = await (store as any).getTable("proj");
+    table.optimize = async () => {};
+
+    await store.compactAggressively("proj", 60_000);
+    await store.compactAggressively("proj", 60_000); // must not throw
+  });
+});
