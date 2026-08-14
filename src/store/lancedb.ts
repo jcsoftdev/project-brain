@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { open, unlink } from "node:fs/promises";
 import * as lancedb from "@lancedb/lancedb";
 import { Index, rerankers } from "@lancedb/lancedb";
 import type { IvfPqOptions } from "@lancedb/lancedb";
@@ -38,8 +40,74 @@ function isMissingFtsIndexError(err: unknown): boolean {
  * is long-lived, so the map must be bounded to avoid unbounded growth. */
 const TABLE_CACHE_MAX = 16;
 
+/**
+ * How far back optimize() keeps superseded versions. Matches lance's own
+ * conservative default; the fix for unbounded growth is preventing concurrent
+ * optimizes, not shortening this.
+ */
+const OPTIMIZE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * A lock older than this is treated as abandoned. An optimize on a large table
+ * legitimately runs for many minutes, so this must comfortably exceed that —
+ * but a process killed mid-optimize (as happened in the field) must not wedge
+ * every future run.
+ */
+const OPTIMIZE_LOCK_STALE_MS = 60 * 60 * 1000;
+
+/**
+ * Cross-process advisory lock for optimize, held as a file next to the dataset.
+ *
+ * Returns a release function, or null when another live process holds it — in
+ * which case the caller skips its own optimize entirely rather than queueing.
+ * Skipping is correct: optimize is idempotent maintenance, so the holder's run
+ * subsumes ours.
+ */
+async function acquireOptimizeLock(
+  dbPath: string,
+  key: string
+): Promise<(() => Promise<void>) | null> {
+  const lockPath = join(dbPath, `${key}.optimize.lock`);
+
+  const write = async () => {
+    // `wx` fails when the file exists — the atomic test-and-set this needs.
+    const handle = await open(lockPath, "wx");
+    await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }));
+    await handle.close();
+  };
+
+  try {
+    await write();
+  } catch {
+    // Held, or unreadable. Take it over only if it is provably stale.
+    let stale = false;
+    try {
+      const raw = await Bun.file(lockPath).text();
+      const at = JSON.parse(raw)?.at;
+      stale = typeof at !== "number" || Date.now() - at > OPTIMIZE_LOCK_STALE_MS;
+    } catch {
+      // Unparseable lock — a crash mid-write. Treat as stale.
+      stale = true;
+    }
+    if (!stale) return null;
+
+    try {
+      await unlink(lockPath);
+      await write();
+    } catch {
+      return null; // lost the race to another taker
+    }
+  }
+
+  return async () => {
+    await unlink(lockPath).catch(() => {});
+  };
+}
+
 /** LanceDB-backed vector store implementation. */
 export class LanceDbStore implements VectorStore {
+  /** In-flight optimize per table, so repeated syncs coalesce onto one run. */
+  private optimizeInFlight = new Map<string, Promise<void>>();
   private db: Awaited<ReturnType<typeof lancedb.connect>> | null = null;
   private readonly dbPath: string;
   private tables = new Map<string, Awaited<ReturnType<Awaited<ReturnType<typeof lancedb.connect>>["openTable"]>>>();
@@ -342,16 +410,54 @@ export class LanceDbStore implements VectorStore {
     }
   }
 
+  /**
+   * Compact the table and prune superseded versions.
+   *
+   * Serialised twice over, because this operation cost 181GB of index garbage
+   * and three runaway processes in the field:
+   *
+   * 1. In-process, via `optimizeInFlight` — a watcher can fire several syncs
+   *    while one optimize is still running.
+   * 2. Across processes, via a lock file — every `serve` starts its own
+   *    FileWatcher, and two servers on the same project is normal (one per MCP
+   *    host). An in-process lock is blind to that.
+   *
+   * There is deliberately NO timeout. The previous implementation raced
+   * optimize() against a 10s timer, but Promise.race only stops *awaiting* —
+   * lance's operation kept running, uncancelled and now unobserved, while the
+   * next sync launched another one on top of it.
+   */
   async optimize(project: string): Promise<void> {
+    const key = sanitizeProject(project) + TABLE_SUFFIX;
+
+    const inFlight = this.optimizeInFlight.get(key);
+    if (inFlight) return inFlight;
+
+    const run = this.runOptimize(project, key).finally(() => {
+      this.optimizeInFlight.delete(key);
+    });
+    this.optimizeInFlight.set(key, run);
+    return run;
+  }
+
+  private async runOptimize(project: string, key: string): Promise<void> {
     const table = await this.getTable(project);
     if (!table) return;
+
+    const release = await acquireOptimizeLock(this.dbPath, key);
+    if (!release) return; // another process holds it — its work covers ours
+
     try {
-      await Promise.race([
-        (table as any).optimize(),
-        new Promise<void>((_, reject) => setTimeout(() => reject(new Error("timeout")), 10_000)),
-      ]);
+      // An explicit retention window: called with no options, lance keeps every
+      // version, and 15,873 of them accumulated against 3GB of real content.
+      // `deleteUnverified` stays false — it would delete files belonging to an
+      // in-progress transaction in a process this lock cannot see.
+      const cleanupOlderThan = new Date(Date.now() - OPTIMIZE_RETENTION_MS);
+      await (table as any).optimize({ cleanupOlderThan });
     } catch {
-      // optimize() may not be available or may timeout — non-fatal
+      // Non-fatal: a failed compaction leaves the table queryable.
+    } finally {
+      await release();
     }
   }
 
