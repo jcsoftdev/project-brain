@@ -60,11 +60,30 @@ async function loadPatternsFromDir(dir: string, root: string): Promise<string[]>
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line.length > 0 && !line.startsWith("#"))
-      .map((pattern) => {
-        if (!relDir) return pattern;
+      .flatMap((pattern) => {
+        if (!relDir) return [pattern];
         const neg = pattern.startsWith("!");
         const raw = neg ? pattern.slice(1) : pattern;
-        return neg ? `!${relDir}/${raw}` : `${relDir}/${raw}`;
+
+        // git anchors a pattern to its .gitignore's directory only when the
+        // pattern contains a slash somewhere other than the trailing one.
+        // `vendor/` is NOT anchored: it matches at every depth below. Blindly
+        // prefixing it produced `sub/vendor/`, which missed `sub/api/vendor/`
+        // and let an entire Composer tree into the index.
+        const withoutTrailing = raw.endsWith("/") ? raw.slice(0, -1) : raw;
+        const anchored = withoutTrailing.includes("/");
+
+        // A leading slash means "anchored here" and is not part of the path;
+        // keeping it produced `sub//vendor`, which matched nothing.
+        const body = raw.replace(/^\//, "");
+
+        // Non-anchored needs both forms: `**` sits between two slashes, so it
+        // cannot also stand for zero directories.
+        const paths = anchored
+          ? [`${relDir}/${body}`]
+          : [`${relDir}/${body}`, `${relDir}/**/${body}`];
+
+        return neg ? paths.map((p) => `!${p}`) : paths;
       });
   } catch {
     return [];
@@ -115,9 +134,14 @@ export async function loadPatterns(root: string): Promise<string[]> {
 
 /** Simple glob pattern matching for gitignore-style patterns. */
 function matchPattern(filePath: string, pattern: string): boolean {
-  // Directory pattern (ends with /)
+  // Directory pattern (ends with /). A globbed one must go through the regex
+  // path — the literal substring check below can never match a `**`, which is
+  // exactly how prefixed nested rules silently matched nothing.
   if (pattern.endsWith("/")) {
     const dir = pattern.slice(0, -1);
+    if (dir.includes("*") || dir.includes("?")) {
+      return new RegExp("^" + globToRegexSource(dir) + "(/|$)").test(filePath);
+    }
     return filePath.includes(dir + "/") || filePath.startsWith(dir + "/");
   }
 
