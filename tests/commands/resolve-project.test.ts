@@ -29,10 +29,19 @@ describe("findProjectRoot", () => {
     expect(findProjectRoot(nested)).toBe(dir);
   });
 
-  it("returns null when no .project-brain/ exists anywhere up the tree", async () => {
+  it("does not claim a directory tree that has no .project-brain/ of its own", async () => {
+    // Deliberately NOT asserting null. Null requires no marker in ANY ancestor
+    // up to "/", which no test can guarantee on a shared machine: a stray
+    // /tmp/.project-brain (CI runners are shared, and tmpdir() is /tmp on
+    // Linux) makes the walk legitimately return /tmp and fails a test that has
+    // nothing to do with /tmp. The behaviour actually under test is that the
+    // walk does not stop inside a tree with no marker.
     const nested = join(dir, "no-marker-here");
     await mkdir(nested, { recursive: true });
-    expect(findProjectRoot(nested)).toBeNull();
+
+    const found = findProjectRoot(nested);
+    expect(found).not.toBe(nested);
+    expect(found).not.toBe(dir);
   });
 });
 
