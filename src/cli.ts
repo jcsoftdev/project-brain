@@ -79,6 +79,7 @@ function printHelp() {
 
 Usage: project-brain [command]
 Env: BRAIN_EMBED_BATCH_SIZE, BRAIN_EMBED_CONCURRENCY, BRAIN_OLLAMA_HOSTS, BRAIN_EMBED_MODEL,
+     BRAIN_EMBED_DIM (Matryoshka truncation, e.g. 512 — MRL models only),
      BRAIN_SYNC_WINDOW_FILES (see README "Tuning")
 
 Commands:

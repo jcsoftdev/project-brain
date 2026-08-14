@@ -195,7 +195,14 @@ export async function createEmbeddingClient(
   }
 
   // Detect actual dim via a real embed probe
-  const dim = (await detectDim(host, chosenModel, { embed: options.embed })) ?? chosenSpecDim ?? 768;
+  const nativeDim = (await detectDim(host, chosenModel, { embed: options.embed })) ?? chosenSpecDim ?? 768;
+
+  // Optional Matryoshka truncation. Storage is dominated by the vector column
+  // (dim x 4 bytes per chunk), and shrinking the dimension is the only lever
+  // that touches it — index quantization compresses the index, not the table.
+  // Rejected requests fall back to the native width; see resolveEmbedDim.
+  const { resolveEmbedDim } = await import("./mrl.js");
+  const dim = resolveEmbedDim(chosenModel, nativeDim, process.env.BRAIN_EMBED_DIM);
 
   if (usePool) {
     const clients = pooledHosts.map(
