@@ -656,6 +656,12 @@ export class LanceDbStore implements VectorStore {
   }
 
   /** Drop a project's vector table + meta file ONLY — never touches any project-local `.project-brain/` directory. */
+  /** Raw table names in the store — what prune classifies over. */
+  async listTables(): Promise<string[]> {
+    const db = await this.getDb();
+    return db.tableNames();
+  }
+
   async deleteProject(project: string): Promise<boolean> {
     const name = this.tableName(project);
     const db = await this.getDb();

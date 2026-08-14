@@ -10,6 +10,12 @@ export interface ProjectEntry {
   root: string;
   /** Epoch ms of the last registration. */
   updatedAt: number;
+  /**
+   * Epoch ms when this project's root was first observed missing, or absent
+   * while it is present. A grace window on this is what separates a deleted
+   * repo from a temporarily unmounted volume.
+   */
+  missingSince?: number;
 }
 
 export type ProjectRegistry = Record<string, ProjectEntry>;
@@ -42,7 +48,12 @@ export async function readRegistry(dataDir: string): Promise<ProjectRegistry> {
     const out: ProjectRegistry = {};
     for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
       if (isEntry(value)) {
-        out[id] = { root: value.root, updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0 };
+        const entry: ProjectEntry = {
+          root: value.root,
+          updatedAt: typeof value.updatedAt === "number" ? value.updatedAt : 0,
+        };
+        if (typeof value.missingSince === "number") entry.missingSince = value.missingSince;
+        out[id] = entry;
       }
     }
     return out;
@@ -64,11 +75,24 @@ export async function registerProject(
   try {
     const registry = await readRegistry(dataDir);
 
-    // Self-prune: scratch checkouts, CI temp dirs and deleted repos would
-    // otherwise accumulate forever, since nothing ever unregisters a project.
-    // The entry being written is exempt — its root is authoritative here.
+    // Mark — never erase — entries whose root has vanished.
+    //
+    // This used to `delete` them outright, which had two costs. A root can be
+    // absent because a volume is unmounted, not because the project is gone,
+    // and the deletion was silent and immediate. Worse, the entry is the only
+    // record of which table that data belongs to: erasing it turned a prunable
+    // orphan into unattributable storage nobody could safely reclaim.
+    //
+    // Stamping `missingSince` keeps the attribution and starts a clock that
+    // `prune` can act on. The entry being written is exempt — its root is
+    // authoritative here.
     for (const [id, entry] of Object.entries(registry)) {
-      if (id !== projectId && !existsSync(entry.root)) delete registry[id];
+      if (id === projectId) continue;
+      if (existsSync(entry.root)) {
+        delete entry.missingSince; // came back — an unmount, not a deletion
+      } else {
+        entry.missingSince ??= now;
+      }
     }
 
     registry[projectId] = { root, updatedAt: now };
