@@ -938,12 +938,27 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
           (f.startsWith(root + "/") ? f.slice(root.length + 1) : f).replace(/\\/g, "/")
         )
       );
+      // Collect first, delete in batches. Every lance delete commits a version
+      // manifest, so deleting one source per call costs one version per FILE:
+      // the sweep that removed 58,189 vendored files grew _versions from 16,070
+      // to 78,786 manifests and 5GB, against ~200MB of real content. The graph
+      // and manifest are local SQLite and stay per-file.
+      const goneRelPaths: string[] = [];
       for (const relPath of priorPaths) {
         if (!currentRels.has(relPath)) {
-          await store.deleteBySource(projectId, relPath);
+          goneRelPaths.push(relPath);
           graph.deleteFile(relPath);
           manifestStore.deleteFile(relPath);
           deleted++;
+        }
+      }
+      if (goneRelPaths.length > 0) {
+        if (typeof (store as any).deleteBySources === "function") {
+          await (store as any).deleteBySources(projectId, goneRelPaths);
+        } else {
+          for (const relPath of goneRelPaths) {
+            await store.deleteBySource(projectId, relPath);
+          }
         }
       }
 

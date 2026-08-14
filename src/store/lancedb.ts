@@ -5,6 +5,7 @@ import { Index, rerankers } from "@lancedb/lancedb";
 import type { IvfPqOptions } from "@lancedb/lancedb";
 import { ANN_INDEX_MIN_ROWS, EMBEDDING_MODEL, TABLE_SUFFIX, VECTOR_DIM } from "../constants.js";
 import { readTableMeta, writeTableMeta } from "./meta.js";
+import { buildSourcePredicates } from "./batch-delete.js";
 import type { TableMeta } from "./meta.js";
 import type { Chunk, SearchResult, VectorStore, SymbolKind } from "../types.js";
 
@@ -333,6 +334,24 @@ export class LanceDbStore implements VectorStore {
     this.modulesCache.delete(this.tableName(project));
   }
 
+  /**
+   * Delete every chunk belonging to any of `sources`, in batched transactions.
+   *
+   * Prefer this over looping deleteBySource: each lance delete commits a
+   * version manifest, so per-file deletion costs one version per file. A sweep
+   * of 58,189 vendored files grew _versions to 78,786 manifests and 5GB
+   * against ~200MB of real content.
+   */
+  async deleteBySources(project: string, sources: string[]): Promise<void> {
+    const table = await this.getTable(project);
+    if (!table) return;
+
+    for (const predicate of buildSourcePredicates(sources)) {
+      await table.delete(predicate);
+    }
+    if (sources.length > 0) this.modulesCache.delete(this.tableName(project));
+  }
+
   async listModules(project: string): Promise<string[]> {
     const name = this.tableName(project);
     const cached = this.modulesCache.get(name);
@@ -451,6 +470,34 @@ export class LanceDbStore implements VectorStore {
 
     try {
       await this.compact(table);
+    } finally {
+      await release();
+    }
+  }
+
+  /**
+   * Reclaim storage aggressively: prune versions down to `retentionMs` and
+   * allow deleting files lance cannot verify are unreferenced.
+   *
+   * Separate from the routine path because `deleteUnverified` removes files
+   * that may belong to a transaction in a process this lock cannot see — the
+   * cross-process lock covers our own maintenance, not other processes' READS.
+   * Safe only when nothing else is using the store, which only a human can
+   * assert, so this is never called automatically.
+   */
+  async compactAggressively(project: string, retentionMs: number): Promise<void> {
+    const key = sanitizeProject(project) + TABLE_SUFFIX;
+    const table = await this.getTable(project);
+    if (!table) return;
+
+    const release = await acquireOptimizeLock(this.dbPath, key);
+    if (!release) throw new Error("another project-brain process is doing maintenance on this table");
+
+    try {
+      await (table as any).optimize({
+        cleanupOlderThan: new Date(Date.now() - retentionMs),
+        deleteUnverified: true,
+      });
     } finally {
       await release();
     }
