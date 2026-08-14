@@ -1,5 +1,5 @@
 import { createServer } from "./server.js";
-import type { VectorStore, EmbeddingClient } from "./types.js";
+import type { EmbeddingClient } from "./types.js";
 
 /**
  * Options for the HTTP MCP server.
@@ -13,9 +13,15 @@ export interface HttpServerOptions {
   embedModel?: string;
   /** Project root whose .project-brain/graph.db holds the structural graph. Defaults to process.cwd(). */
   projectRoot?: string;
-  /** DI: injectable store for tests */
-  store?: VectorStore;
-  /** DI: injectable embedding client for tests */
+  /**
+   * DI: injectable embedding client. Supplying it skips the Ollama startup
+   * probe entirely.
+   *
+   * There was a `store` option beside this one, documented the same way and
+   * equally unforwarded — but createServer has no store parameter at all, so
+   * it could never have worked. Removed rather than left as a hook that
+   * silently does nothing.
+   */
   embeddings?: EmbeddingClient;
 }
 
@@ -99,6 +105,10 @@ export async function createHttpServer(
     ollamaHost: opts.ollamaHost,
     embedModel: opts.embedModel,
     projectRoot: opts.projectRoot,
+    // Forwarding this is what makes the option real. Dropped, every HTTP
+    // server probed Ollama on startup — 2.7s idle, over 5s busy — which timed
+    // out unrelated tests in this suite on any machine running Ollama.
+    embeddings: opts.embeddings,
   });
 
   // Stateless transport (no session management needed for basic HTTP access)

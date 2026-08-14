@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { stubEmbeddings } from "./stub-embeddings.js";
 
 /**
  * T-12: authorize() pure helper — exhaustive unit tests
@@ -85,7 +86,11 @@ describe("createHttpServer — token guard (T-13)", () => {
   it("resolves to a handle with port and close() when token is valid", async () => {
     const { createHttpServer } = await import("../src/server-http.js");
 
-    const handle = await createHttpServer({ port: 13003, token: "valid-token" });
+    const handle = await createHttpServer({
+      port: 13003,
+      token: "valid-token",
+      embeddings: stubEmbeddings,
+    });
     expect(handle).toBeDefined();
     expect(handle.port).toBe(13003);
     expect(typeof handle.close).toBe("function");
@@ -141,7 +146,11 @@ describe("S4: HTTP project scoping (structural)", () => {
     const { createHttpServer } = await import("../src/server-http.js");
 
     // Using port 0 for ephemeral binding (OS assigns a free port)
-    const handle = await createHttpServer({ port: 0, token: "scope-test-token" });
+    const handle = await createHttpServer({
+      port: 0,
+      token: "scope-test-token",
+      embeddings: stubEmbeddings,
+    });
     expect(typeof handle.port).toBe("number");
     expect(handle.port).toBeGreaterThan(0); // bound to a real ephemeral port
     expect(typeof handle.close).toBe("function");

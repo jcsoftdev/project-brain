@@ -3,12 +3,16 @@ import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createHttpServer, type HttpServerHandle } from "../src/server-http.js";
+import { stubEmbeddings } from "./stub-embeddings.js";
 
 /**
  * HTTP round-trip integration: binds a real ephemeral port and drives the
  * bearer-auth middleware end-to-end (not just the pure authorize() helper).
- * No Ollama needed — auth runs before any embedding work, so the middleware
- * is exercised regardless of the embedding backend.
+ *
+ * No Ollama needed — auth runs before any embedding work, so the middleware is
+ * exercised regardless of the embedding backend. That was only true of request
+ * handling, though: construction probed Ollama until an embedding client was
+ * injected here, and these tests timed out on any machine running one.
  */
 describe("createHttpServer — HTTP round-trip auth (integration)", () => {
   let tempDir: string;
@@ -17,7 +21,12 @@ describe("createHttpServer — HTTP round-trip auth (integration)", () => {
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "brain-http-"));
-    handle = await createHttpServer({ port: 0, token: TOKEN, dbPath: tempDir });
+    handle = await createHttpServer({
+      port: 0,
+      token: TOKEN,
+      dbPath: tempDir,
+      embeddings: stubEmbeddings,
+    });
   });
 
   afterEach(async () => {
