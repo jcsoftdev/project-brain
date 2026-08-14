@@ -101,3 +101,36 @@ describe("openProjectGraph", () => {
     graph!.close();
   });
 });
+
+describe("findProjectRoot vs the global data dir", () => {
+  let probe: string;
+
+  afterEach(async () => {
+    if (probe) await rm(probe, { recursive: true, force: true });
+  });
+
+  it("does not mistake ~/.project-brain (the global store) for a project root", async () => {
+    // DATA_DIR is literally join(homedir(), ".project-brain"), and the walk
+    // looks for a directory of exactly that name. So every directory under
+    // $HOME without its own marker resolved to $HOME as "the project",
+    // producing a wrong project id and a graph.db path that does not exist.
+    const { homedir } = await import("node:os");
+    const home = homedir();
+    if (!existsSync(join(home, ".project-brain"))) return; // nothing to prove here
+
+    probe = await mkdtemp(join(home, "pb-probe-"));
+    expect(findProjectRoot(probe)).not.toBe(home);
+  });
+
+  it("still finds a genuine project root above the start dir", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pb-real-"));
+    try {
+      await mkdir(join(dir, ".project-brain"));
+      const nested = join(dir, "a", "b");
+      await mkdir(nested, { recursive: true });
+      expect(findProjectRoot(nested)).toBe(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
