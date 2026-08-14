@@ -7,6 +7,8 @@ import { parseQueries, runBench, type BenchReport } from "../bench/run.js";
 
 export interface BenchCommandOptions {
   project: string;
+  /** Where the LanceDB tables live. Injected in tests; defaults to DB_PATH. */
+  dbPath?: string;
   /** Path to a JSONL ground-truth file: {"query": "...", "expect": "src/x.ts"}. */
   queriesPath: string;
   cutoffs?: number[];
@@ -34,8 +36,9 @@ export async function benchCommand(
     return { results: [], recall: {}, mrr: 0, errors: 0 };
   }
 
-  const store = new LanceDbStore(DB_PATH);
-  const meta = await readTableMeta(DB_PATH, options.project);
+  const dbPath = options.dbPath ?? DB_PATH;
+  const store = new LanceDbStore(dbPath);
+  const meta = await readTableMeta(dbPath, options.project);
   const embeddings = await createEmbeddingClient(meta?.model, {
     host: OLLAMA_HOST,
     autoPull: false,
