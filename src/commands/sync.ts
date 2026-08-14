@@ -978,6 +978,38 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // 6. Build FTS + vector indexes so hybridSearch works
     await store.buildIndexes(projectId);
 
+    // 6b. Keep storage bounded: refresh this project's registry entry (which
+    // also stamps `missingSince` on any root that has vanished) and drop the
+    // data of projects whose roots have been gone past the grace window.
+    //
+    // Registration used to happen only in `init`, so the missing-root clock
+    // effectively never ran and dead projects kept their tables forever.
+    //
+    // Both steps are best-effort: reclaiming disk must never fail a sync that
+    // has already written its index.
+    try {
+      const { DATA_DIR } = await import("../constants.js");
+      const { registerProject, readRegistry } = await import(
+        "../store/project-registry.js"
+      );
+      const { pruneOrphans, ORPHAN_GRACE_MS } = await import("../store/prune.js");
+
+      await registerProject(DATA_DIR, projectId, root);
+
+      if (typeof (store as any).listTables === "function") {
+        const report = await pruneOrphans(
+          store as any,
+          await readRegistry(DATA_DIR),
+          { now: Date.now(), graceMs: ORPHAN_GRACE_MS }
+        );
+        for (const c of report.deleted) {
+          console.log(`  Pruned:   ${c.project} (root gone since ${new Date(c.missingSince!).toISOString().slice(0, 10)})`);
+        }
+      }
+    } catch {
+      // Non-fatal — the index is already built and durable.
+    }
+
     // 7. Manifest is already durable — every write above (Phase A mtime
     // refresh, Phase C per-file upsert/delete, the deletion sweep) commits
     // directly via ManifestStore's own transactions. No wholesale rewrite

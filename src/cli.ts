@@ -90,6 +90,7 @@ Commands:
   sync               Incremental sync (re-index changed files)
   conceptualize      Update conceptual module docs from the latest commit
   reindex            Full re-index (drop + rebuild)
+  prune              Reclaim storage from projects whose roots are gone [--dry-run]
   health             Check system health and staleness
   search "<query>"   Search indexed context (used by hooks); prints compact results
   update             Update project-brain to the latest published version
@@ -245,6 +246,12 @@ switch (command) {
     await execute(args);
     break;
   }
+  case "prune": {
+    const { pruneCommand } = await import("./commands/prune.js");
+    await pruneCommand({ dryRun: args.includes("--dry-run") });
+    break;
+  }
+
   case "reindex": {
     const { execute } = await import("./commands/reindex.js");
     await execute(args);

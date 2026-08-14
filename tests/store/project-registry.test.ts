@@ -81,9 +81,11 @@ describe("registerProject", () => {
     expect(await lookupProjectRoot(dir, "b")).toBe(rootB);
   });
 
-  it("prunes entries whose root no longer exists", async () => {
-    // Without this the file grows forever: every scratch project ever indexed
-    // (CI checkouts, temp dirs, deleted repos) stays recorded for good.
+  it("marks a vanished root with missingSince instead of erasing the entry", async () => {
+    // Erasing on sight had two costs. An absent root can mean an unmounted
+    // volume, not a deleted repo; and the entry is the only record of which
+    // stored table that data belongs to, so deleting it turned a reclaimable
+    // orphan into storage nobody could attribute. `prune` acts on the stamp.
     const alive = await realRoot("alive");
     const doomed = await realRoot("doomed");
     await registerProject(dir, "alive", alive, 1);
@@ -92,7 +94,10 @@ describe("registerProject", () => {
     await rm(doomed, { recursive: true, force: true });
     await registerProject(dir, "alive", alive, 3);
 
-    expect(Object.keys(await readRegistry(dir)).sort()).toEqual(["alive"]);
+    const registry = await readRegistry(dir);
+    expect(Object.keys(registry).sort()).toEqual(["alive", "doomed"]);
+    expect(registry.doomed?.missingSince).toBe(3);
+    expect(registry.alive?.missingSince).toBeUndefined();
   });
 
   it("never prunes the entry being registered", async () => {
