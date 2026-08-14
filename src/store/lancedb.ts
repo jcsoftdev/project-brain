@@ -108,6 +108,8 @@ async function acquireOptimizeLock(
 export class LanceDbStore implements VectorStore {
   /** In-flight optimize per table, so repeated syncs coalesce onto one run. */
   private optimizeInFlight = new Map<string, Promise<void>>();
+  /** Same, for buildIndexes — a watcher can fire again mid-build. */
+  private buildInFlight = new Map<string, Promise<void>>();
   private db: Awaited<ReturnType<typeof lancedb.connect>> | null = null;
   private readonly dbPath: string;
   private tables = new Map<string, Awaited<ReturnType<Awaited<ReturnType<typeof lancedb.connect>>["openTable"]>>>();
@@ -448,25 +450,63 @@ export class LanceDbStore implements VectorStore {
     if (!release) return; // another process holds it — its work covers ours
 
     try {
-      // An explicit retention window: called with no options, lance keeps every
-      // version, and 15,873 of them accumulated against 3GB of real content.
-      // `deleteUnverified` stays false — it would delete files belonging to an
-      // in-progress transaction in a process this lock cannot see.
-      const cleanupOlderThan = new Date(Date.now() - OPTIMIZE_RETENTION_MS);
-      await (table as any).optimize({ cleanupOlderThan });
-    } catch {
-      // Non-fatal: a failed compaction leaves the table queryable.
+      await this.compact(table);
     } finally {
       await release();
     }
   }
 
+  /** The compaction itself, with the lock assumed already held. */
+  private async compact(table: any): Promise<void> {
+    try {
+      // An explicit retention window: called with no options, lance keeps every
+      // version, and 15,873 of them accumulated against 3GB of real content.
+      // `deleteUnverified` stays false — it would delete files belonging to an
+      // in-progress transaction in a process this lock cannot see.
+      const cleanupOlderThan = new Date(Date.now() - OPTIMIZE_RETENTION_MS);
+      await table.optimize({ cleanupOlderThan });
+    } catch {
+      // Non-fatal: a failed compaction leaves the table queryable.
+    }
+  }
+
+  /**
+   * Build the FTS + vector indexes, then compact.
+   *
+   * Serialized by the SAME lock as optimize, and for a harder-won reason:
+   * locking optimize alone left `createIndex` exposed, and that is where the
+   * real damage was. Two watchers on one project each wrote a FULL index copy,
+   * which is how _indices reached 35GB against 1.18GB of vectors. The lock has
+   * to span index creation and compaction as one unit.
+   */
   async buildIndexes(
     project: string,
     opts?: { annMinRows?: number; ivfPqOptions?: Partial<IvfPqOptions> }
   ): Promise<void> {
+    const key = sanitizeProject(project) + TABLE_SUFFIX;
+
+    const inFlight = this.buildInFlight.get(key);
+    if (inFlight) return inFlight;
+
+    const run = this.runBuildIndexes(project, key, opts).finally(() => {
+      this.buildInFlight.delete(key);
+    });
+    this.buildInFlight.set(key, run);
+    return run;
+  }
+
+  private async runBuildIndexes(
+    project: string,
+    key: string,
+    opts?: { annMinRows?: number; ivfPqOptions?: Partial<IvfPqOptions> }
+  ): Promise<void> {
     const table = await this.getTable(project);
     if (!table) return;
+
+    const release = await acquireOptimizeLock(this.dbPath, key);
+    if (!release) return; // another process is already doing this work
+
+    try {
     try {
       await table.createIndex("content", { config: Index.fts() });
     } catch {
@@ -499,7 +539,10 @@ export class LanceDbStore implements VectorStore {
     // (freshly created or pre-existing) so index staleness doesn't silently
     // degrade newly-added rows back to brute-force scan.
     if (hasVectorIndex) {
-      await this.optimize(project);
+      await this.compact(table);
+    }
+    } finally {
+      await release();
     }
   }
 
