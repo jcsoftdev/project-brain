@@ -20,7 +20,9 @@ metadata:
 
 Apply when asked for a whole-project audit — not a single diff or PR review. Works on any project type: never assume frontend/backend/mobile/CLI before discovery confirms it.
 
-Do not apply when: the ask is scoped to one diff, PR, or file; or the project is not project-brain-indexed (`check_health` fails) — fall back to manual discovery and say so explicitly in the output.
+Do not apply when: the ask is scoped to one diff, PR, or file; or the project is not project-brain-indexed — fall back to manual discovery and say so explicitly in the output.
+
+**Indexed means `check_health` succeeded AND reported `chunks` above zero.** An unindexed project does not fail the call: it returns `{"store":"connected","embeddings":"available","chunks":0}` — a healthy server with nothing in it. Treating only a thrown error as "not indexed" lets every later `search_context` come back empty, and the audit then reports "no findings" for a project it never actually read. Check the count, not just the call.
 
 ## Hard Rules
 
@@ -38,7 +40,7 @@ Do not apply when: the ask is scoped to one diff, PR, or file; or the project is
 | What does this depend on? | `find_callees` |
 | Blast radius | `impact` |
 | Does A reach B? | `trace_path` |
-| Results look empty or stale | `check_health`, then `sync_project` |
+| Results look empty or stale | `check_health` (read `chunks`, not just success), then `sync_project` |
 
 - `find_callers` returning empty means no **in-repo** caller. Before reporting dead code, rule out: public API surface, dynamic dispatch, reflection, string-keyed registries, framework-convention entry points. State which you ruled out.
 - Every finding requires: Title, Category, Severity, Confidence (0-100%), Evidence (`file:line`), Business impact, Technical impact, Recommendation, Priority. Thin evidence ⇒ state the confidence and why. Never invent a finding.
