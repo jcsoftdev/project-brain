@@ -179,3 +179,47 @@ describe("LanceDbStore.optimize — cross-process lock", () => {
     expect(a.calls).toHaveLength(1);
   });
 });
+
+describe("buildIndexes is serialized across processes too", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "pb-buildidx-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** createIndex sits BEFORE optimize in buildIndexes. Locking only optimize
+   *  left it exposed: two watchers on one project each wrote a full index
+   *  copy, which is how _indices reached 35GB against 1.18GB of vectors. */
+  async function makeStore() {
+    const store = new LanceDbStore(dir);
+    await store.ensureTable("proj", { model: "fake", dim: DIM });
+    const table: any = await (store as any).getTable("proj");
+    const calls: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    table.createIndex = async (col: string) => { calls.push(col); await gate; };
+    table.listIndices = async () => [];
+    table.countRows = async () => 1000;
+    table.optimize = async () => {};
+    return { store, calls, release };
+  }
+
+  it("a second process does not build indexes while the first holds the lock", async () => {
+    const a = await makeStore();
+    const b = await makeStore();
+
+    const first = a.store.buildIndexes("proj", { annMinRows: 10 });
+    await new Promise((r) => setTimeout(r, 20)); // let A take the lock
+
+    await b.store.buildIndexes("proj", { annMinRows: 10 });
+    expect(b.calls).toEqual([]);
+
+    a.release();
+    await first;
+    expect(a.calls.length).toBeGreaterThan(0);
+  });
+});
