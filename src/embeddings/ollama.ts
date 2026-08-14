@@ -1,5 +1,6 @@
 import { EMBEDDING_MODEL, HEALTH_COOLDOWN_MS, VECTOR_DIM } from "../constants.js";
 import type { EmbeddingClient } from "../types.js";
+import { supportsMrl, truncateAndNormalize } from "./mrl.js";
 
 /**
  * Compute embed request timeout in ms, scaling with input size.
@@ -45,6 +46,38 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
     this.model = model;
     this.cooldownMs = cooldownMs;
     this.dim = dim;
+  }
+
+  /**
+   * Reconcile the model's native width with this client's configured `dim`.
+   *
+   * A wider response is truncated ONLY for Matryoshka-trained models, where
+   * the early dimensions deliberately carry the most information. For any
+   * other model a prefix is closer to noise than to a summary, and the damage
+   * is invisible — searches keep returning results, just worse ones — so this
+   * fails loudly instead. A narrower response is always a failure: dimensions
+   * cannot be invented.
+   */
+  private fitToDim(vectors: number[][]): number[][] | null {
+    const width = vectors[0]?.length;
+    if (width === undefined || width === this.dim) return vectors;
+
+    if (width < this.dim) {
+      console.warn(
+        `[project-brain] ${this.model} returned ${width}-dim embeddings but ${this.dim} are configured`
+      );
+      return null;
+    }
+
+    if (!supportsMrl(this.model)) {
+      console.warn(
+        `[project-brain] refusing to truncate ${width}-dim embeddings from ${this.model} to ${this.dim}: ` +
+          `it is not known to be Matryoshka-trained, and a prefix of a non-MRL embedding degrades retrieval silently`
+      );
+      return null;
+    }
+
+    return vectors.map((v) => truncateAndNormalize(v, this.dim));
   }
 
   async embed(texts: string[]): Promise<number[][] | null> {
@@ -119,10 +152,16 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
         this.recordFailure();
         return null;
       }
+      const sized = this.fitToDim(data.embeddings);
+      if (sized === null) {
+        this.recordFailure();
+        return null;
+      }
+
       // Reset circuit breaker + failure streak on success
       this.consecutiveFailures = 0;
       this.lastFailure = null;
-      return data.embeddings;
+      return sized;
     }
 
     // Unreachable (loop always returns or falls through to a return above
