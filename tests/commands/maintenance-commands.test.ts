@@ -141,12 +141,19 @@ describe("maintenance commands", () => {
         errors.push(a.join(" "));
       });
 
-      await compactCommand("does-not-exist", dbPath);
+      try {
+        await compactCommand("does-not-exist", dbPath);
 
-      expect(errors.join("\n")).toContain("no table found");
-      expect(process.exitCode).toBe(1);
-      process.exitCode = prevCode;
-      spy.mockRestore();
+        expect(errors.join("\n")).toContain("no table found");
+        expect(process.exitCode).toBe(1);
+      } finally {
+        // Bun treats `process.exitCode = undefined` as a no-op, so restoring the
+        // captured value verbatim leaves the 1 in place and the whole run exits
+        // non-zero reporting zero failures. The restore also has to survive a
+        // failing expect() above, hence the finally.
+        process.exitCode = prevCode ?? 0;
+        spy.mockRestore();
+      }
     });
   });
 
