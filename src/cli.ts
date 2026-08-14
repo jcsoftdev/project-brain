@@ -92,6 +92,7 @@ Commands:
   conceptualize      Update conceptual module docs from the latest commit
   reindex            Full re-index (drop + rebuild)
   prune              Reclaim storage from projects whose roots are gone [--dry-run]
+  bench <file.jsonl> Measure retrieval quality (recall@k, MRR) for this index [--project <id>]
   health             Check system health and staleness
   search "<query>"   Search indexed context (used by hooks); prints compact results
   update             Update project-brain to the latest published version
@@ -247,6 +248,26 @@ switch (command) {
     await execute(args);
     break;
   }
+  case "bench": {
+    const { benchCommand } = await import("./commands/bench.js");
+    const { resolveProjectId, findProjectRoot } = await import("./commands/resolve-project.js");
+    const queriesPath = args.find((a) => !a.startsWith("-"));
+    if (!queriesPath) {
+      console.error("usage: project-brain bench <queries.jsonl> [--project <id>]");
+      process.exit(1);
+    }
+    const flagIdx = args.indexOf("--project");
+    const root = findProjectRoot();
+    const project =
+      flagIdx >= 0 ? args[flagIdx + 1]! : root ? await resolveProjectId(root) : null;
+    if (!project) {
+      console.error("bench: not inside an indexed project — pass --project <id>");
+      process.exit(1);
+    }
+    await benchCommand({ project, queriesPath });
+    break;
+  }
+
   case "prune": {
     const { pruneCommand } = await import("./commands/prune.js");
     await pruneCommand({ dryRun: args.includes("--dry-run") });
