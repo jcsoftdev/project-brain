@@ -161,6 +161,46 @@ export class LanceDbStore implements VectorStore {
   }
 
   /** Lazily construct the RRFReranker once and reuse it — params are constant (no arguments), so a fresh instance per hybridSearch call is wasted work. */
+  /**
+   * Score reranked hybrid rows onto the same 0..1 scale the rest of the
+   * store reports.
+   *
+   * RRF fuses the vector and FTS rankings by RANK, so its rows expose
+   * `_relevance_score` and carry NO `_distance` at all. Reading the absent
+   * field with a `?? 0` fallback scored every row 1/(1+0) = 1 — a constant
+   * that silently disabled applyThreshold (nothing is ever below it) and
+   * reduced mmr() to pure diversity selection, since its relevance term
+   * cancels out when every candidate scores alike.
+   *
+   * Raw RRF values are also not comparable to `1/(1+distance)`: they depend
+   * only on rank and the RRF k constant (two rankers at k=60 top out near
+   * 0.033), so an absolute threshold against them is a category error, not
+   * a calibration one. What RRF does express is relative standing, so the
+   * set is normalized against its own best row — "how strong is this hit
+   * next to the best hit" — which keeps SCORE_THRESHOLD meaningful.
+   *
+   * The known limit of that reading: a uniformly weak result set still
+   * normalizes its best row to 1.0, so the threshold cannot reject a query
+   * that simply had no good answer. RRF carries no absolute signal that
+   * would let it.
+   */
+  private static rerankedScores(rows: Array<Record<string, unknown>>): number[] {
+    const raw = rows.map((r, i) => {
+      const relevance = r._relevance_score as number | undefined;
+      if (typeof relevance === "number" && Number.isFinite(relevance)) return relevance;
+      // No reranker in play (or a version that reports distance instead) —
+      // fall back to the plain vector scale rather than inventing a score.
+      const distance = r._distance as number | undefined;
+      if (typeof distance === "number" && Number.isFinite(distance)) return 1 / (1 + distance);
+      // Neither field: preserve the order the store returned instead of
+      // collapsing to a constant, which is the failure this replaced.
+      return 1 / (i + 1);
+    });
+    const max = Math.max(...raw);
+    if (!Number.isFinite(max) || max <= 0) return raw.map(() => 0);
+    return raw.map((s) => s / max);
+  }
+
   private async getReranker() {
     if (!this.reranker) {
       this.reranker = await rerankers.RRFReranker.create();
@@ -608,12 +648,13 @@ export class LanceDbStore implements VectorStore {
         .rerank(reranker)
         .limit(topK)
         .toArray();
-      return rows.map((r) => ({
+      const scores = LanceDbStore.rerankedScores(rows);
+      return rows.map((r, i) => ({
         id: r.id as string,
         content: r.content as string,
         source: r.source as string,
         module: r.module as string,
-        score: 1 / (1 + ((r._distance as number) ?? 0)),
+        score: scores[i],
         symbol_name: r.symbol_name as string | undefined,
         symbol_kind: asSymbolKind(r.symbol_kind as string | undefined),
         signature: r.signature as string | undefined,
