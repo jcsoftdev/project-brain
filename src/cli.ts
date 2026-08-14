@@ -92,6 +92,7 @@ Commands:
   conceptualize      Update conceptual module docs from the latest commit
   reindex            Full re-index (drop + rebuild)
   prune              Reclaim storage from projects whose roots are gone [--dry-run]
+  compact            Reclaim storage from old versions + deleted rows [--project <id>]
   bench <file.jsonl> Measure retrieval quality (recall@k, MRR) for this index [--project <id>]
   health             Check system health and staleness
   search "<query>"   Search indexed context (used by hooks); prints compact results
@@ -265,6 +266,20 @@ switch (command) {
       process.exit(1);
     }
     await benchCommand({ project, queriesPath });
+    break;
+  }
+
+  case "compact": {
+    const { compactCommand } = await import("./commands/compact.js");
+    const { resolveProjectId, findProjectRoot } = await import("./commands/resolve-project.js");
+    const flagIdx = args.indexOf("--project");
+    const root = findProjectRoot();
+    const project = flagIdx >= 0 ? args[flagIdx + 1]! : root ? await resolveProjectId(root) : null;
+    if (!project) {
+      console.error("compact: not inside an indexed project — pass --project <id>");
+      process.exit(1);
+    }
+    await compactCommand(project);
     break;
   }
 
