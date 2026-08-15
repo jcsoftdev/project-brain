@@ -4,6 +4,7 @@ import { LanceDbStore } from "../store/lancedb.js";
 import { readTableMeta } from "../store/meta.js";
 import { createEmbeddingClient } from "../embeddings/factory.js";
 import { parseQueries, runBench, type BenchReport } from "../bench/run.js";
+import type { EmbeddingClient } from "../types.js";
 
 export interface BenchCommandOptions {
   project: string;
@@ -12,6 +13,19 @@ export interface BenchCommandOptions {
   /** Path to a JSONL ground-truth file: {"query": "...", "expect": "src/x.ts"}. */
   queriesPath: string;
   cutoffs?: number[];
+  /**
+   * DI: embedding client to measure with. Defaults to one built from the
+   * table's recorded model against OLLAMA_HOST.
+   *
+   * Injected in tests for two reasons, and the second is the important one.
+   * The real path costs a 3s availability probe, a 10s dim probe and a 10s
+   * embed per query — well past bun's 5s default timeout on any machine where
+   * Ollama is actually running. And a real client embeds at ITS width, which
+   * cannot query a fixture table of a different width: hybridSearch degrades
+   * to [], every query misses, and a bench assertion that only checks "a miss
+   * was named" then passes while measuring nothing at all.
+   */
+  embeddings?: EmbeddingClient;
 }
 
 /**
@@ -22,10 +36,16 @@ export interface BenchCommandOptions {
  * on someone else's benchmark cannot tell you whether YOUR queries still
  * surface the right file after changing model, dimension or chunking.
  *
- * Deliberately measures hybridSearch + score threshold, NOT the full
- * search_context pipeline: MMR re-orders for diversity and the token budget
- * truncates, and both are configuration-independent post-processing. Including
- * them would add noise to precisely the comparison this exists to make.
+ * Deliberately measures hybridSearch alone, NOT the full search_context
+ * pipeline: applyThreshold drops rows, MMR re-orders for diversity and the
+ * token budget truncates, and all three are configuration-independent
+ * post-processing. Including them would add noise to precisely the comparison
+ * this exists to make.
+ *
+ * That is a real coverage boundary, not a footnote: a defect confined to the
+ * post-processing stage — a threshold that filters nothing, an MMR whose
+ * relevance term has gone constant — cannot move these numbers, so a steady
+ * recall score is NOT evidence that ranking is healthy end to end.
  */
 export async function benchCommand(
   options: BenchCommandOptions
@@ -39,7 +59,7 @@ export async function benchCommand(
   const dbPath = options.dbPath ?? DB_PATH;
   const store = new LanceDbStore(dbPath);
   const meta = await readTableMeta(dbPath, options.project);
-  const embeddings = await createEmbeddingClient(meta?.model, {
+  const embeddings = options.embeddings ?? await createEmbeddingClient(meta?.model, {
     host: OLLAMA_HOST,
     autoPull: false,
   });

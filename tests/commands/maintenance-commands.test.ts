@@ -7,6 +7,7 @@ import { pruneCommand } from "../../src/commands/prune.js";
 import { compactCommand } from "../../src/commands/compact.js";
 import { benchCommand } from "../../src/commands/bench.js";
 import { PROJECTS_FILE } from "../../src/store/project-registry.js";
+import type { EmbeddingClient } from "../../src/types.js";
 
 const DIM = 8;
 
@@ -38,6 +39,25 @@ describe("maintenance commands", () => {
   });
 
   const out = () => logs.join("\n");
+
+  /**
+   * Deterministic stand-in for the Ollama client, at the seeded table's width.
+   *
+   * Seeded chunk i carries vector fill(i), so a query naming f<i> embeds onto
+   * that chunk exactly and must retrieve src/f<i>.ts first; anything else lands
+   * far away and retrieves nothing relevant. Injecting it also keeps the suite
+   * off the network: the real path costs a 3s availability probe, a 10s dim
+   * probe and a 10s embed per query, against bun's 5s default timeout.
+   */
+  const benchEmbeddings: EmbeddingClient = {
+    dim: DIM,
+    embed: async (texts) =>
+      texts.map((t) => {
+        const named = t.match(/f(\d+)/);
+        return new Array(DIM).fill(named ? Number(named[1]) : 99);
+      }),
+    isAvailable: async () => true,
+  };
 
   async function seedTable(project: string) {
     const store = new LanceDbStore(dbPath);
@@ -170,7 +190,7 @@ describe("maintenance commands", () => {
         "utf-8"
       );
 
-      const report = await benchCommand({ project: "proj", queriesPath, dbPath });
+      const report = await benchCommand({ project: "proj", queriesPath, dbPath, embeddings: benchEmbeddings });
 
       expect(report.results).toHaveLength(2);
       expect(out()).toContain("model");
@@ -178,6 +198,17 @@ describe("maintenance commands", () => {
       expect(out()).toContain("MRR");
       // A miss must be named, not just counted — the name is the actionable part.
       expect(out()).toContain("src/absent.ts");
+
+      // The retrieval has to actually WORK, or this measures nothing. Without an
+      // injectable client the command built a real one against OLLAMA_HOST, whose
+      // width (768) cannot query a dim-8 table: hybridSearch degraded to [], every
+      // query missed, and the "a miss must be named" assertion above passed for
+      // the worst possible reason. It would have stayed green with hybridSearch
+      // deleted — and did stay green through a bug that scored every result 1.0.
+      expect(report.errors).toBe(0);
+      expect(report.results.find((r) => r.query === "f1")?.rank).toBe(1);
+      expect(report.recall[1]).toBeCloseTo(0.5);
+      expect(report.mrr).toBeCloseTo(0.5);
     });
 
     it("returns an empty report for an empty ground-truth file", async () => {
