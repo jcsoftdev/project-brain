@@ -48,6 +48,28 @@ export interface FactoryOptions {
   pull?: PullFn;
   /** Injectable embed function for dim detection in tests. */
   embed?: EmbedFn;
+  /**
+   * The embedding width already recorded for the table being queried, from
+   * `readTableMeta`. When given, the factory constructs the client directly
+   * and performs NO discovery: no `/api/tags` availability probe, no
+   * `detectDim` embed round-trip.
+   *
+   * Both of those exist to learn what the caller, in this case, already knows.
+   * `resolveModel` returns `dim: undefined` for any raw Ollama model name —
+   * which is exactly what table meta stores — so without this the dim is
+   * rediscovered over the network every time. That is invisible in a
+   * long-lived `serve` process, which builds one client at boot, and pure
+   * repeated cost in the hook path, which spawns a fresh process per prompt.
+   *
+   * Skipping the availability probe also skips its nomic fallback, and that
+   * is deliberate rather than a shortcut: falling back yields a 768-wide
+   * client for a table indexed at 1024. Such a vector is not null, so
+   * handleSearch's lexical-floor degradation never fires and the query
+   * proceeds to a vector search that cannot match — the hazard documented at
+   * commands/search.ts:199-203. Failing cleanly beats degrading into
+   * something that cannot work.
+   */
+  recordedDim?: number;
 }
 
 // ── ensureEmbeddingModel ───────────────────────────────────────────────────
@@ -150,6 +172,20 @@ export async function createEmbeddingClient(
   const host = usePool ? pooledHosts[0] : options.host ?? OLLAMA_HOST;
 
   const spec = resolveModel(modelKey);
+
+  // Caller already knows model + width (recorded at index time) — construct
+  // directly and touch the network zero times. See recordedDim on FactoryOptions.
+  if (options.recordedDim !== undefined) {
+    const { resolveEmbedDim: resolveKnownDim } = await import("./mrl.js");
+    const knownDim = resolveKnownDim(spec.model, options.recordedDim, process.env.BRAIN_EMBED_DIM);
+    if (usePool) {
+      return new EmbeddingPool(
+        pooledHosts.map((h) => new OllamaEmbeddingClient(h, undefined, spec.model, knownDim))
+      );
+    }
+    return new OllamaEmbeddingClient(host, undefined, spec.model, knownDim);
+  }
+
   const checkAvailability = options.isModelAvailable ?? makeDefaultAvailabilityChecker(host);
   const doPull = options.pull ?? makeDefaultPullFn();
 

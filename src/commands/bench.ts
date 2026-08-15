@@ -62,6 +62,12 @@ export async function benchCommand(
   const embeddings = options.embeddings ?? await createEmbeddingClient(meta?.model, {
     host: OLLAMA_HOST,
     autoPull: false,
+    // Query the table at the width it was indexed at. A benchmark that
+    // silently fell back to a different model would compare a configuration
+    // nobody is running — and at a mismatched width it would not retrieve at
+    // all, scoring recall 0 for a reason that has nothing to do with the
+    // configuration under test.
+    recordedDim: meta?.dim,
   });
 
   const report = await runBench(

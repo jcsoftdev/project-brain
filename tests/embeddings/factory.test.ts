@@ -73,6 +73,64 @@ describe("createEmbeddingClient factory", () => {
     expect(client.model).toBe("qwen3-embedding:0.6b");
   });
 
+  // ── recordedDim: skip discovery the caller has already done ──────────────────
+
+  it("skips both the availability probe and the dim probe when recordedDim is given", async () => {
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+
+    // The hook path spawns a fresh process per prompt, so every one of these
+    // round-trips is paid again from cold: a /api/tags probe and a full
+    // /api/embed dim detection before the query is even embedded. Both
+    // rediscover what readTableMeta already recorded at index time.
+    let availabilityProbes = 0;
+    let dimProbes = 0;
+
+    const client = await createEmbeddingClient("qwen3-embedding:0.6b", {
+      host: "http://127.0.0.1:11434",
+      recordedDim: 1024,
+      isModelAvailable: async () => { availabilityProbes++; return true; },
+      embed: async () => { dimProbes++; return [Array(1024).fill(0.1)]; },
+    });
+
+    expect(availabilityProbes).toBe(0);
+    expect(dimProbes).toBe(0);
+    expect(client.model).toBe("qwen3-embedding:0.6b");
+    expect(client.dim).toBe(1024);
+  });
+
+  it("does not fall back to nomic when recordedDim is given, even if the model looks unavailable", async () => {
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+
+    // Falling back would hand back a 768-wide client for a table indexed at
+    // 1024. That vector is not null, so handleSearch's lexical-floor
+    // degradation never triggers and the query proceeds to a doomed vector
+    // search instead — the exact hazard commands/search.ts:199-203 documents.
+    const client = await createEmbeddingClient("qwen3-embedding:0.6b", {
+      host: "http://127.0.0.1:11434",
+      recordedDim: 1024,
+      isModelAvailable: neverAvailable,
+    });
+
+    expect(client.model).toBe("qwen3-embedding:0.6b");
+    expect(client.dim).toBe(1024);
+  });
+
+  it("still probes when recordedDim is absent", async () => {
+    const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
+
+    let availabilityProbes = 0;
+    let dimProbes = 0;
+
+    await createEmbeddingClient("qwen3-embedding:0.6b", {
+      host: "http://127.0.0.1:11434",
+      isModelAvailable: async () => { availabilityProbes++; return true; },
+      embed: async () => { dimProbes++; return [Array(1024).fill(0.1)]; },
+    });
+
+    expect(availabilityProbes).toBe(1);
+    expect(dimProbes).toBe(1);
+  });
+
   // ── RED: auto-detect dim via injected embed ──────────────────────────────────
 
   it("RED: auto-detects dim from injected embed returning 1024-length vector", async () => {

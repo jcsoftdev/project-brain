@@ -205,6 +205,16 @@ export async function execute(
       const embeddings = await createEmbeddingClient(storedMeta?.model, {
         host: OLLAMA_HOST,
         autoPull: false, // Never download models in hook path
+        // The meta we just read carries the width too, and passing it skips
+        // both discovery round-trips. That matters here specifically: this
+        // command IS the UserPromptSubmit hook, a fresh process per prompt,
+        // so an availability probe and a dim-detection embed were being paid
+        // from cold before every single search. Measured warm on a developer
+        // machine, they were 85ms against 92ms of actual query embedding —
+        // 48% of the invocation spent rediscovering recorded facts.
+        // Undefined when the project has no meta, which correctly falls
+        // through to full discovery.
+        recordedDim: storedMeta?.dim,
       });
 
       // `project` is narrowed to `string` here by the `if (!project) return;`
