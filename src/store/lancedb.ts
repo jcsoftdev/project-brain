@@ -594,24 +594,43 @@ export class LanceDbStore implements VectorStore {
     if (!release) return; // another process is already doing this work
 
     try {
+    // What already exists decides what gets built. This runs FIRST because
+    // BOTH createIndex calls below depend on it — the FTS one used to run
+    // above it, unguarded.
+    const annMinRows = opts?.annMinRows ?? ANN_INDEX_MIN_ROWS;
+    let hasVectorIndex = false;
+    let hasFtsIndex = false;
     try {
-      await table.createIndex("content", { config: Index.fts() });
+      const indices = await table.listIndices();
+      hasVectorIndex = indices.some((ix) => ix.columns.includes("vector"));
+      hasFtsIndex = indices.some((ix) => ix.columns.includes("content"));
     } catch {
-      // Index may already exist or table has too few rows — non-fatal
+      // listIndices() unavailable — fall through and let each createIndex's
+      // own try/catch handle the "already exists" case defensively.
+    }
+    // FTS index. Guarded for the same reason as the vector index below, which
+    // it previously was not: lance's createIndex REPLACES by default, so an
+    // unguarded call does not no-op on an existing index — it rebuilds one,
+    // writing a fresh index directory that lance then retains for the whole
+    // compaction window. The old `catch` here assumed "already exists" would
+    // throw. It never did.
+    //
+    // The cost was not theoretical. On a 42k-row table synced by a watcher,
+    // this rebuilt the FTS index roughly every 19 seconds: 4,481 copies in 24
+    // hours at ~11 MB each, 48 GB of index garbage against 1.5 GB of real
+    // data. Holding the maintenance lock could never have helped — one
+    // well-behaved process produces this on its own.
+    if (!hasFtsIndex) {
+      try {
+        await table.createIndex("content", { config: Index.fts() });
+      } catch {
+        // Table may have too few rows — non-fatal, hybridSearch falls back.
+      }
     }
     // Vector ANN index: without it every query is an exact O(n) scan over
     // all vectors — fine for small repos, linear-degrading for large ones.
     // IVF_PQ defaults (numPartitions ≈ sqrt(rows), auto subvectors) are
     // fine; we only gate on size so tiny tables keep exact search.
-    const annMinRows = opts?.annMinRows ?? ANN_INDEX_MIN_ROWS;
-    let hasVectorIndex = false;
-    try {
-      const indices = await table.listIndices();
-      hasVectorIndex = indices.some((ix) => ix.columns.includes("vector"));
-    } catch {
-      // listIndices() unavailable — fall through and let createIndex's own
-      // try/catch below handle the "already exists" case defensively.
-    }
     try {
       const rows = await table.countRows();
       if (rows >= annMinRows && !hasVectorIndex) {
