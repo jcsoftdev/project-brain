@@ -91,6 +91,14 @@ export const WATCHER_ALWAYS_IGNORE = [
   ".cache/",
   "coverage/",
   ".nyc_output/",
+  // Tool-generated run artifacts. These are written and deleted again on
+  // every run, so indexing them makes an untouched project churn forever:
+  // on one real repo, 195 .playwright-mcp/ snapshots drove 163 ingested and
+  // 428 deleted on EVERY sync, at ~4.1 GB of new fragments per run, while
+  // the other 6,371 files were correctly skipped as unchanged.
+  ".playwright-mcp/",
+  "playwright-report/",
+  "test-results/",
 ];
 
 /** Default project-brain data directory. */

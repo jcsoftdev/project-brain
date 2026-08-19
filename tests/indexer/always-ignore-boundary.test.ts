@@ -38,3 +38,25 @@ describe("isAlwaysIgnored", () => {
     expect(isAlwaysIgnored("apps/web/dist")).toBe(true);
   });
 });
+
+/**
+ * Agent tooling writes timestamped artifacts into the repo and deletes them
+ * again on the next run. Indexing them turns an unchanged project into a
+ * permanently churning one.
+ */
+describe("isAlwaysIgnored — generated agent/test artifacts", () => {
+  it("ignores tool-generated artifact directories", () => {
+    // Measured on a real project: 195 of these in the manifest, driving
+    // 163 ingested + 428 deleted on EVERY sync of a repo nobody had edited,
+    // at ~4.1 GB of new fragments per run.
+    expect(isAlwaysIgnored(".playwright-mcp/page-2026-08-13T20-07-10-424Z.yml")).toBe(true);
+    expect(isAlwaysIgnored("apps/web/playwright-report/index.html")).toBe(true);
+    expect(isAlwaysIgnored("test-results/retry1/trace.zip")).toBe(true);
+  });
+
+  it("keeps source files whose names merely begin with those directory names", () => {
+    expect(isAlwaysIgnored("src/test-results-parser.ts")).toBe(false);
+    expect(isAlwaysIgnored("scripts/playwright-report-upload.js")).toBe(false);
+    expect(isAlwaysIgnored("e2e/playwright.config.ts")).toBe(false);
+  });
+});

@@ -42,11 +42,32 @@ function isMissingFtsIndexError(err: unknown): boolean {
 const TABLE_CACHE_MAX = 16;
 
 /**
- * How far back optimize() keeps superseded versions. Matches lance's own
- * conservative default; the fix for unbounded growth is preventing concurrent
- * optimizes, not shortening this.
+ * How far back optimize() keeps superseded versions.
+ *
+ * This was 7 days, on the reasoning that "the fix for unbounded growth is
+ * preventing concurrent optimizes, not shortening this". Measurement
+ * falsified that. Concurrent optimizes ARE prevented — the maintenance lock
+ * has covered index creation since 0.22.0 — and a single well-behaved process
+ * still drove one project to 139 GB, then back to 107 GB within two days of
+ * being compacted to 0.64 GB.
+ *
+ * The mechanism is simple once stated: a week-long window cannot reclaim
+ * anything a project produced this week, and a project synced many times a day
+ * produces essentially all of its garbage inside that window. Routine
+ * maintenance was therefore structurally unable to reclaim precisely the
+ * garbage that matters, which is why a MANUAL `compact` command (10-minute
+ * window) had to exist at all — the automatic path could never do its job.
+ *
+ * Shortening it is safe because the window is the SECOND guard, not the first:
+ * `compact()` passes `deleteUnverified: false`, so lance removes only files it
+ * can prove are unreferenced. The window is a coarse net beneath that proof,
+ * and an hour is ample for a reader that lance can already account for.
+ *
+ * BRAIN_OPTIMIZE_RETENTION_MS overrides it for anyone who wants the old
+ * behaviour back.
  */
-const OPTIMIZE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const OPTIMIZE_RETENTION_MS =
+  Number(process.env.BRAIN_OPTIMIZE_RETENTION_MS) || 60 * 60 * 1000;
 
 /**
  * A lock older than this is treated as abandoned. An optimize on a large table

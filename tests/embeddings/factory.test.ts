@@ -30,6 +30,7 @@ describe("createEmbeddingClient factory", () => {
     const client = await createEmbeddingClient(undefined, {
       isModelAvailable: neverAvailable,
       host: "http://127.0.0.1:11434",
+      embed: makeEmbed(768),
     });
 
     // Must fall back to nomic-embed-text
@@ -42,6 +43,7 @@ describe("createEmbeddingClient factory", () => {
     const client = await createEmbeddingClient("nomic-text", {
       isModelAvailable: alwaysAvailable,
       host: "http://127.0.0.1:11434",
+      embed: makeEmbed(768),
     });
 
     expect(client.model).toBe("nomic-embed-text");
@@ -54,6 +56,7 @@ describe("createEmbeddingClient factory", () => {
     const client = await createEmbeddingClient("nomic-text", {
       isModelAvailable: unreachable,
       host: "http://127.0.0.1:11434",
+      embed: makeEmbed(768),
     });
 
     // When unreachable, use the originally requested model spec (don't block)
@@ -67,6 +70,7 @@ describe("createEmbeddingClient factory", () => {
     const client = await createEmbeddingClient(undefined, {
       isModelAvailable: alwaysAvailable,
       host: "http://127.0.0.1:11434",
+      embed: makeEmbed(1024),
     });
 
     // Default resolves to the fast 0.6b variant, not the slow bare 8B tag
