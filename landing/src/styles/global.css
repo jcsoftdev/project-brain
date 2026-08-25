@@ -10,20 +10,53 @@
  */
 
 :root {
-  --bg: #07090d;
-  --bg-soft: #0d1117;
-  --bg-card: #10161f;
-  --border: #1e2733;
-  --border-soft: #172029;
-  --fg: #e6edf3;
-  --fg-muted: #8b98a8;
-  --fg-dim: #5c6a7a;
-  --accent: #6ee7b7;
-  --accent-dim: #34d399;
-  --accent-glow: rgba(110, 231, 183, 0.12);
-  --violet: #a78bfa;
-  --amber: #fbbf24;
-  --sky: #60a5fa;
+  /*
+   * Palette: https://coolors.co/a1d2ce-78cad2-62a8ac-5497a7-50858b
+   *
+   * All five swatches sit in a narrow teal band around hue 186 at middling
+   * lightness. That makes them a good accent family and a bad everything else:
+   * none is dark enough to sit behind text, none is light enough to be text on
+   * a dark ground. So the five are used as accents, and the grounds and type
+   * are derived at the same hue — the darks read as "unlit palette" rather
+   * than as neutral grey that happens to be nearby.
+   */
+  --p-100: #a1d2ce; /* palest  — soft highlights, the light end of gradients */
+  --p-200: #78cad2; /* most vivid — the primary accent, and the only one used on its own */
+  --p-300: #62a8ac; /* mid    — hover states, secondary marks */
+  --p-400: #5497a7; /* deep   — the blue end of gradients, tertiary marks */
+  --p-500: #50858b; /* darkest — outlines and the quietest marks */
+
+  /*
+   * Grounds. Hue held at ~187 with saturation falling as it darkens, so the
+   * page reads as one material lit from a single source.
+   */
+  --bg: #060c0e;        /* page */
+  --bg-soft: #0a1416;   /* raised strips — nav menu, hosts row, closing CTA */
+  --bg-card: #0d1a1c;   /* cards and tables */
+  --bg-inset: #12262a;  /* inline code chips, set inside cards */
+  --border: #1b3033;
+  --border-soft: #142427;
+
+  /*
+   * Type. Tinted toward the palette rather than pure white/grey — pure
+   * neutrals next to a saturated teal read as slightly pink by contrast.
+   * Contrast against --bg: fg 17.4:1, muted 10.0:1, dim 5.4:1. All clear AA;
+   * fg and muted clear AAA.
+   */
+  --fg: #e6f2f1;
+  --fg-muted: #9fbdbd;
+  --fg-dim: #6d8b8e;
+
+  /* Roles. Components reference these, never the raw swatches. */
+  --accent: var(--p-200);
+  --accent-dim: var(--p-300);
+  --accent-soft: var(--p-100);
+  --accent-deep: var(--p-400);
+  --accent-quiet: var(--p-500);
+  --accent-glow: rgba(120, 202, 210, 0.13);
+  /* Text laid on top of a filled --accent surface. 10.0:1 against it. */
+  --on-accent: #04191c;
+
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
   --maxw: 1080px;
@@ -155,7 +188,7 @@ section:first-of-type { border-top: none; }
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #06231a;
+  color: var(--on-accent);
   font-weight: 600;
 }
 .btn-primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }

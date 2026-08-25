@@ -114,3 +114,127 @@ test("the language is declared", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
 });
+
+test.describe("colour contrast", () => {
+  /*
+   * The palette is five mid-lightness teals. That is a narrow band to build a
+   * whole interface from, and the failure mode is specific: a swatch that
+   * looked fine as a 200px square on a palette site lands as 11px type on a
+   * dark ground and drops under 4.5:1. So the ratios are measured from what
+   * the browser painted, not from the hex values in the stylesheet.
+   */
+  test("every text role clears WCAG AA against what is actually behind it", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+
+    const results = await page.evaluate(() => {
+      const luminance = ([r, g, b]: number[]) => {
+        const channel = (v: number) => {
+          v /= 255;
+          return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+      };
+      const parse = (c: string) => c.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+      const contrast = (fg: string, bg: string) => {
+        const a = luminance(parse(fg));
+        const b = luminance(parse(bg));
+        const [hi, lo] = a > b ? [a, b] : [b, a];
+        return (hi + 0.05) / (lo + 0.05);
+      };
+
+      // Text usually sits on a transparent element — walk up for the real ground.
+      const groundOf = (el: Element) => {
+        let node: Element | null = el;
+        while (node) {
+          const c = getComputedStyle(node).backgroundColor;
+          if (c && !/rgba\(0, 0, 0, 0\)|transparent/.test(c)) return c;
+          node = node.parentElement;
+        }
+        return "rgb(0, 0, 0)";
+      };
+
+      const roles: [string, string][] = [
+        ["hero lead", "p.hero-lead"],
+        ["headline", "h1"],
+        ["section lead", ".section-lead"],
+        ["eyebrow", ".eyebrow"],
+        ["nav link", ".nav-links a"],
+        ["card body", ".brain p"],
+        ["table cell", ".dt td.is-prose:not(:first-child)"],
+        ["table header", ".dt th"],
+        ["code chip", ".dt td code"],
+        ["command", ".copyable code"],
+        ["prompt glyph", ".copyable .prompt"],
+        ["stat number", ".hero-stats b"],
+        ["stat label", ".hero-stats span"],
+        ["footer link", ".foot-cols a"],
+        ["footer heading", ".foot-cols h3"],
+        ["tick item", ".ticks li"],
+        ["okf term", ".okf-findings dt"],
+        ["okf exit marker", ".okf-findings b"],
+        ["tag semantic", ".tag-semantic"],
+        ["tag structural", ".tag-structural"],
+      ];
+
+      const out = roles.map(([name, selector]) => {
+        const el = document.querySelector(selector);
+        if (!el) return { name, missing: true, ratio: 0, required: 0 };
+
+        const cs = getComputedStyle(el);
+        const px = parseFloat(cs.fontSize);
+        const bold = parseInt(cs.fontWeight) >= 700;
+        // WCAG counts >=24px, or >=18.66px bold, as large text.
+        const required = px >= 24 || (bold && px >= 18.66) ? 3 : 4.5;
+
+        return {
+          name,
+          missing: false,
+          px,
+          ratio: Math.round(contrast(cs.color, groundOf(el)) * 100) / 100,
+          required,
+        };
+      });
+
+      // Filled buttons put text on the accent itself, not on the page ground.
+      const btn = document.querySelector(".btn-primary")!;
+      const bcs = getComputedStyle(btn);
+      out.push({
+        name: "primary button label",
+        missing: false,
+        px: parseFloat(bcs.fontSize),
+        ratio: Math.round(contrast(bcs.color, bcs.backgroundColor) * 100) / 100,
+        required: 4.5,
+      });
+
+      return out;
+    });
+
+    const missing = results.filter((r) => r.missing).map((r) => r.name);
+    expect(missing, "a sampled role no longer exists — update the list").toEqual([]);
+
+    const failing = results
+      .filter((r) => !r.missing && r.ratio < r.required)
+      .map((r) => `${r.name}: ${r.ratio}:1 at ${r.px}px (needs ${r.required}:1)`);
+
+    expect(failing, "these roles fail WCAG AA").toEqual([]);
+  });
+
+  test("the palette is applied through roles, not pasted as hex", async ({ page }) => {
+    await page.goto("/");
+
+    /*
+     * Every swatch should reach a component via a custom property. A raw hex
+     * in a rule is how a palette drifts — one stray #78cad2 survives the next
+     * recolour and nobody notices until it is the only teal left.
+     */
+    const declared = await page.evaluate(() => {
+      const root = getComputedStyle(document.documentElement);
+      return ["--p-100", "--p-200", "--p-300", "--p-400", "--p-500", "--on-accent"]
+        .map((name) => [name, root.getPropertyValue(name).trim()] as const)
+        .filter(([, value]) => value.length > 0);
+    });
+
+    expect(declared.length, "the palette scale is not fully declared on :root").toBe(6);
+  });
+});

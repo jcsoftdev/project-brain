@@ -109,7 +109,7 @@ const channels = [
 
       <div class="grid grid-2 brains">
         <article class="card brain">
-          <span class="tag" style="color: var(--accent); border-color: var(--accent-dim);">Semantic</span>
+          <span class="tag tag-semantic">Semantic</span>
           <h3>LanceDB vector index</h3>
           <p class="dim">
             Your files are chunked and embedded with a local Ollama model into a LanceDB store.
@@ -124,7 +124,7 @@ const channels = [
         </article>
 
         <article class="card brain">
-          <span class="tag" style="color: var(--violet); border-color: var(--violet);">Structural</span>
+          <span class="tag tag-structural">Structural</span>
           <h3>tree-sitter symbol graph</h3>
           <p class="dim">
             A WASM tree-sitter parser extracts every symbol and call edge into a local SQLite graph.
@@ -204,22 +204,22 @@ const channels = [
       </p>
 
       <div class="tool-block">
-        <h3 class="tool-h"><span class="dot" style="background: var(--accent)"></span>Semantic — meaning-based</h3>
+        <h3 class="tool-h"><span class="dot dot-1"></span>Semantic — meaning-based</h3>
         <DataTable columns={["Tool", "What it does"]} rows={semantic} code={[0]} />
       </div>
 
       <div class="tool-block">
-        <h3 class="tool-h"><span class="dot" style="background: var(--amber)"></span>Lexical — keyword, no embeddings needed</h3>
+        <h3 class="tool-h"><span class="dot dot-2"></span>Lexical — keyword, no embeddings needed</h3>
         <DataTable columns={["Tool", "What it does"]} rows={lexical} code={[0]} />
       </div>
 
       <div class="tool-block">
-        <h3 class="tool-h"><span class="dot" style="background: var(--violet)"></span>Structural — AST graph, exact</h3>
+        <h3 class="tool-h"><span class="dot dot-3"></span>Structural — AST graph, exact</h3>
         <DataTable columns={["Tool", "CLI", "What it does"]} rows={structural} code={[0, 1]} />
       </div>
 
       <div class="tool-block">
-        <h3 class="tool-h"><span class="dot" style="background: var(--sky)"></span>Modules &amp; knowledge</h3>
+        <h3 class="tool-h"><span class="dot dot-4"></span>Modules &amp; knowledge</h3>
         <DataTable columns={["Tool", "What it does"]} rows={knowledge} code={[0]} />
       </div>
     </div>
@@ -379,6 +379,20 @@ const channels = [
     white-space: nowrap;
   }
 
+  /*
+   * The palette is one narrow band of teal, so these markers are rhythm, not
+   * information — every one of them sits beside a word that already says what
+   * the category is. Walking the ramp keeps them a set; asking them to encode
+   * meaning on their own would be asking too much of five neighbouring hues.
+   */
+  .tag-semantic { color: var(--p-200); border-color: var(--p-300); }
+  .tag-structural { color: var(--p-400); border-color: var(--p-400); }
+
+  .dot-1 { background: var(--p-200); }
+  .dot-2 { background: var(--p-100); }
+  .dot-3 { background: var(--p-400); }
+  .dot-4 { background: var(--p-300); }
+
   /* ── brains ─────────────────────────────────────────────────── */
   .brains { margin-bottom: 14px; }
   .brain h3 { font-size: 18px; margin: 12px 0 9px; }
@@ -436,7 +450,7 @@ const channels = [
   .okf-findings dl { margin: 0; display: grid; gap: 15px; }
   .okf-findings dt { font-weight: 600; font-size: 14px; color: var(--fg); }
   .okf-findings dd { margin: 3px 0 0; font-size: 13.5px; color: var(--fg-muted); }
-  .okf-findings b { color: var(--amber); font-weight: 500; font-family: var(--mono); font-size: 12px; }
+  .okf-findings b { color: var(--accent-soft); font-weight: 500; font-family: var(--mono); font-size: 12px; }
 
   .note { font-size: 13.5px; margin-top: 16px; }
 
