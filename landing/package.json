@@ -9,9 +9,15 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:mobile": "playwright test --project=mobile"
   },
   "dependencies": {
     "astro": "^5.14.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
   }
 }

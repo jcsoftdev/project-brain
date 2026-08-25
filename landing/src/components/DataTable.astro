@@ -24,9 +24,20 @@ const { columns, rows, code = [], italic = [] } = Astro.props;
  * columns up the labels are what tell CLI apart from Platforms, so they stay.
  */
 const showLabels = columns.length > 2;
+
+/*
+ * When a table may become a table again depends on how wide it needs to be,
+ * and that is driven by column count: the code cells hold commands that must
+ * not wrap, so a table cannot compress below their combined width.
+ *
+ * Measured natural widths: 2-col ~830px (the prose column wraps freely, so it
+ * fits far narrower), 3-col ~832px, 4-col ~1021px. Turning a 4-column table
+ * back on at 600px is what left the install commands cut off on a tablet.
+ */
+const widthClass = `dt-cols-${Math.min(columns.length, 4)}`;
 ---
 
-<div class:list={["dt", showLabels && "dt-labelled"]}>
+<div class:list={["dt", widthClass, showLabels && "dt-labelled"]}>
   <table>
     <thead>
       <tr>{columns.map((c) => <th scope="col">{c}</th>)}</tr>
@@ -107,12 +118,13 @@ const showLabels = columns.length > 2;
     overflow-wrap: break-word;
   }
 
-  /* ── sm+: a real table again ───────────────────────────────── */
+  /* ── a real table again, once it has room to be one ───────── */
+  /* The prose column wraps, so two columns fit as soon as the gutters shrink. */
   @media (min-width: 600px) {
-    .dt { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+    .dt-cols-2.dt { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
 
-    table { display: table; min-width: 540px; }
-    thead {
+    .dt-cols-2 table { display: table; min-width: 0; }
+    .dt-cols-2 thead {
       position: static;
       width: auto;
       height: auto;
@@ -120,10 +132,10 @@ const showLabels = columns.length > 2;
       clip-path: none;
       display: table-header-group;
     }
-    tbody { display: table-row-group; }
-    tr { display: table-row; padding: 0; border-bottom: none; }
+    .dt-cols-2 tbody { display: table-row-group; }
+    .dt-cols-2 tr { display: table-row; padding: 0; border-bottom: none; }
 
-    th {
+    .dt-cols-2 th {
       display: table-cell;
       text-align: left;
       padding: 12px 16px;
@@ -137,16 +149,102 @@ const showLabels = columns.length > 2;
       white-space: nowrap;
     }
 
-    td {
+    .dt-cols-2 td {
       display: table-cell;
       padding: 12px 16px;
       border-bottom: 1px solid var(--border-soft);
       vertical-align: top;
       font-size: 14.5px;
     }
-    tbody tr:last-child td { border-bottom: none; }
-    td.is-code { white-space: nowrap; }
-    .dt-labelled td + td::before { content: none; }
-    td code { font-size: 13px; }
+    .dt-cols-2 tbody tr:last-child td { border-bottom: none; }
+    .dt-cols-2 td.is-code { white-space: nowrap; }
+    .dt-cols-2.dt-labelled td + td::before { content: none; }
+    .dt-cols-2 td code { font-size: 13px; }
+  }
+
+  /* Three columns carry two nowrap code cells; below this they clip. */
+  @media (min-width: 820px) {
+    .dt-cols-3.dt { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+
+    .dt-cols-3 table { display: table; min-width: 0; }
+    .dt-cols-3 thead {
+      position: static;
+      width: auto;
+      height: auto;
+      overflow: visible;
+      clip-path: none;
+      display: table-header-group;
+    }
+    .dt-cols-3 tbody { display: table-row-group; }
+    .dt-cols-3 tr { display: table-row; padding: 0; border-bottom: none; }
+
+    .dt-cols-3 th {
+      display: table-cell;
+      text-align: left;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-soft);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--fg-dim);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .dt-cols-3 td {
+      display: table-cell;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-soft);
+      vertical-align: top;
+      font-size: 14.5px;
+    }
+    .dt-cols-3 tbody tr:last-child td { border-bottom: none; }
+    .dt-cols-3 td.is-code { white-space: nowrap; }
+    .dt-cols-3.dt-labelled td + td::before { content: none; }
+    .dt-cols-3 td code { font-size: 13px; }
+  }
+
+  /* The install matrix needs ~1021px and cannot compress — anything narrower truncates the commands behind a hidden swipe. */
+  @media (min-width: 1100px) {
+    .dt-cols-4.dt { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+
+    .dt-cols-4 table { display: table; min-width: 0; }
+    .dt-cols-4 thead {
+      position: static;
+      width: auto;
+      height: auto;
+      overflow: visible;
+      clip-path: none;
+      display: table-header-group;
+    }
+    .dt-cols-4 tbody { display: table-row-group; }
+    .dt-cols-4 tr { display: table-row; padding: 0; border-bottom: none; }
+
+    .dt-cols-4 th {
+      display: table-cell;
+      text-align: left;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-soft);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--fg-dim);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .dt-cols-4 td {
+      display: table-cell;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-soft);
+      vertical-align: top;
+      font-size: 14.5px;
+    }
+    .dt-cols-4 tbody tr:last-child td { border-bottom: none; }
+    .dt-cols-4 td.is-code { white-space: nowrap; }
+    .dt-cols-4.dt-labelled td + td::before { content: none; }
+    .dt-cols-4 td code { font-size: 13px; }
   }
 </style>
