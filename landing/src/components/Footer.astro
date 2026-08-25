@@ -1,4 +1,6 @@
 ---
+import { SECTIONS } from "../data/sections";
+
 const year = 2026;
 ---
 
@@ -22,10 +24,7 @@ const year = 2026;
       </div>
       <div>
         <h3>Docs</h3>
-        <a href="#start">Quick start</a>
-        <a href="#tools">MCP tools</a>
-        <a href="#recipes">Recipes</a>
-        <a href="#install">Install channels</a>
+        {SECTIONS.map((s) => <a href={s.href}>{s.label}</a>)}
       </div>
       <div>
         <h3>Related</h3>

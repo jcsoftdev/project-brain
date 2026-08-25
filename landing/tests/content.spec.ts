@@ -107,3 +107,75 @@ test("the copy button actually writes the command to the clipboard", async ({ pa
   // The confirmation is temporary, not a stuck state.
   await expect(block.locator(".copy-text")).toHaveText("Copy", { timeout: 4000 });
 });
+
+test.describe("the page uses one vocabulary for its sections", () => {
+  /*
+   * Nav and footer both render the section list, and before they shared a
+   * module the same anchor was called "Recipes" in one place and "MCP tools"
+   * in another. Two names for one destination reads as machine-assembled.
+   */
+  test("nav and footer agree on what each section is called", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+
+    const labelsFor = async (scope: string) =>
+      page.locator(`${scope} a[href^="#"]`).evaluateAll((els) =>
+        Object.fromEntries(
+          els.map((el) => [
+            (el as HTMLAnchorElement).getAttribute("href"),
+            (el.textContent || "").trim(),
+          ]),
+        ),
+      );
+
+    const nav = await labelsFor(".nav-links");
+    const footer = await labelsFor(".foot-cols");
+
+    expect(Object.keys(nav).length).toBe(5);
+    for (const [href, label] of Object.entries(nav)) {
+      expect(footer[href], `${href} is called "${label}" in the nav but "${footer[href]}" in the footer`).toBe(label);
+    }
+  });
+
+  test("no section is labelled with leftover README jargon", async ({ page }) => {
+    await page.goto("/");
+
+    const labels = await page.locator('a[href^="#"]').evaluateAll((els) =>
+      els.map((el) => (el.textContent || "").trim().toLowerCase()),
+    );
+
+    // "Recipes" made sense in the README, where the reader already knows the
+    // tool. On a landing page it hides what is behind the link.
+    expect(labels, "a nav label reverted to README jargon").not.toContain("recipes");
+  });
+
+  test("each nav label is echoed by the section it points at", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+
+    const entries = await page.locator('.nav-links a[href^="#"]').evaluateAll((els) =>
+      els.map((el) => ({
+        href: (el as HTMLAnchorElement).getAttribute("href")!,
+        label: (el.textContent || "").trim(),
+      })),
+    );
+
+    for (const { href, label } of entries) {
+      const eyebrow = page.locator(`${href} .eyebrow`).first();
+      await expect(eyebrow, `${href} has no eyebrow to confirm the nav label`).toHaveCount(1);
+
+      /*
+       * Containment, not equality. A section is allowed to be more specific
+       * than its menu entry once you are looking at it — "Tools" in the nav
+       * opening a section headed "MCP tools" reads as a refinement, not a
+       * different destination. What this still catches is the real failure:
+       * a section announcing itself with an unrelated word, the way "Recipes"
+       * used to sit behind a link the nav called something else.
+       */
+      expect(
+        (await eyebrow.textContent())!.trim().toLowerCase(),
+        `nav says "${label}" but ${href} announces itself as something unrelated`,
+      ).toContain(label.toLowerCase());
+    }
+  });
+});
