@@ -1,0 +1,91 @@
+---
+interface Props {
+  command: string;
+  label?: string;
+}
+const { command, label } = Astro.props;
+---
+
+<div class="copyable" data-command={command}>
+  {label && <span class="copyable-label">{label}</span>}
+  <code><span class="prompt">$</span>{command}</code>
+  <button type="button" class="copy-btn" aria-label={`Copy: ${command}`}>
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.6" />
+      <path d="M10.5 3.5v-.6a1.4 1.4 0 0 0-1.4-1.4H3.9a1.4 1.4 0 0 0-1.4 1.4v5.2a1.4 1.4 0 0 0 1.4 1.4h.6" />
+    </svg>
+    <span class="copy-text">Copy</span>
+  </button>
+</div>
+
+<style>
+  .copyable {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 11px 11px 11px 16px;
+    overflow-x: auto;
+  }
+  .copyable-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    white-space: nowrap;
+  }
+  code {
+    flex: 1;
+    font-family: var(--mono);
+    font-size: 14px;
+    color: var(--fg);
+    white-space: nowrap;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .prompt { color: var(--accent); margin-right: 10px; user-select: none; }
+  .copy-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--fg-muted);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 5px 10px;
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .copy-btn:hover { color: var(--accent); border-color: var(--accent-dim); }
+  .copy-btn.copied { color: var(--accent); border-color: var(--accent-dim); }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLElement>(".copyable").forEach((el) => {
+    const btn = el.querySelector<HTMLButtonElement>(".copy-btn");
+    const text = el.querySelector<HTMLElement>(".copy-text");
+    const command = el.dataset.command ?? "";
+    if (!btn || !text) return;
+
+    btn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(command);
+      } catch {
+        return;
+      }
+      btn.classList.add("copied");
+      text.textContent = "Copied";
+      window.setTimeout(() => {
+        btn.classList.remove("copied");
+        text.textContent = "Copy";
+      }, 1600);
+    });
+  });
+</script>

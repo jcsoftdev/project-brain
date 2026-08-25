@@ -1,0 +1,142 @@
+---
+import Copyable from "./Copyable.astro";
+---
+
+<div class="hero">
+  <div class="hero-glow" aria-hidden="true"></div>
+  <div class="wrap hero-inner">
+    <a class="badge" href="https://www.npmjs.com/package/project-brain" rel="noopener">
+      <span class="badge-dot"></span>
+      MIT &middot; local-first &middot; v0.22.3 on npm
+    </a>
+
+    <h1>
+      Your AI assistant stops<br />
+      guessing about <span class="hl">your codebase</span>.
+    </h1>
+
+    <p class="hero-lead">
+      project-brain is a local-first MCP server that gives AI tools two kinds of memory of your
+      code: <strong>semantic</strong> &mdash; a LanceDB vector index that finds code by meaning &mdash; and
+      <strong>structural</strong> &mdash; a tree-sitter symbol graph that answers exactly who calls what,
+      and what breaks if you change it.
+    </p>
+
+    <div class="hero-cta">
+      <Copyable command="brew install jcsoftdev/tap/project-brain" />
+      <div class="hero-links">
+        <a class="btn btn-primary" href="#start">Quick start</a>
+        <a class="btn" href="https://github.com/jcsoftdev/project-brain" rel="noopener">Read the docs</a>
+      </div>
+    </div>
+
+    <div class="hero-stats">
+      <div><b>0</b><span>services to run</span></div>
+      <div><b>7</b><span>AI tools auto-registered</span></div>
+      <div><b>20+</b><span>MCP tools exposed</span></div>
+      <div><b>100%</b><span>on your machine</span></div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .hero { position: relative; overflow: hidden; }
+  .hero-glow {
+    position: absolute;
+    top: -320px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 900px;
+    height: 620px;
+    background: radial-gradient(closest-side, var(--accent-glow), transparent 72%);
+    pointer-events: none;
+  }
+  .hero-inner { position: relative; padding: 92px 24px 96px; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--fg-muted);
+    border: 1px solid var(--border);
+    background: var(--bg-soft);
+    border-radius: 999px;
+    padding: 6px 14px;
+    margin-bottom: 30px;
+  }
+  .badge:hover { color: var(--fg); border-color: var(--fg-dim); text-decoration: none; }
+  .badge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+  }
+
+  h1 {
+    font-size: clamp(34px, 6.2vw, 60px);
+    letter-spacing: -0.035em;
+    margin-bottom: 24px;
+  }
+  .hl {
+    background: linear-gradient(96deg, var(--accent) 0%, var(--sky) 55%, var(--violet) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .hero-lead {
+    color: var(--fg-muted);
+    font-size: clamp(16px, 2vw, 19px);
+    max-width: 700px;
+    margin-bottom: 36px;
+  }
+  .hero-lead strong { color: var(--fg); font-weight: 600; }
+
+  .hero-cta { max-width: 640px; display: grid; gap: 16px; }
+  .hero-links { display: flex; gap: 12px; flex-wrap: wrap; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 10px 20px;
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--fg);
+  }
+  .btn:hover { border-color: var(--fg-dim); text-decoration: none; }
+  .btn-primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #06231a;
+    font-weight: 600;
+  }
+  .btn-primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
+
+  .hero-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 62px;
+    padding-top: 32px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .hero-stats div { display: flex; flex-direction: column; gap: 2px; }
+  .hero-stats b {
+    font-family: var(--mono);
+    font-size: 26px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: -0.02em;
+  }
+  .hero-stats span { font-size: 13.5px; color: var(--fg-dim); }
+
+  @media (max-width: 700px) {
+    .hero-inner { padding: 60px 24px 68px; }
+    .hero-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+  }
+</style>
