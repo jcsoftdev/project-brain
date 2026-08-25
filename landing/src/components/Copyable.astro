@@ -8,8 +8,8 @@ const { command, label } = Astro.props;
 
 <div class="copyable" data-command={command}>
   {label && <span class="copyable-label">{label}</span>}
-  <code><span class="prompt">$</span>{command}</code>
-  <button type="button" class="copy-btn" aria-label={`Copy: ${command}`}>
+  <code><span class="prompt" aria-hidden="true">$</span>{command}</code>
+  <button type="button" class="copy-btn" aria-label={`Copy command: ${command}`}>
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
       <rect x="5.5" y="5.5" width="8" height="8" rx="1.6" />
       <path d="M10.5 3.5v-.6a1.4 1.4 0 0 0-1.4-1.4H3.9a1.4 1.4 0 0 0-1.4 1.4v5.2a1.4 1.4 0 0 0 1.4 1.4h.6" />
@@ -19,52 +19,82 @@ const { command, label } = Astro.props;
 </div>
 
 <style>
+  /*
+   * Phone: the command wraps and the button sits on its own full-width row.
+   * A 40-character command cannot share a 320px line with a button, and
+   * horizontal scrolling inside a one-line box hides the half that matters.
+   * From sm up there is room for the single-row layout.
+   */
   .copyable {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    display: grid;
+    gap: 10px;
     background: var(--bg-soft);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 11px 11px 11px 16px;
-    overflow-x: auto;
+    padding: 12px 14px;
   }
+
   .copyable-label {
     font-family: var(--mono);
     font-size: 11px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--fg-dim);
-    white-space: nowrap;
   }
+
   code {
-    flex: 1;
+    display: block;
     font-family: var(--mono);
-    font-size: 14px;
+    font-size: 13px;
+    line-height: 1.55;
     color: var(--fg);
-    white-space: nowrap;
     background: none;
     border: none;
     padding: 0;
+    overflow-wrap: anywhere;
   }
-  .prompt { color: var(--accent); margin-right: 10px; user-select: none; }
+
+  .prompt { color: var(--accent); margin-right: 9px; user-select: none; }
+
   .copy-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
+    justify-content: center;
+    gap: 7px;
+    width: 100%;
+    min-height: var(--tap);
     background: transparent;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: 8px;
     color: var(--fg-muted);
     font-family: var(--mono);
-    font-size: 12px;
-    padding: 5px 10px;
+    font-size: 13px;
+    padding: 8px 12px;
     cursor: pointer;
     transition: color 0.15s, border-color 0.15s;
   }
   .copy-btn:hover { color: var(--accent); border-color: var(--accent-dim); }
   .copy-btn.copied { color: var(--accent); border-color: var(--accent-dim); }
+
+  @media (min-width: 600px) {
+    .copyable {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 11px 11px 16px;
+    }
+    .copyable-label { white-space: nowrap; }
+    /* With no label the command takes the first two columns. */
+    .copyable > code:first-child { grid-column: 1 / 3; }
+    code { font-size: 14px; overflow-wrap: normal; }
+    .copy-btn {
+      width: auto;
+      min-height: 34px;
+      font-size: 12px;
+      padding: 5px 10px;
+      border-radius: 7px;
+    }
+  }
 </style>
 
 <script>
