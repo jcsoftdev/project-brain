@@ -5,11 +5,6 @@ import Copyable from "./Copyable.astro";
 <div class="hero">
   <div class="hero-glow" aria-hidden="true"></div>
   <div class="wrap hero-inner">
-    <a class="badge" href="https://www.npmjs.com/package/project-brain" rel="noopener">
-      <span class="badge-dot"></span>
-      MIT &middot; local-first &middot; v0.22.3 on npm
-    </a>
-
     <h1>
       Your AI assistant stops<br />
       guessing about <span class="hl">your codebase</span>.
@@ -57,31 +52,7 @@ import Copyable from "./Copyable.astro";
     pointer-events: none;
   }
 
-  .hero-inner { position: relative; padding-block: 48px 56px; }
-
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 34px;
-    font-family: var(--mono);
-    font-size: 11.5px;
-    color: var(--fg-muted);
-    border: 1px solid var(--border);
-    background: var(--bg-soft);
-    border-radius: 999px;
-    padding: 5px 13px;
-    margin-bottom: 22px;
-  }
-  .badge:hover { color: var(--fg); border-color: var(--fg-dim); text-decoration: none; }
-  .badge-dot {
-    width: 6px;
-    height: 6px;
-    flex-shrink: 0;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 8px var(--accent);
-  }
+  .hero-inner { position: relative; padding-block: 64px 56px; }
 
   h1 {
     font-size: clamp(30px, 8.4vw, 60px);
@@ -130,8 +101,7 @@ import Copyable from "./Copyable.astro";
   .hero-stats span { font-size: 13px; color: var(--fg-dim); }
 
   @media (min-width: 600px) {
-    .hero-inner { padding-block: 72px 78px; }
-    .badge { font-size: 12.5px; gap: 9px; padding: 6px 14px; margin-bottom: 28px; }
+    .hero-inner { padding-block: 88px 78px; }
     h1 { margin-bottom: 22px; }
     .hero-lead { margin-bottom: 34px; }
     .hero-links { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -141,7 +111,7 @@ import Copyable from "./Copyable.astro";
 
   @media (min-width: 880px) {
     .hero-glow { top: -320px; height: 620px; }
-    .hero-inner { padding-block: 92px 96px; }
+    .hero-inner { padding-block: 108px 96px; }
     h1 br { display: inline; }
     .hero-stats {
       grid-template-columns: repeat(4, minmax(0, 1fr));
