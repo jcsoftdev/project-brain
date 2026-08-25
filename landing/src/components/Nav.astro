@@ -2,7 +2,7 @@
 import { SECTIONS } from "../data/sections";
 ---
 
-<header class="nav">
+<header class="nav" data-nav>
   <div class="wrap nav-top">
     <a class="brand" href="/">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -13,26 +13,45 @@ import { SECTIONS } from "../data/sections";
       <span>project-brain</span>
     </a>
 
+    <!-- Inline links, from 880px where all five fit on one line. -->
     <nav class="nav-links" aria-label="Sections">
       {SECTIONS.map((s) => <a href={s.href}>{s.label}</a>)}
     </nav>
 
-    <a class="nav-gh" href="https://github.com/jcsoftdev/project-brain" rel="noopener" aria-label="project-brain on GitHub">
-      <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-      </svg>
-      <span class="nav-gh-text">GitHub</span>
-    </a>
+    <div class="nav-actions">
+      <a class="nav-gh" href="https://github.com/jcsoftdev/project-brain" rel="noopener" aria-label="project-brain on GitHub">
+        <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+        </svg>
+        <span class="nav-gh-text">GitHub</span>
+      </a>
+
+      <!--
+        Below 880px the five labels are ~480px of text — wider than the
+        viewport. A disclosure keeps every label at full length and costs one
+        tap, rather than truncating them or making the header a quarter of the
+        screen tall.
+      -->
+      <button
+        type="button"
+        class="nav-toggle"
+        aria-expanded="false"
+        aria-controls="section-menu"
+        data-nav-toggle
+      >
+        <svg class="icon-open" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <path d="M2 4h12M2 8h12M2 12h12" />
+        </svg>
+        <svg class="icon-close" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
+          <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />
+        </svg>
+        <span>Menu</span>
+      </button>
+    </div>
   </div>
 
-  <!--
-    Phone navigation. Hiding the section links on mobile would leave a 8000px
-    page with no way to jump; a scrollable strip keeps every destination
-    reachable with a thumb. It is redundant from md up, where the links sit
-    inline in the row above, so it is removed rather than duplicated.
-  -->
-  <nav class="nav-strip" aria-label="Sections">
-    <div class="nav-strip-inner">
+  <nav id="section-menu" class="nav-menu" aria-label="Sections" hidden data-nav-menu>
+    <div class="wrap nav-menu-inner">
       {SECTIONS.map((s) => <a href={s.href}>{s.label}</a>)}
     </div>
   </nav>
@@ -70,8 +89,10 @@ import { SECTIONS } from "../data/sections";
   .brand:hover { text-decoration: none; }
   .brand svg { flex-shrink: 0; }
 
-  /* Inline links are a desktop affordance — the strip below covers phones. */
+  /* Inline links are a desktop affordance — the disclosure covers everything below. */
   .nav-links { display: none; }
+
+  .nav-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
   .nav-gh {
     display: inline-flex;
@@ -80,7 +101,6 @@ import { SECTIONS } from "../data/sections";
     gap: 7px;
     min-height: 36px;
     min-width: 36px;
-    flex-shrink: 0;
     font-size: 13.5px;
     color: var(--fg-muted);
     border: 1px solid var(--border);
@@ -91,35 +111,48 @@ import { SECTIONS } from "../data/sections";
   /* The wordmark costs width a 320px viewport does not have; the icon reads alone. */
   .nav-gh-text { display: none; }
 
-  .nav-strip {
-    border-top: 1px solid var(--border-soft);
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    /*
-     * The labels are longer than the strip, so the last one is always clipped
-     * at the right edge. A hard cut mid-word reads as a rendering bug; fading
-     * it out says "keep going" without spending width on an arrow.
-     */
-    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent 100%);
-  }
-  .nav-strip::-webkit-scrollbar { display: none; }
-  .nav-strip-inner {
-    display: flex;
-    gap: 18px;
-    width: max-content;
-    padding-inline: max(var(--gutter), env(safe-area-inset-left));
-  }
-  .nav-strip a {
+  .nav-toggle {
     display: inline-flex;
     align-items: center;
-    min-height: 40px;
-    font-size: 13.5px;
-    white-space: nowrap;
+    gap: 7px;
+    min-height: 36px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
     color: var(--fg-muted);
+    font-family: var(--sans);
+    font-size: 13.5px;
+    padding: 6px 11px;
+    cursor: pointer;
   }
-  .nav-strip a:hover { color: var(--fg); text-decoration: none; }
+  .nav-toggle:hover { color: var(--fg); border-color: var(--fg-dim); }
+  .nav-toggle .icon-close { display: none; }
+  .nav-toggle[aria-expanded="true"] { color: var(--accent); border-color: var(--accent-dim); }
+  .nav-toggle[aria-expanded="true"] .icon-open { display: none; }
+  .nav-toggle[aria-expanded="true"] .icon-close { display: inline; }
+
+  /*
+   * The panel is `hidden` when closed, so it leaves the accessibility tree
+   * entirely rather than sitting off-screen for a screen reader to find.
+   * Display is only ever set on the :not([hidden]) state, so the attribute's
+   * own display:none is never overridden.
+   */
+  .nav-menu:not([hidden]) {
+    display: block;
+    border-top: 1px solid var(--border-soft);
+    background: var(--bg-soft);
+  }
+  .nav-menu-inner { display: grid; padding-block: 8px 12px; }
+  .nav-menu a {
+    display: flex;
+    align-items: center;
+    min-height: var(--tap);
+    font-size: 15px;
+    color: var(--fg-muted);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .nav-menu a:last-child { border-bottom: none; }
+  .nav-menu a:hover { color: var(--fg); text-decoration: none; }
 
   @media (min-width: 600px) {
     .nav-gh-text { display: inline; }
@@ -136,6 +169,57 @@ import { SECTIONS } from "../data/sections";
     }
     .nav-links a { color: var(--fg-muted); }
     .nav-links a:hover { color: var(--fg); text-decoration: none; }
-    .nav-strip { display: none; }
+
+    /* Past the breakpoint the disclosure is redundant — the links are inline. */
+    .nav-toggle { display: none; }
+    .nav-menu:not([hidden]) { display: none; }
   }
 </style>
+
+<script>
+  const root = document.querySelector<HTMLElement>("[data-nav]");
+  const toggle = document.querySelector<HTMLButtonElement>("[data-nav-toggle]");
+  const menu = document.querySelector<HTMLElement>("[data-nav-menu]");
+
+  if (root && toggle && menu) {
+    const isOpen = () => toggle.getAttribute("aria-expanded") === "true";
+
+    const setOpen = (open: boolean) => {
+      toggle.setAttribute("aria-expanded", String(open));
+      menu.hidden = !open;
+    };
+
+    const close = (returnFocus = false) => {
+      if (!isOpen()) return;
+      setOpen(false);
+      if (returnFocus) toggle.focus();
+    };
+
+    toggle.addEventListener("click", () => setOpen(!isOpen()));
+
+    // Choosing a destination should dismiss the menu covering it.
+    menu.addEventListener("click", (event) => {
+      if ((event.target as HTMLElement).closest("a")) close();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") close(true);
+    });
+
+    // A click anywhere else means the reader moved on.
+    document.addEventListener("click", (event) => {
+      if (!isOpen()) return;
+      if (!root.contains(event.target as Node)) close();
+    });
+
+    /*
+     * Crossing the breakpoint while open would leave aria-expanded="true" on a
+     * button that is no longer rendered, and the panel hidden only by CSS.
+     * Reset the state so the markup always describes what is on screen.
+     */
+    const desktop = window.matchMedia("(min-width: 880px)");
+    const sync = () => desktop.matches && close();
+    desktop.addEventListener("change", sync);
+    sync();
+  }
+</script>

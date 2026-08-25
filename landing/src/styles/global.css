@@ -40,8 +40,12 @@
 html {
   scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
-  /* Sticky nav must not cover an anchored heading on a short phone viewport. */
-  scroll-padding-top: 108px;
+  /*
+   * Sticky nav must not cover an anchored heading. The header is a single
+   * 56px row now that the section links live in a disclosure rather than a
+   * second row, so the offset tracks that plus a little breathing room.
+   */
+  scroll-padding-top: 72px;
 }
 
 body {
@@ -182,7 +186,7 @@ section:first-of-type { border-top: none; }
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-/* The phone nav is two rows tall; from md it collapses to one. */
+/* The header is 60px from md up. */
 @media (min-width: 880px) {
   html { scroll-padding-top: 76px; }
 }

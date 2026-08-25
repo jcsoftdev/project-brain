@@ -13,7 +13,7 @@ const WIDTHS = [320, 375, 414, 599, 600, 768, 879, 880, 1100, 1440];
  * Containers that are *allowed* to scroll sideways, because they were built to.
  * Anything else exceeding the viewport is a layout bug.
  */
-const INTENTIONAL_SCROLLERS = [".nav-strip", ".hosts ul"];
+const INTENTIONAL_SCROLLERS = [".hosts ul"];
 
 async function overflowingElements(page: Page) {
   return page.evaluate((allowed) => {
@@ -149,29 +149,87 @@ test.describe("tables adapt rather than truncate", () => {
 });
 
 test.describe("section navigation is always reachable", () => {
-  test("phones get a scrollable strip instead of hidden links", async ({ page }) => {
+  test("phones get a disclosure holding every section at full length", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 900 });
     await page.goto("/");
 
     await expect(page.locator(".nav-links")).toBeHidden();
-    await expect(page.locator(".nav-strip")).toBeVisible();
 
-    // Every destination must be tappable, not just present.
-    const links = page.locator(".nav-strip a");
+    const toggle = page.locator("[data-nav-toggle]");
+    const menu = page.locator("[data-nav-menu]");
+
+    await expect(toggle).toBeVisible();
+    await expect(menu).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await toggle.click();
+
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(menu).toBeVisible();
+
+    const links = menu.locator("a");
     await expect(links).toHaveCount(5);
+
+    // Full labels, no truncation, and each one big enough for a thumb.
     for (const link of await links.all()) {
       const box = await link.boundingBox();
-      expect(box, "a nav link has no box").not.toBeNull();
-      expect(box!.height).toBeGreaterThanOrEqual(36);
+      expect(box, "a menu link has no box").not.toBeNull();
+      expect(box!.height).toBeGreaterThanOrEqual(40);
+
+      const clipped = await link.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
+      expect(clipped, `"${await link.textContent()}" is being cut off`).toBe(false);
     }
   });
 
-  test("from 880px the links sit inline and the strip is gone", async ({ page }) => {
+  test("the disclosure closes the ways a reader expects", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 900 });
+    await page.goto("/");
+
+    const toggle = page.locator("[data-nav-toggle]");
+    const menu = page.locator("[data-nav-menu]");
+
+    // 1. Escape closes it and hands focus back to the button that opened it.
+    await toggle.click();
+    await expect(menu).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await expect(toggle).toBeFocused();
+
+    // 2. Choosing a destination dismisses the panel covering it.
+    await toggle.click();
+    await menu.locator('a[href="#start"]').click();
+    await expect(menu).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    // 3. Clicking away means the reader moved on.
+    await toggle.click();
+    await expect(menu).toBeVisible();
+    await page.locator("h1").click();
+    await expect(menu).toBeHidden();
+  });
+
+  test("crossing the breakpoint while open leaves the markup honest", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 900 });
+    await page.goto("/");
+
+    const toggle = page.locator("[data-nav-toggle]");
+    await toggle.click();
+    await expect(page.locator("[data-nav-menu]")).toBeVisible();
+
+    // Widening past 880px must not leave aria-expanded="true" on a button that
+    // is no longer rendered.
+    await page.setViewportSize({ width: 1100, height: 900 });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("[data-nav-menu]")).toBeHidden();
+  });
+
+  test("from 880px the links sit inline and the disclosure is gone", async ({ page }) => {
     await page.setViewportSize({ width: 1100, height: 900 });
     await page.goto("/");
 
     await expect(page.locator(".nav-links")).toBeVisible();
-    await expect(page.locator(".nav-strip")).toBeHidden();
+    await expect(page.locator("[data-nav-toggle]")).toBeHidden();
+    await expect(page.locator("[data-nav-menu]")).toBeHidden();
   });
 
   test("every in-page anchor points at a section that exists", async ({ page }) => {
@@ -191,7 +249,8 @@ test.describe("section navigation is always reachable", () => {
     await page.setViewportSize({ width: 375, height: 812 });
     await page.goto("/");
 
-    await page.locator('.nav-strip a[href="#tools"]').click();
+    await page.locator("[data-nav-toggle]").click();
+    await page.locator('[data-nav-menu] a[href="#tools"]').click();
     await page.waitForTimeout(700); // smooth scroll settles
 
     const navBottom = (await page.locator("header.nav").boundingBox())!.y +
