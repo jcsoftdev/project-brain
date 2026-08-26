@@ -7,12 +7,17 @@
  * also the one thing on this page grep genuinely cannot do, so showing its
  * output is the strongest single argument available.
  *
- * NOTE: the session below is illustrative. Paths are real, the shape of the
- * output is real, but it was not captured from a live run — see the comment in
- * `lines` before treating it as evidence.
+ * The session passed in is captured verbatim from a real run — see the comment
+ * above `SESSION` in Hero.astro for how to reproduce it.
+ *
+ * There is deliberately no line-number gutter. It was borrowed from an editor
+ * aesthetic, and a shell does not number its output — keeping it while the
+ * window shows a real shell session would have been decoration contradicting
+ * the thing it frames. It also failed contrast at 2.04:1, which is what
+ * prompted the question.
  */
 interface Line {
-  t: "cmd" | "gap" | "sym" | "tree" | "meta";
+  t: "cmd" | "gap" | "out";
   c?: string;
 }
 interface Props {
@@ -28,14 +33,11 @@ const { title = "zsh — project-brain", lines } = Astro.props;
     <span class="term-title">{title}</span>
   </div>
   <div class="term-body">
-    {lines.map((l, i) => (
+    {lines.map((l) => (
       <div class="row">
-        <span class="gut" aria-hidden="true">{i + 1}</span>
         {l.t === "gap" ? <span class="ln">&nbsp;</span> :
          l.t === "cmd" ? <span class="ln"><b class="pr">$</b> <b class="cm">{l.c}</b></span> :
-         l.t === "sym" ? <span class="ln sym">{l.c}</span> :
-         l.t === "meta" ? <span class="ln meta">{l.c}</span> :
-         <span class="ln tree">{l.c}</span>}
+         <span class="ln out">{l.c}</span>}
       </div>
     ))}
   </div>
@@ -64,29 +66,27 @@ const { title = "zsh — project-brain", lines } = Astro.props;
   .term-title { margin-left: 10px; font-family: var(--mono); font-size: 11.5px; color: var(--fg-3); }
 
   .term-body {
-    padding: 15px 0 24px;
+    padding: 15px 17px 24px;
+    overflow-x: hidden;
     font-family: var(--mono);
     font-size: 12px;
     line-height: 1.85;
-    overflow-x: auto;
   }
-  .row { display: flex; }
-  /* A gutter, the way an editor prints one. Selecting the output should not
-     drag the line numbers along with it. */
-  .gut {
-    width: 42px;
-    flex: none;
-    text-align: right;
-    padding-right: 14px;
-    color: #4b4256;
-    user-select: none;
-  }
-  .ln { white-space: pre; }
+  .row { display: block; }
+  /*
+   * pre-WRAP, not pre. At 375px the captured output is 78 characters — about
+   * 560px of mono — so `pre` pushed it into a horizontal scroll and hid half
+   * the evidence on a phone. A real terminal wraps long lines rather than
+   * hiding them, so wrapping is both the honest rendering and the faithful
+   * one. Desktop has the room and never wraps.
+   */
+  .ln { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
   .pr { color: var(--sea); }
   .cm { color: var(--fg); font-weight: 500; }
-  .sym { color: var(--terra); font-weight: 700; }
-  .tree { color: var(--fg-2); }
-  .meta { color: var(--fg-3); }
+  /* The CLI emits no ANSI colour through a pipe, so output stays one tone.
+     Only the prompt and the typed command are highlighted — which is what a
+     shell itself does, not something invented for the page. */
+  .out { color: var(--fg-2); }
 
   @media (min-width: 600px) {
     .term-body { font-size: 12.5px; }

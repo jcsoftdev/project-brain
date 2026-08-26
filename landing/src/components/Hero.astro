@@ -3,20 +3,32 @@ import Terminal from "./Terminal.astro";
 import Copyable from "./Copyable.astro";
 
 /*
- * Illustrative session. Symbol and file paths are taken from this repository,
- * and the output shape matches what `impact` prints, but this was not captured
- * from a live run — it is a mockup of real behaviour, not a transcript.
+ * A REAL session, captured verbatim from this repository.
+ *
+ * What was here before was a mockup: a call tree drawn with box characters and
+ * a "7 symbols affected · depth 3 · 4ms" footer. The CLI prints neither. It
+ * emits one flat line per hit — `path:line  kind name — signature` — and no
+ * summary at all. The mockup was not just unverified, it misrepresented the
+ * tool's actual output, which is worse on a page arguing that this tool tells
+ * you the truth about your code.
+ *
+ * Reproduce it:
+ *   cd project-brain && project-brain init --no-embed
+ *   project-brain find GraphStore
+ *   project-brain callers impact
+ *
+ * Widest line is 78 characters, which is what makes it fit the window without
+ * clipping. That constraint is why these two commands were chosen over
+ * `impact hybridSearch`, whose real output runs to 147 characters of
+ * TypeScript signature.
  */
 const SESSION = [
-  { t: "cmd" as const, c: "project-brain impact parseConfig" },
+  { t: "cmd" as const, c: "project-brain find GraphStore" },
+  { t: "out" as const, c: "src/graph/store.ts:16  class GraphStore — class GraphStore {" },
   { t: "gap" as const },
-  { t: "sym" as const, c: "parseConfig" },
-  { t: "tree" as const, c: "├─ loadSettings      src/config/load.ts:24" },
-  { t: "tree" as const, c: "│  ├─ createServer   src/server.ts:88" },
-  { t: "tree" as const, c: "│  └─ runSync        src/indexer/sync.ts:141" },
-  { t: "tree" as const, c: "└─ validateEnv       src/config/env.ts:12" },
-  { t: "gap" as const },
-  { t: "meta" as const, c: "7 symbols affected · depth 3 · 4ms" },
+  { t: "cmd" as const, c: "project-brain callers impact" },
+  { t: "out" as const, c: "src/tools/impact.ts:11  function handleImpact — async function handleImpact(" },
+  { t: "out" as const, c: "src/okf/audit.ts:377  function impactedConcepts — function impactedConcepts(" },
 ];
 ---
 

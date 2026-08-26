@@ -278,3 +278,74 @@ test.describe("SEO surface", () => {
     }
   });
 });
+
+test.describe("the hero terminal shows real output", () => {
+  /*
+   * This section previously carried an invented session: a box-drawing call
+   * tree and a "7 symbols affected · depth 3 · 4ms" footer that the CLI does
+   * not print in any form. It was a mockup posing as evidence, on a page whose
+   * argument is that this tool tells you the truth about your code.
+   *
+   * These assertions pin it to the shape the CLI actually emits. They cannot
+   * prove the paths still exist — that needs the repository — but they fail
+   * the moment someone reaches for decoration again.
+   */
+  test("every output line matches the CLI's real format", async ({ page }) => {
+    await page.goto("/");
+
+    const out = await page.locator(".term .out").allTextContents();
+    expect(out.length, "the terminal shows no output at all").toBeGreaterThan(0);
+
+    for (const line of out) {
+      /*
+       * `path:line  kind name — signature`, which is what the CLI prints.
+       * Anything else is either invented or the CLI changed and this needs
+       * recapturing.
+       */
+      expect(line, `not CLI output format: ${line}`).toMatch(
+        /^src\/[\w./-]+\.ts:\d+\s{2}(class|function|method|const)\s+\w+\s+—\s+.+/,
+      );
+    }
+  });
+
+  test("no invented summary line survived", async ({ page }) => {
+    await page.goto("/");
+    const body = (await page.locator(".term").textContent())!;
+
+    // The CLI prints no footer, no timing, and no box-drawing tree.
+    expect(body, "a fabricated summary line is back").not.toMatch(/symbols affected/);
+    expect(body, "a fabricated timing is back").not.toMatch(/\d+ms/);
+    expect(body, "box-drawing implies a tree the CLI never prints").not.toMatch(/[├└│─]/);
+  });
+
+  test("the commands shown are real subcommands", async ({ page }) => {
+    await page.goto("/");
+
+    const cmds = await page.locator(".term .cm").allTextContents();
+    expect(cmds.length).toBeGreaterThan(0);
+
+    // Kept in sync with src/constants.ts TOOL_CATALOG's CLI surface.
+    const known = ["find", "callers", "callees", "impact", "trace", "map", "code",
+                   "search", "sync", "reindex", "health", "init", "setup", "serve", "okf", "update"];
+    for (const cmd of cmds) {
+      const sub = cmd.replace(/^project-brain\s+/, "").split(/\s+/)[0];
+      expect(known, `"${sub}" is not a project-brain subcommand`).toContain(sub);
+    }
+  });
+
+  test("nothing in the terminal is clipped at any width", async ({ page }) => {
+    /*
+     * The 78-character width of the captured output is why these two commands
+     * were chosen. If someone recaptures with a wider command this fails, which
+     * is the point — the window must never hide half of its own evidence.
+     */
+    for (const width of [375, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/");
+      const clipped = await page.locator(".term-body").evaluate(
+        (el) => el.scrollWidth > el.clientWidth + 1,
+      );
+      expect(clipped, `terminal output is cut off at ${width}px`).toBe(false);
+    }
+  });
+});
