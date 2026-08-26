@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <rect width="1200" height="630" fill="#17121d"/>
+  <g transform="translate(96 96) scale(3.4)">
+<g fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <g stroke="#e87a52" stroke-width="1.5">
+            <path d="M11.25 3.65A2.32 2.32 0 0 0 8.10 5.21A2.52 2.52 0 0 0 5.48 7.99A2.72 2.72 0 0 0 4.51 12.00A2.72 2.72 0 0 0 5.48 16.01A2.52 2.52 0 0 0 8.10 18.79A2.32 2.32 0 0 0 11.25 20.35Z"/>
+          </g>
+          <g stroke="#5fbfae" stroke-width="1.5">
+            <path d="M12.75 3.65A2.32 2.32 0 0 1 15.90 5.21A2.52 2.52 0 0 1 18.52 7.99A2.72 2.72 0 0 1 19.49 12.00A2.72 2.72 0 0 1 18.52 16.01A2.52 2.52 0 0 1 15.90 18.79A2.32 2.32 0 0 1 12.75 20.35Z"/>
+          </g>
+
+          
+          <g stroke="#e87a52" stroke-width="1.15">
+            <path d="M10.7 6.2L8.8 8.1H6.8"/>
+            <path d="M10.7 9.4L8.4 11.7"/>
+            <path d="M10.7 12.6L9.0 14.3H6.6"/>
+            <path d="M10.7 15.6L8.8 17.5"/>
+            <path d="M8.8 8.1C7.7 9.3 7.5 10.6 8.4 11.7"/>
+            <path d="M9.0 14.3C8.1 15.3 8.3 16.6 8.8 17.5"/>
+          </g>
+          <g stroke="#5fbfae" stroke-width="1.15">
+            <path d="M13.3 6.0H16.6V7.4H18.2"/>
+            <path d="M13.3 9.0H17.4V10.4"/>
+            <path d="M13.3 12.0H16.3V13.4H18.5"/>
+            <path d="M13.3 15.2H17.3V16.4"/>
+            <path d="M13.3 18.0H16.2V19.0"/>
+            <path d="M15.2 6.0V9.0"/>
+            <path d="M14.9 12.0V15.2"/>
+          </g>
+        </g>
+
+        <g fill="#e87a52">
+            <circle cx="6.8" cy="8.1" r="0.66"/>
+            <circle cx="8.4" cy="11.7" r="0.62"/>
+            <circle cx="6.6" cy="14.3" r="0.66"/>
+            <circle cx="8.8" cy="17.5" r="0.58"/>
+            <circle cx="10.7" cy="6.2" r="0.5"/>
+            <circle cx="10.7" cy="12.6" r="0.5"/>
+        </g>
+        <g fill="#5fbfae">
+            <circle cx="18.2" cy="7.4" r="0.66"/>
+            <circle cx="16.6" cy="6.0" r="0.5"/>
+            <circle cx="17.4" cy="10.4" r="0.66"/>
+            <circle cx="15.2" cy="9.0" r="0.5"/>
+            <circle cx="18.5" cy="13.4" r="0.66"/>
+            <circle cx="14.9" cy="12.0" r="0.5"/>
+            <circle cx="17.3" cy="16.4" r="0.6"/>
+            <circle cx="16.2" cy="19.0" r="0.56"/>
+        </g>
+  </g>
+  <text x="96" y="300" font-family="Outfit, -apple-system, Segoe UI, sans-serif" font-size="66" font-weight="700" fill="#f3ece6" letter-spacing="-2.4">Your AI stops <tspan fill="#e87a52">guessing</tspan></text>
+  <text x="96" y="376" font-family="Outfit, -apple-system, Segoe UI, sans-serif" font-size="66" font-weight="700" fill="#f3ece6" letter-spacing="-2.4">about your codebase.</text>
+  <text x="96" y="444" font-family="Inter Tight, -apple-system, Segoe UI, sans-serif" font-size="27" fill="#b6aabd">Two indexes, both on your machine. A vector store that finds code by</text>
+  <text x="96" y="482" font-family="Inter Tight, -apple-system, Segoe UI, sans-serif" font-size="27" fill="#b6aabd">meaning, and a symbol graph that answers exactly who calls what.</text>
+  <rect x="96" y="516" width="620" height="58" rx="10" fill="#241d2c"/>
+  <text x="120" y="553" font-family="JetBrains Mono, ui-monospace, monospace" font-size="21" fill="#5fbfae">$</text>
+  <text x="146" y="553" font-family="JetBrains Mono, ui-monospace, monospace" font-size="21" fill="#f3ece6">brew install jcsoftdev/tap/project-brain</text>
+  <text x="1104" y="566" text-anchor="end" font-family="JetBrains Mono, ui-monospace, monospace" font-size="19" fill="#7f7489">MIT · brain.jcsoftdev.com</text>
+</svg>

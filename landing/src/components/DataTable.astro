@@ -1,0 +1,160 @@
+---
+/*
+ * A table on a phone is the wrong shape: 3 columns of prose in 375px either
+ * truncate or force a horizontal swipe the reader has no reason to guess at.
+ *
+ * So below `sm` each row renders as a stacked block with its column name as a
+ * label, and from `sm` up the same markup lays out as a real table. One source
+ * of markup, two layouts — nothing is duplicated or hidden from a screen reader.
+ *
+ * `code` marks which columns hold identifiers rather than prose.
+ */
+interface Props {
+  columns: string[];
+  rows: string[][];
+  code?: number[];
+  italic?: number[];
+}
+
+const { columns, rows, code = [], italic = [] } = Astro.props;
+
+/*
+ * On a two-column table the second cell is plainly the description of the
+ * first, so stamping "WHAT IT DOES" above all six rows is noise. From three
+ * columns up the labels are what tell CLI apart from Platforms, so they stay.
+ */
+const showLabels = columns.length > 2;
+
+/*
+ * When a table may become a table again depends on how wide it needs to be,
+ * and that is driven by column count: the code cells hold commands that must
+ * not wrap, so a table cannot compress below their combined width.
+ *
+ * Measured natural widths: 2-col ~830px (the prose column wraps freely, so it
+ * fits far narrower), 3-col ~832px, 4-col ~1021px. Turning a 4-column table
+ * back on at 600px is what left the install commands cut off on a tablet.
+ */
+const widthClass = `dt-cols-${Math.min(columns.length, 4)}`;
+---
+
+<div class:list={["dt", widthClass, showLabels && "dt-labelled"]}>
+  <table>
+    <thead>
+      <tr>{columns.map((c) => <th scope="col">{c}</th>)}</tr>
+    </thead>
+    <tbody>
+      {rows.map((row) => (
+        <tr>
+          {row.map((cell, i) => (
+            <td
+              data-label={columns[i]}
+              class:list={[code.includes(i) ? "is-code" : "is-prose", italic.includes(i) && "is-quote"]}
+            >
+              {code.includes(i) ? <code>{cell}</code> : cell}
+            </td>
+          ))}
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  /*
+   * Column output. Below each table's own threshold the rows stack, because a
+   * phone cannot show four columns of prose and a sideways-scrolling table
+   * hides half of what it says. The threshold scales with column count: the
+   * no-wrap code cells set a floor the table cannot compress past.
+   */
+  .dt { background: var(--card); border: 1px solid var(--rule); border-radius: var(--r); }
+
+  table { display: block; width: 100%; min-width: 0; border-collapse: collapse; }
+  thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  tbody { display: block; }
+  tr { display: grid; gap: 8px; padding: 16px 17px; border-bottom: 1px solid var(--rule); }
+  tbody tr:last-child { border-bottom: none; }
+  td {
+    display: block; padding: 0; border: none; white-space: normal;
+    font-size: 14px; line-height: 1.68; color: var(--fg-2); overflow-wrap: break-word;
+  }
+  .dt-labelled td + td::before {
+    content: attr(data-label);
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--fg-3); margin-bottom: 3px;
+  }
+  td.is-prose:first-child { color: var(--fg); font-weight: 500; }
+  td.is-quote { color: var(--fg); font-style: italic; font-weight: 400; }
+  td code {
+    display: inline-block; background: var(--inset); border-radius: 5px;
+    padding: 2px 7px; font-size: 12.5px; color: var(--sea); overflow-wrap: break-word;
+  }
+
+  /* ── a real table again, once it has room to be one ───────── */
+  /* The prose column wraps freely, so two fit once the gutters shrink. */
+  @media (min-width: 600px) {
+    .dt-cols-2.dt { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+    .dt-cols-2 table { display: table; min-width: 0; }
+    .dt-cols-2 thead { position: static; width: auto; height: auto; overflow: visible; clip-path: none; display: table-header-group; }
+    .dt-cols-2 tbody { display: table-row-group; }
+    .dt-cols-2 tr { display: table-row; padding: 0; border-bottom: none; }
+    .dt-cols-2 th {
+      display: table-cell; text-align: left; padding: 12px 16px;
+      border-bottom: 1px solid var(--rule-2);
+      font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+      text-transform: uppercase; color: var(--fg-3); font-weight: 400; white-space: nowrap;
+    }
+    .dt-cols-2 td {
+      display: table-cell; padding: 12px 16px; border-bottom: 1px solid var(--rule);
+      vertical-align: top; font-size: 14px;
+    }
+    .dt-cols-2 tbody tr:last-child td { border-bottom: none; }
+    .dt-cols-2 td.is-code { white-space: nowrap; }
+    .dt-cols-2.dt-labelled td + td::before { content: none; }
+  }
+
+  /* Three columns carry two no-wrap code cells; below this they clip. */
+  @media (min-width: 820px) {
+    .dt-cols-3.dt { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+    .dt-cols-3 table { display: table; min-width: 0; }
+    .dt-cols-3 thead { position: static; width: auto; height: auto; overflow: visible; clip-path: none; display: table-header-group; }
+    .dt-cols-3 tbody { display: table-row-group; }
+    .dt-cols-3 tr { display: table-row; padding: 0; border-bottom: none; }
+    .dt-cols-3 th {
+      display: table-cell; text-align: left; padding: 12px 16px;
+      border-bottom: 1px solid var(--rule-2);
+      font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+      text-transform: uppercase; color: var(--fg-3); font-weight: 400; white-space: nowrap;
+    }
+    .dt-cols-3 td {
+      display: table-cell; padding: 12px 16px; border-bottom: 1px solid var(--rule);
+      vertical-align: top; font-size: 14px;
+    }
+    .dt-cols-3 tbody tr:last-child td { border-bottom: none; }
+    .dt-cols-3 td.is-code { white-space: nowrap; }
+    .dt-cols-3.dt-labelled td + td::before { content: none; }
+  }
+
+  /* The install matrix needs ~1021px and cannot compress — narrower truncates commands behind a hidden swipe. */
+  @media (min-width: 1100px) {
+    .dt-cols-4.dt { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
+    .dt-cols-4 table { display: table; min-width: 0; }
+    .dt-cols-4 thead { position: static; width: auto; height: auto; overflow: visible; clip-path: none; display: table-header-group; }
+    .dt-cols-4 tbody { display: table-row-group; }
+    .dt-cols-4 tr { display: table-row; padding: 0; border-bottom: none; }
+    .dt-cols-4 th {
+      display: table-cell; text-align: left; padding: 12px 16px;
+      border-bottom: 1px solid var(--rule-2);
+      font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+      text-transform: uppercase; color: var(--fg-3); font-weight: 400; white-space: nowrap;
+    }
+    .dt-cols-4 td {
+      display: table-cell; padding: 12px 16px; border-bottom: 1px solid var(--rule);
+      vertical-align: top; font-size: 14px;
+    }
+    .dt-cols-4 tbody tr:last-child td { border-bottom: none; }
+    .dt-cols-4 td.is-code { white-space: nowrap; }
+    .dt-cols-4.dt-labelled td + td::before { content: none; }
+  }
+</style>

@@ -1,0 +1,154 @@
+---
+import { SECTIONS } from "../data/sections";
+---
+
+<header class="nav" data-nav>
+  <div class="wrap nav-top">
+    <a class="brand" href="/">
+      <svg class="brand-mark" width="24" height="24" aria-hidden="true"><use href="#mark"/></svg>
+      <span>project-brain</span>
+    </a>
+
+    <nav class="nav-links" aria-label="Sections">
+      {SECTIONS.map((s) => <a href={s.href}>{s.label}</a>)}
+    </nav>
+
+    <div class="nav-actions">
+      <a class="nav-gh" href="https://github.com/jcsoftdev/project-brain" rel="noopener">GitHub</a>
+      <button type="button" class="nav-toggle" aria-expanded="false" aria-controls="section-menu" data-nav-toggle>
+        <span class="label-open">Menu</span>
+        <span class="label-close">Close</span>
+      </button>
+    </div>
+  </div>
+
+  <nav id="section-menu" class="nav-menu" aria-label="Sections" hidden data-nav-menu>
+    <div class="wrap nav-menu-inner">
+      {SECTIONS.map((s) => <a href={s.href}>{s.label}</a>)}
+    </div>
+  </nav>
+</header>
+
+<style>
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(23, 18, 29, 0.9);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--rule);
+  }
+  .nav-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 66px; }
+
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: var(--tap);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14.5px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .brand:hover { text-decoration: none; }
+  /* The two halves of the mark carry the two indexes; the nav is where that
+     pairing is seen most often, so it keeps full colour rather than going flat. */
+  .brand-mark { flex-shrink: 0; color: var(--terra); --node: var(--sea); }
+
+  .nav-links { display: none; }
+  .nav-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+  .nav-gh, .nav-toggle {
+    display: inline-flex;
+    align-items: center;
+    min-height: 38px;
+    padding: 8px 15px;
+    border: 1px solid var(--rule-2);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--fg-2);
+    font-family: var(--sans);
+    font-size: 13.5px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .nav-gh:hover, .nav-toggle:hover { color: var(--terra); border-color: var(--terra); text-decoration: none; }
+  .nav-toggle[aria-expanded="true"] { color: var(--terra); border-color: var(--terra); }
+  .nav-toggle .label-close { display: none; }
+  .nav-toggle[aria-expanded="true"] .label-open { display: none; }
+  .nav-toggle[aria-expanded="true"] .label-close { display: inline; }
+
+  /*
+   * `hidden` when closed, so the panel leaves the accessibility tree entirely
+   * rather than sitting off-screen. Display is only ever set on :not([hidden]),
+   * so the attribute's own display:none is never overridden.
+   */
+  .nav-menu:not([hidden]) { display: block; border-top: 1px solid var(--rule); background: var(--card); }
+  .nav-menu-inner { display: grid; padding-block: 6px 12px; }
+  .nav-menu a {
+    display: flex;
+    align-items: center;
+    min-height: var(--tap);
+    font-size: 15px;
+    color: var(--fg-2);
+    border-bottom: 1px solid var(--rule);
+  }
+  .nav-menu a:last-child { border-bottom: none; }
+  .nav-menu a:hover { color: var(--terra); text-decoration: none; }
+
+  @media (min-width: 900px) {
+    .nav-top { min-height: 72px; gap: 26px; }
+    .brand { font-size: 15px; }
+    .nav-links { display: flex; gap: 26px; }
+    .nav-links a {
+      display: inline-flex;
+      align-items: center;
+      min-height: 38px;
+      font-size: 14.5px;
+      color: var(--fg-2);
+    }
+    .nav-links a:hover { color: var(--terra); text-decoration: none; }
+    .nav-toggle { display: none; }
+    .nav-menu:not([hidden]) { display: none; }
+  }
+</style>
+
+<script>
+  const root = document.querySelector<HTMLElement>("[data-nav]");
+  const toggle = document.querySelector<HTMLButtonElement>("[data-nav-toggle]");
+  const menu = document.querySelector<HTMLElement>("[data-nav-menu]");
+
+  if (root && toggle && menu) {
+    const isOpen = () => toggle.getAttribute("aria-expanded") === "true";
+    const setOpen = (open: boolean) => {
+      toggle.setAttribute("aria-expanded", String(open));
+      menu.hidden = !open;
+    };
+    const close = (returnFocus = false) => {
+      if (!isOpen()) return;
+      setOpen(false);
+      if (returnFocus) toggle.focus();
+    };
+
+    toggle.addEventListener("click", () => setOpen(!isOpen()));
+    menu.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest("a")) close();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") close(true);
+    });
+    document.addEventListener("click", (e) => {
+      if (isOpen() && !root.contains(e.target as Node)) close();
+    });
+
+    /*
+     * Crossing the breakpoint while open would leave aria-expanded="true" on a
+     * button that is no longer rendered, and the panel hidden only by CSS.
+     */
+    const desktop = window.matchMedia("(min-width: 900px)");
+    const sync = () => desktop.matches && close();
+    desktop.addEventListener("change", sync);
+    sync();
+  }
+</script>

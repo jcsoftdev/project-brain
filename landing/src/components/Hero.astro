@@ -1,0 +1,86 @@
+---
+import Terminal from "./Terminal.astro";
+import Copyable from "./Copyable.astro";
+
+/*
+ * Illustrative session. Symbol and file paths are taken from this repository,
+ * and the output shape matches what `impact` prints, but this was not captured
+ * from a live run — it is a mockup of real behaviour, not a transcript.
+ */
+const SESSION = [
+  { t: "cmd" as const, c: "project-brain impact parseConfig" },
+  { t: "gap" as const },
+  { t: "sym" as const, c: "parseConfig" },
+  { t: "tree" as const, c: "├─ loadSettings      src/config/load.ts:24" },
+  { t: "tree" as const, c: "│  ├─ createServer   src/server.ts:88" },
+  { t: "tree" as const, c: "│  └─ runSync        src/indexer/sync.ts:141" },
+  { t: "tree" as const, c: "└─ validateEnv       src/config/env.ts:12" },
+  { t: "gap" as const },
+  { t: "meta" as const, c: "7 symbols affected · depth 3 · 4ms" },
+];
+---
+
+<section class="hero">
+  <div class="wash" aria-hidden="true"></div>
+
+  <div class="wrap hero-in">
+    <div class="copy">
+      <h1>Your AI stops <em>guessing</em> about your codebase.</h1>
+      <p class="lead">
+        Two indexes, both on your machine. A vector store that finds code by meaning,
+        and a symbol graph that answers exactly who calls what.
+      </p>
+      <div class="acts">
+        <a class="btn btn-primary" href="#start">Quick start</a>
+        <a class="btn" href="https://github.com/jcsoftdev/project-brain" rel="noopener">Source</a>
+      </div>
+      <div class="inst"><Copyable command="brew install jcsoftdev/tap/project-brain" /></div>
+    </div>
+
+    <div class="shot">
+      <Terminal lines={SESSION} />
+    </div>
+  </div>
+</section>
+
+<style>
+  .hero { position: relative; overflow: hidden; border-top: none; padding-block: 48px 68px; }
+
+  /* The ground is lit rather than flat — the single thing that separates a
+     considered dark page from a void with text on it. */
+  .wash {
+    position: absolute;
+    top: -240px;
+    right: -180px;
+    width: 980px;
+    height: 660px;
+    background:
+      radial-gradient(closest-side, rgba(232, 122, 82, 0.22), transparent 70%),
+      radial-gradient(closest-side, rgba(224, 178, 92, 0.13), transparent 72%) 240px 90px / 620px 460px no-repeat,
+      radial-gradient(closest-side, rgba(95, 191, 174, 0.12), transparent 72%) -110px 210px / 700px 480px no-repeat;
+    pointer-events: none;
+  }
+
+  .hero-in { position: relative; display: grid; gap: 36px; }
+
+  h1 { font-size: clamp(32px, 6.2vw, 52px); margin-bottom: 18px; }
+  h1 em { font-style: normal; color: var(--terra); }
+
+  .lead { color: var(--fg-2); font-size: clamp(15.5px, 2.4vw, 17px); line-height: 1.6; max-width: 46ch; margin-bottom: 26px; }
+
+  .acts { display: grid; gap: 10px; margin-bottom: 18px; }
+  /* The most prominent command on the page has to be copyable, not decorative. */
+  .inst { max-width: 480px; }
+
+  .shot { min-width: 0; }
+
+  @media (min-width: 600px) {
+    .hero { padding-block: 60px 84px; }
+    .acts { display: flex; gap: 12px; flex-wrap: wrap; }
+  }
+
+  @media (min-width: 900px) {
+    .hero { padding-block: 76px 100px; }
+    .hero-in { grid-template-columns: 1fr 1.05fr; gap: 52px; align-items: center; }
+  }
+</style>

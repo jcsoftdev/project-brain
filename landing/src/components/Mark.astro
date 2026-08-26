@@ -1,0 +1,94 @@
+---
+/*
+ * The mark, defined once as SVG <symbol>s and referenced everywhere by <use>.
+ * Rendered near the top of <body> so any <use> later in the document resolves.
+ *
+ *   #mark     full drawing — from ~28px up
+ *   #mark-sm  silhouette only — below that the traces are sub-pixel
+ *
+ * Colour comes from `currentColor` (semantic half) and `--node` (structural
+ * half), so a single lockup recolours for dark, light and single-colour
+ * contexts without a second copy of the geometry.
+ */
+---
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" data-mark-defs>
+      <symbol id="mark" viewBox="0 0 24 24">
+        <!--
+          Two hemispheres split by a real gap, each a scalloped gyri outline
+          with circuit traces routed inside — the shape people already read as
+          "AI brain", which is the point: it should not need explaining.
+
+          It also happens to be literal here. The traces on the RIGHT are a
+          call graph: orthogonal runs meeting at vias, which is exactly what
+          the structural index stores. The LEFT mirrors them in the semantic
+          colour.
+
+          The outline alternates convex arcs with notch points pulled inward
+          (0.90 of the ellipse radius); that in-out rhythm is what makes a
+          brain read as lobed instead of as a blob.
+        -->
+        <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <g stroke="currentColor" stroke-width="1.5">
+            <path d="M11.25 3.65A2.32 2.32 0 0 0 8.10 5.21A2.52 2.52 0 0 0 5.48 7.99A2.72 2.72 0 0 0 4.51 12.00A2.72 2.72 0 0 0 5.48 16.01A2.52 2.52 0 0 0 8.10 18.79A2.32 2.32 0 0 0 11.25 20.35Z"/>
+          </g>
+          <g stroke="var(--node, currentColor)" stroke-width="1.5">
+            <path d="M12.75 3.65A2.32 2.32 0 0 1 15.90 5.21A2.52 2.52 0 0 1 18.52 7.99A2.72 2.72 0 0 1 19.49 12.00A2.72 2.72 0 0 1 18.52 16.01A2.52 2.52 0 0 1 15.90 18.79A2.32 2.32 0 0 1 12.75 20.35Z"/>
+          </g>
+
+          <!--
+            The two hemispheres now differ in FORM, not only in colour, which
+            is what the reference does and what makes it read as designed:
+
+              left   45° runs and curved joins, no right angle anywhere.
+                     The semantic index moves by degrees, not by hops.
+              right  strictly orthogonal — H and V only, 90° corners, vias at
+                     every junction. That is literally a call graph.
+          -->
+          <g stroke="currentColor" stroke-width="1.15">
+            <path d="M10.7 6.2L8.8 8.1H6.8"/>
+            <path d="M10.7 9.4L8.4 11.7"/>
+            <path d="M10.7 12.6L9.0 14.3H6.6"/>
+            <path d="M10.7 15.6L8.8 17.5"/>
+            <path d="M8.8 8.1C7.7 9.3 7.5 10.6 8.4 11.7"/>
+            <path d="M9.0 14.3C8.1 15.3 8.3 16.6 8.8 17.5"/>
+          </g>
+          <g stroke="var(--node, currentColor)" stroke-width="1.15">
+            <path d="M13.3 6.0H16.6V7.4H18.2"/>
+            <path d="M13.3 9.0H17.4V10.4"/>
+            <path d="M13.3 12.0H16.3V13.4H18.5"/>
+            <path d="M13.3 15.2H17.3V16.4"/>
+            <path d="M13.3 18.0H16.2V19.0"/>
+            <path d="M15.2 6.0V9.0"/>
+            <path d="M14.9 12.0V15.2"/>
+          </g>
+        </g>
+
+        <g fill="currentColor">
+            <circle cx="6.8" cy="8.1" r="0.66"/>
+            <circle cx="8.4" cy="11.7" r="0.62"/>
+            <circle cx="6.6" cy="14.3" r="0.66"/>
+            <circle cx="8.8" cy="17.5" r="0.58"/>
+            <circle cx="10.7" cy="6.2" r="0.5"/>
+            <circle cx="10.7" cy="12.6" r="0.5"/>
+        </g>
+        <g fill="var(--node, currentColor)">
+            <circle cx="18.2" cy="7.4" r="0.66"/>
+            <circle cx="16.6" cy="6.0" r="0.5"/>
+            <circle cx="17.4" cy="10.4" r="0.66"/>
+            <circle cx="15.2" cy="9.0" r="0.5"/>
+            <circle cx="18.5" cy="13.4" r="0.66"/>
+            <circle cx="14.9" cy="12.0" r="0.5"/>
+            <circle cx="17.3" cy="16.4" r="0.6"/>
+            <circle cx="16.2" cy="19.0" r="0.56"/>
+        </g>
+      </symbol>
+
+      <!-- Favicon: the two lobed silhouettes and the gap. Traces die at 16px. -->
+      <symbol id="mark-sm" viewBox="0 0 24 24">
+        <g fill="none" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.4">
+          <path d="M11.25 3.65A2.32 2.32 0 0 0 8.10 5.21A2.52 2.52 0 0 0 5.48 7.99A2.72 2.72 0 0 0 4.51 12.00A2.72 2.72 0 0 0 5.48 16.01A2.52 2.52 0 0 0 8.10 18.79A2.32 2.32 0 0 0 11.25 20.35Z" stroke="currentColor"/>
+          <path d="M12.75 3.65A2.32 2.32 0 0 1 15.90 5.21A2.52 2.52 0 0 1 18.52 7.99A2.72 2.72 0 0 1 19.49 12.00A2.72 2.72 0 0 1 18.52 16.01A2.52 2.52 0 0 1 15.90 18.79A2.32 2.32 0 0 1 12.75 20.35Z" stroke="var(--node, currentColor)"/>
+        </g>
+      </symbol>
+</svg>

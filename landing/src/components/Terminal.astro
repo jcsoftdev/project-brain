@@ -1,0 +1,94 @@
+---
+/*
+ * A terminal window carrying a real session.
+ *
+ * The reason this exists rather than another prose block: every friki site
+ * worth copying (ghostty, charm, zed) SHOWS the product running. `impact` is
+ * also the one thing on this page grep genuinely cannot do, so showing its
+ * output is the strongest single argument available.
+ *
+ * NOTE: the session below is illustrative. Paths are real, the shape of the
+ * output is real, but it was not captured from a live run — see the comment in
+ * `lines` before treating it as evidence.
+ */
+interface Line {
+  t: "cmd" | "gap" | "sym" | "tree" | "meta";
+  c?: string;
+}
+interface Props {
+  title?: string;
+  lines: Line[];
+}
+const { title = "zsh — project-brain", lines } = Astro.props;
+---
+
+<div class="term">
+  <div class="term-bar">
+    <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+    <span class="term-title">{title}</span>
+  </div>
+  <div class="term-body">
+    {lines.map((l, i) => (
+      <div class="row">
+        <span class="gut" aria-hidden="true">{i + 1}</span>
+        {l.t === "gap" ? <span class="ln">&nbsp;</span> :
+         l.t === "cmd" ? <span class="ln"><b class="pr">$</b> <b class="cm">{l.c}</b></span> :
+         l.t === "sym" ? <span class="ln sym">{l.c}</span> :
+         l.t === "meta" ? <span class="ln meta">{l.c}</span> :
+         <span class="ln tree">{l.c}</span>}
+      </div>
+    ))}
+  </div>
+</div>
+
+<style>
+  .term {
+    border: 1px solid var(--rule);
+    border-radius: var(--r);
+    overflow: hidden;
+    background: var(--term-bg);
+    box-shadow: 0 30px 64px -28px rgba(0, 0, 0, 0.8);
+  }
+  .term-bar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 12px 15px;
+    background: var(--term-bar);
+    border-bottom: 1px solid var(--rule);
+  }
+  .tl { width: 11px; height: 11px; border-radius: 50%; }
+  .tl.r { background: #e0655f; }
+  .tl.y { background: var(--ochre); }
+  .tl.g { background: var(--sea); }
+  .term-title { margin-left: 10px; font-family: var(--mono); font-size: 11.5px; color: var(--fg-3); }
+
+  .term-body {
+    padding: 15px 0 24px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.85;
+    overflow-x: auto;
+  }
+  .row { display: flex; }
+  /* A gutter, the way an editor prints one. Selecting the output should not
+     drag the line numbers along with it. */
+  .gut {
+    width: 42px;
+    flex: none;
+    text-align: right;
+    padding-right: 14px;
+    color: #4b4256;
+    user-select: none;
+  }
+  .ln { white-space: pre; }
+  .pr { color: var(--sea); }
+  .cm { color: var(--fg); font-weight: 500; }
+  .sym { color: var(--terra); font-weight: 700; }
+  .tree { color: var(--fg-2); }
+  .meta { color: var(--fg-3); }
+
+  @media (min-width: 600px) {
+    .term-body { font-size: 12.5px; }
+  }
+</style>

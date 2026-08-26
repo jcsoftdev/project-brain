@@ -1,0 +1,14 @@
+[test]
+# `bun test` with no argument walks the whole repository, which swept in
+# landing/tests/*.spec.ts — Playwright specs that import @playwright/test, a
+# dependency of the landing package rather than the root. They failed to
+# resolve and took CI red with them.
+#
+# A path argument does not fix it: `bun test tests/` is a SUBSTRING filter, and
+# "landing/tests/" contains "tests/", so the specs came straight back. Setting
+# the root here is the only form that actually scopes the runner, and it
+# applies to every invocation — CI, release, and local — rather than only the
+# ones that remember to pass a path.
+#
+# The landing suite has its own job in ci.yml; it needs a browser, not bun.
+root = "tests"

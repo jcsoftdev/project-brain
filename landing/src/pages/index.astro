@@ -1,0 +1,435 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Nav from "../components/Nav.astro";
+import Hero from "../components/Hero.astro";
+import Copyable from "../components/Copyable.astro";
+import DataTable from "../components/DataTable.astro";
+import Footer from "../components/Footer.astro";
+
+const hosts = [
+  "Claude Code",
+  "Codex",
+  "Cursor",
+  "Gemini CLI",
+  "Windsurf",
+  "Zed",
+  "VS Code",
+];
+
+const steps = [
+  {
+    n: "01",
+    cmd: "brew install jcsoftdev/tap/project-brain",
+    title: "Install",
+    body: "One self-contained binary. No Node, no Bun, nothing else at runtime — the runtime, the WASM grammars and the templates are all compiled in.",
+  },
+  {
+    n: "02",
+    cmd: "project-brain setup",
+    title: "Register once per machine",
+    body: "Detects every AI tool you have and registers the MCP server in each one. Also installs the brain-audit and brain-okf host skills.",
+  },
+  {
+    n: "03",
+    cmd: "project-brain init",
+    title: "Index this project",
+    body: "Detects the stack, writes a CLAUDE.md with MCP routing instructions, installs a git commit hook, scaffolds module docs, and runs the first index.",
+  },
+];
+
+const semantic = [
+  ["search_context", "Conceptual lookup. Ranked snippets, each with a chunk_id. The one to use when you cannot name the symbol."],
+  ["expand_context", "Full body of a chunk_id — cheaper than the assistant re-reading the whole file."],
+];
+
+const lexical = [
+  ["search_code", "Exact keyword search (BM25) over indexed code: identifiers, error strings, exact phrases. Works with no Ollama."],
+];
+
+const structural = [
+  ["find_symbol", "project-brain find", "Exact definition by name — path, line range, kind, signature."],
+  ["find_callers", "project-brain callers", "Every symbol that calls this one. Who depends on X."],
+  ["find_callees", "project-brain callees", "Every symbol this one calls. What X depends on."],
+  ["impact", "project-brain impact", "Blast radius — everything transitively affected if X changes."],
+  ["trace_path", "project-brain trace", "Shortest call path from A to B, as an ordered chain."],
+  ["repo_map", "project-brain map", "Token-budgeted overview ranked by PageRank over the call graph."],
+];
+
+const knowledge = [
+  ["get_architecture", "Stack, modules, chunk and symbol counts in one call. Orientation before drilling in."],
+  ["list_modules / get_module", "Browse the indexed structure by module and pull a module whole."],
+  ["add_knowledge", "Persist a note or decision into the brain so it survives the session."],
+  ["manage_adr", "Create or list Architecture Decision Records. Append-only — supersede, never edit."],
+  ["sync_project", "Re-index changed files now, incrementally, hash-gated."],
+  ["check_health", "Embedding service and index status — run it when results look empty or stale."],
+];
+
+/*
+ * Rendered as a transcript rather than a table: this section is a record of
+ * things people said and what came back, and a table would flatten that into
+ * a spec sheet.
+ */
+const transcript = [
+  ["What breaks if I change parseConfig?", "impact", "the full blast radius, before you touch it"],
+  ["How does authentication work here?", "search_context", "the middleware, the token parser, the session store"],
+  ["Where is GraphStore defined?", "find_symbol", "path, line range, kind, signature"],
+  ["Who calls chargeCard?", "find_callers", "every dependent, exactly, no guessing"],
+  ["Summarize the store module", "get_module", "every chunk the module owns"],
+  ["Remember we use RRF for hybrid search", "add_knowledge", "persisted, and still there next session"],
+];
+
+const channels = [
+  ["Homebrew", "brew install jcsoftdev/tap/project-brain", "macOS (Apple Silicon), Linux", "brew upgrade project-brain"],
+  ["curl", "curl -fsSL .../scripts/install.sh | sh", "macOS (Apple Silicon), Linux x64/arm64", "re-run the installer"],
+  ["Registry", "bun install -g project-brain", "all, including Intel macOS and Windows", "project-brain update"],
+  ["Scoop", "scoop install project-brain", "Windows — bucket not published yet", "scoop update project-brain"],
+];
+---
+
+<Layout
+  title="project-brain — semantic and structural memory of your codebase, for AI tools"
+  description="Local-first MCP server that gives AI assistants two kinds of memory of your code: a LanceDB semantic index and a tree-sitter symbol graph. Runs entirely on your machine. MIT."
+>
+  <Nav />
+  <Hero />
+
+  <div class="hosts">
+    <div class="wrap hosts-inner">
+      <span class="hosts-label">Registers itself in</span>
+      <ul>{hosts.map((h) => <li>{h}</li>)}</ul>
+    </div>
+  </div>
+
+  <!-- ── The two brains ─────────────────────────────────────────── -->
+  <section id="how">
+    <div class="wrap">
+      <p class="eyebrow">The two brains</p>
+      <h2 class="section-title">Grep does not know what your code means.<br />Embeddings do not know what it calls.</h2>
+      <p class="section-lead">
+        An assistant left alone with your repository greps for a string and misses everything
+        phrased differently, or reads whole files until the context window gives out. Neither
+        answers &ldquo;what breaks if I change this&rdquo;. project-brain builds both indexes, locally,
+        and tells the assistant which one to reach for.
+      </p>
+
+      <div class="grid grid-2">
+        <article class="card semantic">
+          <span class="tag">Semantic</span>
+          <h3>LanceDB vector index</h3>
+          <p class="dim">
+            Files are chunked and embedded with a local Ollama model. Retrieval is by
+            <b>meaning</b>, so &ldquo;how does auth work&rdquo; finds the middleware, the token parser and
+            the session store &mdash; none of which contain the word you typed.
+          </p>
+          <ul class="ticks">
+            <li>Hybrid BM25 + vector retrieval, RRF-reranked</li>
+            <li>Falls back to a lexical floor with no Ollama, flagged rather than silent</li>
+            <li>Honors .gitignore; skips generated and minified files</li>
+          </ul>
+        </article>
+
+        <article class="card structural">
+          <span class="tag">Structural</span>
+          <h3>tree-sitter symbol graph</h3>
+          <p class="dim">
+            A WASM parser extracts every symbol and call edge into a local SQLite graph.
+            Retrieval is <b>exact</b>: definitions, callers, callees, blast radius, shortest
+            call path. No model involved, no approximation, sub-millisecond reads.
+          </p>
+          <ul class="ticks">
+            <li>Works fully offline &mdash; no Ollama, no network</li>
+            <li>Every graph tool is also a native CLI command</li>
+            <li>PageRank ranking for &ldquo;where do I start reading&rdquo;</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="hooks">
+        <p class="hooks-title">And it stays fresh on its own</p>
+        <dl class="grid grid-3">
+          <div><dt>git commit</dt><dd class="dim">The installed hook runs an incremental sync. The index never drifts behind the branch.</dd></div>
+          <div><dt>file save</dt><dd class="dim">While the server runs, the watcher re-indexes the changed file. No manual step.</dd></div>
+          <div><dt>assistant connects</dt><dd class="dim">The MCP server starts on stdio and injects routing instructions.</dd></div>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Quick start ────────────────────────────────────────────── -->
+  <section id="start">
+    <div class="wrap">
+      <p class="eyebrow">Quick start</p>
+      <h2 class="section-title">Three commands, about two minutes</h2>
+      <p class="section-lead">
+        Nothing to host, nothing to sign up for, no key to paste. Everything below runs on your
+        machine and stays there.
+      </p>
+
+      <ol class="steps">
+        {steps.map((s) => (
+          <li class="step">
+            <div class="step-head">
+              <span class="step-n">{s.n}</span>
+              <h3>{s.title}</h3>
+            </div>
+            <p class="dim">{s.body}</p>
+            <Copyable command={s.cmd} />
+          </li>
+        ))}
+      </ol>
+
+      <div class="card verify">
+        <span class="tag">Then confirm</span>
+        <p class="dim">
+          <code>health</code> is the command that tells you why, when semantic results come back
+          empty: it reports the embedding service, the index counts and how stale they are.
+        </p>
+        <Copyable command="project-brain health" />
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Tools ──────────────────────────────────────────────────── -->
+  <section id="tools">
+    <div class="wrap">
+      <p class="eyebrow">MCP tools</p>
+      <h2 class="section-title">What your assistant gets</h2>
+      <p class="section-lead">
+        The server ships routing instructions alongside the tools, so the model reaches for the
+        exact one instead of defaulting to a semantic search for a structural question.
+      </p>
+
+      <div class="tool-block">
+        <h3 class="tool-h"><i class="dot dot-sem"></i>Semantic &mdash; meaning-based</h3>
+        <DataTable columns={["Tool", "What it does"]} rows={semantic} code={[0]} />
+      </div>
+      <div class="tool-block">
+        <h3 class="tool-h"><i class="dot dot-lex"></i>Lexical &mdash; keyword, no embeddings needed</h3>
+        <DataTable columns={["Tool", "What it does"]} rows={lexical} code={[0]} />
+      </div>
+      <div class="tool-block">
+        <h3 class="tool-h"><i class="dot dot-str"></i>Structural &mdash; AST graph, exact</h3>
+        <DataTable columns={["Tool", "CLI", "What it does"]} rows={structural} code={[0, 1]} />
+      </div>
+      <div class="tool-block">
+        <h3 class="tool-h"><i class="dot dot-kno"></i>Modules &amp; knowledge</h3>
+        <DataTable columns={["Tool", "What it does"]} rows={knowledge} code={[0]} />
+      </div>
+    </div>
+  </section>
+
+  <!-- ── What to ask it ─────────────────────────────────────────── -->
+  <section id="recipes">
+    <div class="wrap">
+      <p class="eyebrow">What to ask it</p>
+      <h2 class="section-title">You ask in English. It picks the tool.</h2>
+      <p class="section-lead">
+        You never name a tool &mdash; the routing instructions do that. These are the questions
+        that steer it well.
+      </p>
+
+      <div class="transcript">
+        {transcript.map(([ask, tool, result]) => (
+          <div class="turn">
+            <p class="ask"><span class="caret" aria-hidden="true">&gt;</span>{ask}</p>
+            <p class="reply"><code>{tool}</code><span class="dim">{result}</span></p>
+          </div>
+        ))}
+      </div>
+
+      <div class="grid grid-2 split">
+        <article class="card">
+          <span class="tag">Offline</span>
+          <h3>No Ollama? Most of it still works.</h3>
+          <p class="dim">
+            Ollama powers semantic search only. The structural graph and the keyword index read
+            local files with no model at all, and <code>search_context</code> falls back to a
+            code-aware BM25 floor marked <code>degraded</code> rather than failing quietly.
+          </p>
+          <Copyable command="project-brain init --no-embed" />
+        </article>
+
+        <article class="card">
+          <span class="tag">Host skills</span>
+          <h3>Two skills with no CLI equivalent</h3>
+          <p class="dim">
+            <code>brain-audit</code> runs a whole-project audit &mdash; dead code, orphan UI, broken
+            flows, ranked by severity &mdash; answering &ldquo;is this export dead?&rdquo; with
+            <code>find_callers</code> instead of a guess from a grep. <code>brain-okf</code> writes a
+            knowledge concept and verifies its anchor first. Both are offered, never scheduled.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── OKF ────────────────────────────────────────────────────── -->
+  <section id="okf">
+    <div class="wrap">
+      <p class="eyebrow">Knowledge bundles</p>
+      <div class="okf">
+        <div>
+          <h2 class="section-title">The index knows <em>what</em>.<br />An OKF bundle holds <em>why</em>.</h2>
+          <p class="section-lead">
+            No parser can recover the reasoning behind a decision, because it was never in the
+            AST. An Open Knowledge Format v0.2 bundle &mdash; committed Markdown with YAML
+            frontmatter &mdash; holds that half, anchored to real symbols. And <code>okf audit</code>
+            keeps the two honest: it fails CI on a broken anchor, or on a concept whose code
+            moved on without it.
+          </p>
+          <Copyable command="project-brain okf init" />
+        </div>
+
+        <div class="card okf-findings">
+          <span class="tag">okf audit</span>
+          <dl>
+            <dt>Broken anchor</dt>
+            <dd>The cited file or symbol is gone &mdash; the explanation points at nothing. <b>exit 1</b></dd>
+            <dt>Stale concept</dt>
+            <dd>The cited code changed after the knowledge was last confirmed, by git commit date. <b>exit 1</b></dd>
+            <dt>Coverage gap</dt>
+            <dd>Highest-PageRank symbols no concept explains &mdash; a backlog in priority order.</dd>
+            <dt>Link suggestion</dt>
+            <dd>Two concepts whose code calls across them, but whose prose never does.</dd>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Install ────────────────────────────────────────────────── -->
+  <section id="install">
+    <div class="wrap">
+      <p class="eyebrow">Install</p>
+      <h2 class="section-title">Pick a channel</h2>
+      <p class="section-lead">
+        Every channel ships the same artifact: a compiled binary with the runtime, WASM grammars
+        and templates embedded. <code>project-brain update</code> reads the binary&rsquo;s own path to
+        work out which channel installed it, and prints the matching command rather than guessing.
+      </p>
+
+      <DataTable columns={["Channel", "Command", "Platforms", "Upgrade"]} rows={channels} code={[1, 3]} />
+
+      <p class="note quiet">
+        Intel macOS has no prebuilt binary. Homebrew and curl both refuse rather than hand you an
+        arm64 binary &mdash; use a registry install there.
+      </p>
+    </div>
+  </section>
+
+  <!-- ── CTA ────────────────────────────────────────────────────── -->
+  <section class="cta-section">
+    <div class="wrap cta">
+      <h2 class="section-title">Give it a repository and ask it something hard.</h2>
+      <p class="section-lead">Free, MIT, and it never sends your code anywhere.</p>
+      <Copyable command="brew install jcsoftdev/tap/project-brain" />
+      <div class="cta-links">
+        <a class="btn btn-primary" href="https://github.com/jcsoftdev/project-brain" rel="noopener">Star on GitHub</a>
+        <a class="btn" href="https://www.npmjs.com/package/project-brain" rel="noopener">View on npm</a>
+      </div>
+    </div>
+  </section>
+
+  <Footer />
+</Layout>
+
+<style>
+  /* ── hosts strip ─────────────────────────────────────────────── */
+  .hosts { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: var(--card); }
+  .hosts-inner { padding-block: 15px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; }
+  .hosts-label {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--fg-3);
+  }
+  .hosts ul { display: flex; flex-wrap: wrap; gap: 8px 16px; list-style: none; margin: 0; padding: 0; }
+  .hosts li { font-size: 13.5px; color: var(--fg-2); }
+
+  /* ── cards ───────────────────────────────────────────────────── */
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: var(--r); padding: 24px 22px; }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: .14em; text-transform: uppercase; padding: 4px 11px;
+    border-radius: 999px; margin-bottom: 14px;
+    color: var(--terra); background: var(--terra-lo);
+  }
+  .structural .tag { color: var(--sea); background: var(--sea-lo); }
+
+  .card h3 { font-size: 19px; margin-bottom: 10px; }
+  .card p { font-size: 14.5px; line-height: 1.68; }
+  .card b { color: var(--fg); font-weight: 600; }
+  .semantic b { color: var(--terra); }
+  .structural b { color: var(--sea); }
+
+  .ticks { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+  .ticks li { position: relative; padding-left: 20px; font-size: 13.5px; line-height: 1.6; color: var(--fg-2); }
+  .ticks li::before { content: "→"; position: absolute; left: 0; color: var(--fg-3); }
+
+  .hooks { margin-top: 22px; border-top: 1px solid var(--rule); padding-top: 24px; }
+  .hooks-title {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--fg-3); margin-bottom: 16px;
+  }
+  .hooks dl { margin: 0; }
+  .hooks dt { font-family: var(--mono); color: var(--sea); font-size: 13px; margin-bottom: 4px; }
+  .hooks dd { margin: 0; font-size: 13.5px; line-height: 1.68; }
+
+  /* ── steps ───────────────────────────────────────────────────── */
+  .steps { list-style: none; margin: 0 0 22px; padding: 0; display: grid; gap: 26px; }
+  .step { display: grid; gap: 11px; border-left: 2px solid var(--rule); padding-left: 20px; }
+  .step-head { display: flex; align-items: baseline; gap: 13px; }
+  .step-n { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; color: var(--terra); }
+  .step-head h3 { font-size: 18px; }
+  .step p { font-size: 14px; line-height: 1.68; }
+  .verify p { margin-bottom: 15px; font-size: 14px; }
+
+  /* ── tools ───────────────────────────────────────────────────── */
+  .tool-block { margin-bottom: 28px; }
+  .tool-h {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--sans); font-size: 14.5px; font-weight: 600;
+    color: var(--fg-2); margin-bottom: 12px; letter-spacing: 0;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot-sem { background: var(--terra); }
+  .dot-lex { background: var(--ochre); }
+  .dot-str { background: var(--sea); }
+  .dot-kno { background: var(--fg-3); }
+
+  /* ── transcript ──────────────────────────────────────────────── */
+  .transcript { background: var(--card); border: 1px solid var(--rule); border-radius: var(--r); }
+  .turn { padding: 15px 18px; border-bottom: 1px solid var(--rule); }
+  .turn:last-child { border-bottom: none; }
+  .ask { font-family: var(--mono); color: var(--fg); font-size: 13.5px; line-height: 1.65; }
+  .caret { color: var(--sea); margin-right: 10px; user-select: none; }
+  .reply { margin-top: 7px; padding-left: 24px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; }
+  .reply code { background: var(--inset); border-radius: 5px; padding: 2px 8px; font-size: 12.5px; color: var(--sea); }
+
+  .split { margin-top: 28px; }
+  .split h3 { font-size: 18px; }
+  .split p { margin-bottom: 15px; }
+
+  /* ── okf ─────────────────────────────────────────────────────── */
+  .okf { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; align-items: start; }
+  .okf .section-title em { font-style: italic; color: var(--terra); }
+  .okf-findings dl { margin: 0; display: grid; gap: 15px; }
+  .okf-findings dt { font-weight: 600; font-size: 14px; color: var(--fg); }
+  .okf-findings dd { margin: 3px 0 0; font-size: 13.5px; line-height: 1.68; color: var(--fg-2); }
+  .okf-findings b { font-family: var(--mono); color: var(--ochre); font-weight: 400; font-size: 12px; }
+
+  .note { font-size: 13.5px; margin-top: 18px; line-height: 1.68; }
+
+  /* ── cta ─────────────────────────────────────────────────────── */
+  .cta-section { background: var(--card); }
+  .cta { max-width: 640px; }
+  .cta-links { display: grid; gap: 10px; margin-top: 18px; }
+
+  @media (min-width: 600px) {
+    .card { padding: 26px 24px; }
+    .cta-links { display: flex; gap: 12px; }
+    .step-head h3, .card h3, .split h3 { font-size: 19px; }
+  }
+
+  @media (min-width: 900px) {
+    .okf { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 44px; }
+  }
+</style>
