@@ -1,0 +1,35 @@
+/*
+ * Self-hosted, deliberately.
+ *
+ * The suite asserts this page makes zero third-party requests, and a tool
+ * whose entire pitch is "nothing leaves your machine" should not phone Google
+ * for its typeface.
+ *
+ * All three are VARIABLE fonts, so each family is one file covering its whole
+ * weight range — declared once with a range, not once per weight. Latin subset
+ * only. 108 KB for the set.
+ */
+
+@font-face {
+  font-family: "Outfit";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/outfit.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Inter Tight";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter-tight.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono.woff2") format("woff2");
+}

@@ -1,55 +1,56 @@
 /*
- * Terminal-native.
+ * project-brain — "warm ink"
  *
- * The rules this design actually follows, so a later change can keep them or
- * break them deliberately rather than by accident:
+ * Palette rationale, since a landing page inherits whatever its tokens decide:
+ * almost every tool in this category is teal, indigo or violet on a cold
+ * near-black. This one is warm all the way down — a plum-black ground with a
+ * terracotta primary — so the page reads as one warm material rather than a
+ * cold page with an accent bolted on. Temperature is the axis nobody else in
+ * the category is using.
  *
- *   1. One typeface. Monospace everywhere, prose included. Readability comes
- *      from measure and leading, not from switching to a friendlier face.
- *   2. Zero radius. Nothing is rounded.
- *   3. Structure is carried by hairline rules and whitespace, never by filled
- *      cards floating on a different grey.
- *   4. No gradients, no glows, no shadows, no blur.
- *   5. Teal is the only non-grey on the page, and it marks one thing:
- *      something the machine said or something you can act on.
+ * The two accents are not decoration. Terracotta marks the SEMANTIC index and
+ * sea-green the STRUCTURAL one, the same split the logo draws, so a reader who
+ * notices the colour has learned something true about the product.
  *
- * Palette: https://coolors.co/a1d2ce-78cad2-62a8ac-5497a7-50858b
- * The five swatches are accents; grounds and type are derived at the same hue
- * (~187) so the darks read as unlit palette rather than unrelated grey.
+ * fg-3 is #948aa0 rather than something darker because it is used at 10.5px
+ * on --card, the lightest ground on the page: anything dimmer drops under
+ * 4.5:1 there even while it passes against --bg.
+ * the suite measures these from painted pixels rather than trusting the hex.
  */
 
+@import "./fonts.css";
+
 :root {
-  --p-100: #a1d2ce;
-  --p-200: #78cad2;
-  --p-300: #62a8ac;
-  --p-400: #5497a7;
-  --p-500: #50858b;
+  --bg: #17121d;          /* page */
+  --card: #1f1927;        /* raised */
+  --inset: #272031;       /* code chips, table fills */
+  --rule: #332b3f;
+  --rule-2: #43394f;
 
-  --bg: #060c0e;
-  --bg-soft: #0a1416;
-  --bg-inset: #12262a;
+  --fg: #f3ece6;
+  --fg-2: #b6aabd;
+  --fg-3: #948aa0;
 
-  /* Rules do the work cards used to do, so there are two weights of them. */
-  --rule: #17292c;
-  --rule-bright: #22383c;
+  --terra: #e87a52;       /* semantic */
+  --terra-lo: rgba(232, 122, 82, 0.13);
+  --sea: #5fbfae;         /* structural */
+  --sea-lo: rgba(95, 191, 174, 0.12);
+  --ochre: #e0b25c;
+  --on-terra: #24100a;
 
-  /* Contrast against --bg: 17.4 / 10.0 / 5.4. All clear AA. */
-  --fg: #e6f2f1;
-  --fg-muted: #9fbdbd;
-  --fg-dim: #6d8b8e;
+  --term-bg: #100c15;
+  --term-bar: #1c1622;
 
-  --accent: var(--p-200);
-  --accent-dim: var(--p-300);
-  --accent-soft: var(--p-100);
-  --accent-quiet: var(--p-500);
-  --on-accent: #04191c;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: "Inter Tight", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --display: "Outfit", var(--sans);
 
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-
-  --maxw: 1000px;
-  --gutter: 16px;
-  --section-y: 52px;
+  --maxw: 1120px;
+  --gutter: 22px;
+  --section-y: 56px;
   --tap: 44px;
+  --r: 14px;              /* card radius */
+  --r-sm: 9px;
 }
 
 * { box-sizing: border-box; }
@@ -57,32 +58,31 @@
 html {
   -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
-  scroll-padding-top: 72px;
+  scroll-padding-top: 84px;
 }
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  /* One typeface. This is the whole design decision in a single line. */
-  font-family: var(--mono);
-  font-size: 14px;
-  line-height: 1.75;
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.62;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
 
-a { color: var(--accent); text-decoration: none; }
+a { color: var(--terra); text-decoration: none; }
 a:hover { text-decoration: underline; text-underline-offset: 3px; }
 a, button { touch-action: manipulation; }
-
-:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--terra); outline-offset: 2px; border-radius: 4px; }
 
 h1, h2, h3 {
   margin: 0;
-  font-weight: 600;
-  line-height: 1.22;
-  letter-spacing: -0.01em;
+  font-family: var(--display);
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.032em;
   overflow-wrap: break-word;
 }
 
@@ -96,132 +96,73 @@ img, svg { max-width: 100%; }
   padding-inline: max(var(--gutter), env(safe-area-inset-left));
 }
 
-/* Sections are separated by a rule, never by a change of background. */
 section { padding-block: var(--section-y); border-top: 1px solid var(--rule); }
-section:first-of-type { border-top: none; }
 
-/*
- * Section headings follow man-page convention: an uppercase name, flush left,
- * with the rule running out to the right margin. It is the oldest way of
- * labelling a section in this medium and it costs nothing.
- */
 .eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  font-size: 11.5px;
-  letter-spacing: 0.22em;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.13em;
   text-transform: uppercase;
-  color: var(--accent);
-  margin-bottom: 22px;
-}
-.eyebrow::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--rule);
-}
-
-.section-title {
-  font-size: clamp(19px, 3.6vw, 25px);
+  color: var(--terra);
   margin-bottom: 14px;
-  letter-spacing: -0.02em;
 }
 
-/* Prose in monospace needs a short measure and generous leading to stay easy. */
+.section-title { font-size: clamp(25px, 4vw, 36px); margin-bottom: 14px; }
+
 .section-lead {
-  color: var(--fg-muted);
-  font-size: 14px;
-  line-height: 1.8;
-  max-width: 68ch;
+  color: var(--fg-2);
+  font-size: clamp(15px, 2.2vw, 16.5px);
+  line-height: 1.65;
+  max-width: 60ch;
   margin-bottom: 34px;
 }
 
-/*
- * A box with its name sitting on the top rule — the CSS equivalent of
- * ┌─ SEMANTIC ─────┐. The label's background must match the page ground, which
- * is why no section is allowed its own fill.
- */
-.box {
-  position: relative;
-  border: 1px solid var(--rule);
-  padding: 26px 18px 20px;
-}
-.box-label {
-  position: absolute;
-  top: -8px;
-  left: 14px;
-  padding-inline: 8px;
-  background: var(--bg);
-  font-size: 10.5px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
-
 .grid { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); }
+.dim { color: var(--fg-2); }
+.quiet { color: var(--fg-3); }
 
-.dim { color: var(--fg-muted); }
-.quiet { color: var(--fg-dim); }
-
-/*
- * Buttons are bracketed the way a shell offers a choice. The primary one is
- * reverse-video, which is what a terminal does to say "this one".
- */
+/* Pill buttons. The filled one is terracotta because the primary action and
+   the semantic index are the two things the page most wants you to notice. */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: var(--tap);
-  padding: 9px 16px;
-  border: 1px solid var(--rule-bright);
-  border-radius: 0;
-  font-family: var(--mono);
-  font-size: 13.5px;
+  padding: 11px 22px;
+  border: 1px solid var(--rule-2);
+  border-radius: 999px;
+  font-family: var(--sans);
+  font-size: 14.5px;
+  font-weight: 600;
   color: var(--fg);
   background: transparent;
 }
-.btn::before { content: "["; color: var(--fg-dim); margin-right: 9px; }
-.btn::after { content: "]"; color: var(--fg-dim); margin-left: 9px; }
-.btn:hover { border-color: var(--accent-dim); color: var(--accent); text-decoration: none; }
-.btn:hover::before, .btn:hover::after { color: var(--accent-dim); }
+.btn:hover { border-color: var(--terra); color: var(--terra); text-decoration: none; }
+.btn-primary { background: var(--terra); border-color: var(--terra); color: var(--on-terra); }
+.btn-primary:hover { background: #f28d67; border-color: #f28d67; color: var(--on-terra); }
 
-.btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--on-accent);
-}
-.btn-primary::before, .btn-primary::after { color: var(--on-accent); opacity: 0.55; }
-.btn-primary:hover {
-  background: var(--accent-soft);
-  border-color: var(--accent-soft);
-  color: var(--on-accent);
-}
-.btn-primary:hover::before, .btn-primary:hover::after { color: var(--on-accent); }
-
-/* Inline code is already the page's typeface, so it is marked by ground alone. */
 code { font-family: var(--mono); }
 p code, li code, dd code, td code, th code {
-  background: var(--bg-inset);
-  padding: 1px 6px;
-  color: var(--accent-soft);
+  background: var(--inset);
+  border-radius: 5px;
+  padding: 1.5px 6px;
+  font-size: 0.87em;
+  color: var(--sea);
   overflow-wrap: break-word;
 }
 
 @media (min-width: 600px) {
-  :root { --gutter: 24px; --section-y: 68px; }
-  body { font-size: 14.5px; }
-  .box { padding: 28px 22px 22px; }
+  :root { --gutter: 32px; --section-y: 76px; }
+  body { font-size: 15.5px; }
   .grid-2, .grid-3, .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-@media (min-width: 880px) {
-  :root { --section-y: 84px; }
-  html { scroll-padding-top: 76px; }
+@media (min-width: 900px) {
+  :root { --section-y: 92px; }
   .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-@media (min-width: 1100px) {
+@media (min-width: 1120px) {
   .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 

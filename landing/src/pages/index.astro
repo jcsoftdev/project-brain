@@ -95,7 +95,7 @@ const channels = [
 
   <div class="hosts">
     <div class="wrap hosts-inner">
-      <span class="hosts-label">registers itself in</span>
+      <span class="hosts-label">Registers itself in</span>
       <ul>{hosts.map((h) => <li>{h}</li>)}</ul>
     </div>
   </div>
@@ -113,8 +113,8 @@ const channels = [
       </p>
 
       <div class="grid grid-2">
-        <article class="box brain">
-          <span class="box-label">Semantic</span>
+        <article class="card semantic">
+          <span class="tag">Semantic</span>
           <h3>LanceDB vector index</h3>
           <p class="dim">
             Files are chunked and embedded with a local Ollama model. Retrieval is by
@@ -128,8 +128,8 @@ const channels = [
           </ul>
         </article>
 
-        <article class="box brain">
-          <span class="box-label">Structural</span>
+        <article class="card structural">
+          <span class="tag">Structural</span>
           <h3>tree-sitter symbol graph</h3>
           <p class="dim">
             A WASM parser extracts every symbol and call edge into a local SQLite graph.
@@ -145,8 +145,8 @@ const channels = [
       </div>
 
       <div class="hooks">
-        <p class="hooks-title quiet">and it stays fresh on its own</p>
-        <dl>
+        <p class="hooks-title">And it stays fresh on its own</p>
+        <dl class="grid grid-3">
           <div><dt>git commit</dt><dd class="dim">The installed hook runs an incremental sync. The index never drifts behind the branch.</dd></div>
           <div><dt>file save</dt><dd class="dim">While the server runs, the watcher re-indexes the changed file. No manual step.</dd></div>
           <div><dt>assistant connects</dt><dd class="dim">The MCP server starts on stdio and injects routing instructions.</dd></div>
@@ -178,8 +178,8 @@ const channels = [
         ))}
       </ol>
 
-      <div class="box verify">
-        <span class="box-label">Then confirm</span>
+      <div class="card verify">
+        <span class="tag">Then confirm</span>
         <p class="dim">
           <code>health</code> is the command that tells you why, when semantic results come back
           empty: it reports the embedding service, the index counts and how stale they are.
@@ -200,22 +200,19 @@ const channels = [
       </p>
 
       <div class="tool-block">
-        <h3 class="tool-h">Semantic &mdash; meaning-based</h3>
+        <h3 class="tool-h"><i class="dot dot-sem"></i>Semantic &mdash; meaning-based</h3>
         <DataTable columns={["Tool", "What it does"]} rows={semantic} code={[0]} />
       </div>
-
       <div class="tool-block">
-        <h3 class="tool-h">Lexical &mdash; keyword, no embeddings needed</h3>
+        <h3 class="tool-h"><i class="dot dot-lex"></i>Lexical &mdash; keyword, no embeddings needed</h3>
         <DataTable columns={["Tool", "What it does"]} rows={lexical} code={[0]} />
       </div>
-
       <div class="tool-block">
-        <h3 class="tool-h">Structural &mdash; AST graph, exact</h3>
+        <h3 class="tool-h"><i class="dot dot-str"></i>Structural &mdash; AST graph, exact</h3>
         <DataTable columns={["Tool", "CLI", "What it does"]} rows={structural} code={[0, 1]} />
       </div>
-
       <div class="tool-block">
-        <h3 class="tool-h">Modules &amp; knowledge</h3>
+        <h3 class="tool-h"><i class="dot dot-kno"></i>Modules &amp; knowledge</h3>
         <DataTable columns={["Tool", "What it does"]} rows={knowledge} code={[0]} />
       </div>
     </div>
@@ -241,8 +238,8 @@ const channels = [
       </div>
 
       <div class="grid grid-2 split">
-        <article class="box">
-          <span class="box-label">Offline</span>
+        <article class="card">
+          <span class="tag">Offline</span>
           <h3>No Ollama? Most of it still works.</h3>
           <p class="dim">
             Ollama powers semantic search only. The structural graph and the keyword index read
@@ -252,8 +249,8 @@ const channels = [
           <Copyable command="project-brain init --no-embed" />
         </article>
 
-        <article class="box">
-          <span class="box-label">Host skills</span>
+        <article class="card">
+          <span class="tag">Host skills</span>
           <h3>Two skills with no CLI equivalent</h3>
           <p class="dim">
             <code>brain-audit</code> runs a whole-project audit &mdash; dead code, orphan UI, broken
@@ -283,8 +280,8 @@ const channels = [
           <Copyable command="project-brain okf init" />
         </div>
 
-        <div class="box okf-findings">
-          <span class="box-label">okf audit</span>
+        <div class="card okf-findings">
+          <span class="tag">okf audit</span>
           <dl>
             <dt>Broken anchor</dt>
             <dd>The cited file or symbol is gone &mdash; the explanation points at nothing. <b>exit 1</b></dd>
@@ -311,11 +308,7 @@ const channels = [
         work out which channel installed it, and prints the matching command rather than guessing.
       </p>
 
-      <DataTable
-        columns={["Channel", "Command", "Platforms", "Upgrade"]}
-        rows={channels}
-        code={[1, 3]}
-      />
+      <DataTable columns={["Channel", "Command", "Platforms", "Upgrade"]} rows={channels} code={[1, 3]} />
 
       <p class="note quiet">
         Intel macOS has no prebuilt binary. Homebrew and curl both refuse rather than hand you an
@@ -341,93 +334,102 @@ const channels = [
 </Layout>
 
 <style>
-  /* ── hosts strip ──────────────────────────────────────────────
-     A status line, not a logo wall — this page has no logos in it. */
-  .hosts { border-bottom: 1px solid var(--rule); }
-  .hosts-inner { padding-block: 12px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+  /* ── hosts strip ─────────────────────────────────────────────── */
+  .hosts { border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); background: var(--card); }
+  .hosts-inner { padding-block: 15px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; }
   .hosts-label {
-    font-size: 10.5px;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--fg-3);
   }
-  .hosts ul { display: flex; flex-wrap: wrap; gap: 14px; list-style: none; margin: 0; padding: 0; }
-  .hosts li { font-size: 12.5px; color: var(--fg-muted); }
-  .hosts li::before { content: "\00b7 "; color: var(--accent-quiet); margin-right: 6px; }
+  .hosts ul { display: flex; flex-wrap: wrap; gap: 8px 16px; list-style: none; margin: 0; padding: 0; }
+  .hosts li { font-size: 13.5px; color: var(--fg-2); }
 
-  /* ── brains ─────────────────────────────────────────────────── */
-  .brain h3 { font-size: 15px; margin: 0 0 10px; color: var(--fg); }
-  .brain p { font-size: 13.5px; line-height: 1.8; }
-  .brain b { color: var(--accent-soft); font-weight: 600; }
-  .ticks { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 7px; }
-  .ticks li { position: relative; padding-left: 18px; font-size: 12.5px; line-height: 1.7; color: var(--fg-muted); }
-  .ticks li::before { content: "-"; position: absolute; left: 0; color: var(--accent-quiet); }
+  /* ── cards ───────────────────────────────────────────────────── */
+  .card { background: var(--card); border: 1px solid var(--rule); border-radius: var(--r); padding: 24px 22px; }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 10.5px;
+    letter-spacing: .14em; text-transform: uppercase; padding: 4px 11px;
+    border-radius: 999px; margin-bottom: 14px;
+    color: var(--terra); background: var(--terra-lo);
+  }
+  .structural .tag { color: var(--sea); background: var(--sea-lo); }
 
-  .hooks { margin-top: 26px; border-top: 1px solid var(--rule); padding-top: 22px; }
-  .hooks-title { font-size: 10.5px; letter-spacing: 0.2em; text-transform: uppercase; margin-bottom: 14px; }
-  .hooks dl { margin: 0; display: grid; gap: 14px; }
-  .hooks dt { color: var(--accent); font-size: 13px; margin-bottom: 2px; }
-  .transcript a, .hosts a { display: inline-flex; align-items: center; min-height: 34px; }
-  .hooks dd { margin: 0; font-size: 13px; line-height: 1.75; }
+  .card h3 { font-size: 19px; margin-bottom: 10px; }
+  .card p { font-size: 14.5px; line-height: 1.68; }
+  .card b { color: var(--fg); font-weight: 600; }
+  .semantic b { color: var(--terra); }
+  .structural b { color: var(--sea); }
 
-  /* ── steps ──────────────────────────────────────────────────── */
+  .ticks { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+  .ticks li { position: relative; padding-left: 20px; font-size: 13.5px; line-height: 1.6; color: var(--fg-2); }
+  .ticks li::before { content: "→"; position: absolute; left: 0; color: var(--fg-3); }
+
+  .hooks { margin-top: 22px; border-top: 1px solid var(--rule); padding-top: 24px; }
+  .hooks-title {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--fg-3); margin-bottom: 16px;
+  }
+  .hooks dl { margin: 0; }
+  .hooks dt { font-family: var(--mono); color: var(--sea); font-size: 13px; margin-bottom: 4px; }
+  .hooks dd { margin: 0; font-size: 13.5px; line-height: 1.68; }
+
+  /* ── steps ───────────────────────────────────────────────────── */
   .steps { list-style: none; margin: 0 0 22px; padding: 0; display: grid; gap: 26px; }
-  .step { display: grid; gap: 10px; border-left: 1px solid var(--rule); padding-left: 18px; }
-  .step-head { display: flex; align-items: baseline; gap: 12px; }
-  .step-n { font-size: 11px; letter-spacing: 0.18em; color: var(--accent-quiet); }
-  .step-head h3 { font-size: 15px; }
-  .step p { font-size: 13.5px; line-height: 1.75; }
+  .step { display: grid; gap: 11px; border-left: 2px solid var(--rule); padding-left: 20px; }
+  .step-head { display: flex; align-items: baseline; gap: 13px; }
+  .step-n { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; color: var(--terra); }
+  .step-head h3 { font-size: 18px; }
+  .step p { font-size: 14px; line-height: 1.68; }
+  .verify p { margin-bottom: 15px; font-size: 14px; }
 
-  .verify h3 { font-size: 15px; margin-bottom: 8px; }
-  .verify p { font-size: 13.5px; line-height: 1.75; margin-bottom: 14px; }
-
-  /* ── tools ──────────────────────────────────────────────────── */
+  /* ── tools ───────────────────────────────────────────────────── */
   .tool-block { margin-bottom: 28px; }
   .tool-h {
-    font-size: 11px;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
-    font-weight: 400;
-    margin-bottom: 10px;
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--sans); font-size: 14.5px; font-weight: 600;
+    color: var(--fg-2); margin-bottom: 12px; letter-spacing: 0;
   }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .dot-sem { background: var(--terra); }
+  .dot-lex { background: var(--ochre); }
+  .dot-str { background: var(--sea); }
+  .dot-kno { background: var(--fg-3); }
 
-  /* ── transcript ─────────────────────────────────────────────── */
-  .transcript { border: 1px solid var(--rule); }
-  .turn { padding: 14px 16px; border-bottom: 1px solid var(--rule); }
+  /* ── transcript ──────────────────────────────────────────────── */
+  .transcript { background: var(--card); border: 1px solid var(--rule); border-radius: var(--r); }
+  .turn { padding: 15px 18px; border-bottom: 1px solid var(--rule); }
   .turn:last-child { border-bottom: none; }
-  .ask { color: var(--fg); font-size: 13.5px; line-height: 1.7; }
-  .caret { color: var(--accent); margin-right: 10px; user-select: none; }
-  .reply { margin-top: 6px; padding-left: 22px; font-size: 12.5px; display: flex; flex-wrap: wrap; gap: 10px; }
-  .reply code { background: var(--bg-inset); padding: 1px 7px; color: var(--accent-soft); }
+  .ask { font-family: var(--mono); color: var(--fg); font-size: 13.5px; line-height: 1.65; }
+  .caret { color: var(--sea); margin-right: 10px; user-select: none; }
+  .reply { margin-top: 7px; padding-left: 24px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; }
+  .reply code { background: var(--inset); border-radius: 5px; padding: 2px 8px; font-size: 12.5px; color: var(--sea); }
 
   .split { margin-top: 28px; }
-  .split h3 { font-size: 15px; margin: 0 0 9px; }
-  .split p { font-size: 13.5px; line-height: 1.8; margin-bottom: 14px; }
+  .split h3 { font-size: 18px; }
+  .split p { margin-bottom: 15px; }
 
-  /* ── okf ────────────────────────────────────────────────────── */
-  .okf { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px; align-items: start; }
-  .okf-findings dl { margin: 0; display: grid; gap: 14px; }
-  .okf-findings dt { color: var(--fg); font-size: 13px; }
-  .okf-findings dd { margin: 3px 0 0; font-size: 12.5px; line-height: 1.75; color: var(--fg-muted); }
-  .okf-findings b { color: var(--accent-soft); font-weight: 400; font-size: 11.5px; }
+  /* ── okf ─────────────────────────────────────────────────────── */
+  .okf { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; align-items: start; }
+  .okf .section-title em { font-style: italic; color: var(--terra); }
+  .okf-findings dl { margin: 0; display: grid; gap: 15px; }
+  .okf-findings dt { font-weight: 600; font-size: 14px; color: var(--fg); }
+  .okf-findings dd { margin: 3px 0 0; font-size: 13.5px; line-height: 1.68; color: var(--fg-2); }
+  .okf-findings b { font-family: var(--mono); color: var(--ochre); font-weight: 400; font-size: 12px; }
 
-  .note { font-size: 12.5px; margin-top: 16px; line-height: 1.7; }
+  .note { font-size: 13.5px; margin-top: 18px; line-height: 1.68; }
 
-  /* ── cta ────────────────────────────────────────────────────── */
-  .cta { max-width: 620px; }
-  .cta-links { display: grid; gap: 10px; margin-top: 16px; }
+  /* ── cta ─────────────────────────────────────────────────────── */
+  .cta-section { background: var(--card); }
+  .cta { max-width: 640px; }
+  .cta-links { display: grid; gap: 10px; margin-top: 18px; }
 
   @media (min-width: 600px) {
-    .brain p, .split p { font-size: 14px; }
-    .steps { gap: 30px; }
-    .step-head h3, .brain h3, .split h3, .verify h3 { font-size: 16px; }
-    .hooks dl { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+    .card { padding: 26px 24px; }
     .cta-links { display: flex; gap: 12px; }
-    .transcript .reply { padding-left: 26px; }
+    .step-head h3, .card h3, .split h3 { font-size: 19px; }
   }
 
-  @media (min-width: 880px) {
-    .okf { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 40px; }
+  @media (min-width: 900px) {
+    .okf { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 44px; }
   }
 </style>

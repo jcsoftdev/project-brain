@@ -1,5 +1,6 @@
 ---
 import "../styles/global.css";
+import Mark from "../components/Mark.astro";
 
 interface Props {
   title: string;
@@ -19,7 +20,7 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <meta name="theme-color" content="#060c0e" />
+    <meta name="theme-color" content="#17121d" />
 
     <meta property="og:type" content="website" />
     <meta property="og:title" content={title} />
@@ -47,6 +48,7 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
     />
   </head>
   <body>
+    <Mark />
     <slot />
   </body>
 </html>

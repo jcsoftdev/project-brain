@@ -6,80 +6,102 @@ const year = 2026;
 
 <footer>
   <div class="wrap">
-    <div class="foot-cols">
-      <div>
-        <h3>Sections</h3>
-        {SECTIONS.map((s) => <a href={s.href}>{s.label}</a>)}
+    <div class="foot-top">
+      <div class="foot-brand">
+        <a class="brand" href="/">
+          <svg class="brand-mark" width="22" height="22" aria-hidden="true"><use href="#mark"/></svg>
+          <span>project-brain</span>
+        </a>
+        <p class="dim">
+          Local-first MCP server that gives AI tools semantic and structural memory of your codebase.
+        </p>
       </div>
-      <div>
-        <h3>Project</h3>
-        <a href="https://github.com/jcsoftdev/project-brain" rel="noopener">github</a>
-        <a href="https://www.npmjs.com/package/project-brain" rel="noopener">npm</a>
-        <a href="https://github.com/jcsoftdev/homebrew-tap" rel="noopener">homebrew tap</a>
-        <a href="https://github.com/jcsoftdev/project-brain/releases" rel="noopener">releases</a>
-      </div>
-      <div>
-        <h3>See also</h3>
-        <a href="https://modelcontextprotocol.io" rel="noopener">model context protocol</a>
-        <a href="https://ollama.com" rel="noopener">ollama</a>
-        <a href="https://lancedb.com" rel="noopener">lancedb</a>
-        <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md" rel="noopener">okf spec</a>
+
+      <div class="foot-cols">
+        <div>
+          <h3>Sections</h3>
+          {SECTIONS.map((s) => <a href={s.href}>{s.label}</a>)}
+        </div>
+        <div>
+          <h3>Project</h3>
+          <a href="https://github.com/jcsoftdev/project-brain" rel="noopener">GitHub</a>
+          <a href="https://www.npmjs.com/package/project-brain" rel="noopener">npm</a>
+          <a href="https://github.com/jcsoftdev/homebrew-tap" rel="noopener">Homebrew tap</a>
+          <a href="https://github.com/jcsoftdev/project-brain/releases" rel="noopener">Releases</a>
+        </div>
+        <div>
+          <h3>See also</h3>
+          <a href="https://modelcontextprotocol.io" rel="noopener">Model Context Protocol</a>
+          <a href="https://ollama.com" rel="noopener">Ollama</a>
+          <a href="https://lancedb.com" rel="noopener">LanceDB</a>
+          <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md" rel="noopener">OKF spec</a>
+        </div>
       </div>
     </div>
 
-    <!-- Closing line of a man page: name, date, and where it came from. -->
-    <div class="manline">
-      <span>project-brain(1)</span>
-      <span class="manline-mid">MIT &middot; {year}</span>
-      <span><a href="https://github.com/jcsoftdev" rel="noopener">jcsoftdev</a></span>
+    <div class="foot-base">
+      <span>MIT &middot; &copy; {year} <a href="https://github.com/jcsoftdev" rel="noopener">jcsoftdev</a></span>
+      <span class="quiet">Nothing on this page phones home.</span>
     </div>
   </div>
 </footer>
 
 <style>
-  footer { border-top: 1px solid var(--rule); padding-block: 40px 28px; }
+  footer { border-top: 1px solid var(--rule); padding-block: 46px 30px; }
+  .foot-top { display: grid; gap: 34px; margin-bottom: 34px; }
 
-  .foot-cols {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 26px 20px;
-    margin-bottom: 34px;
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 36px;
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 10px;
   }
+  .brand:hover { text-decoration: none; }
+  .brand-mark { color: var(--terra); --node: var(--sea); flex-shrink: 0; }
+  .foot-brand p { font-size: 14px; max-width: 42ch; }
+
+  .foot-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px 20px; }
   .foot-cols h3 {
+    font-family: var(--mono);
     font-size: 10.5px;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
-    color: var(--accent);
-    font-weight: 600;
-    margin: 0 0 8px;
+    color: var(--terra);
+    font-weight: 500;
+    margin: 0 0 10px;
   }
   .foot-cols a {
     display: flex;
     align-items: center;
     min-height: 36px;
-    font-size: 13px;
-    color: var(--fg-muted);
+    font-size: 14px;
+    color: var(--fg-2);
   }
-  .foot-cols a:hover { color: var(--accent); text-decoration: none; }
+  .foot-cols a:hover { color: var(--terra); text-decoration: none; }
 
-  .manline {
+  .foot-base {
     display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
     justify-content: space-between;
-    gap: 12px;
-    padding-top: 14px;
+    padding-top: 20px;
     border-top: 1px solid var(--rule);
-    font-size: 11px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
+    font-size: 13px;
+    color: var(--fg-3);
   }
-  .manline-mid { display: none; }
-  .manline a { display: inline-flex; align-items: center; min-height: 34px; color: var(--fg-dim); }
-  .manline a:hover { color: var(--accent); }
+  .foot-base a { color: var(--fg-2); }
 
   @media (min-width: 600px) {
-    footer { padding-block: 52px 32px; }
+    footer { padding-block: 60px 34px; }
     .foot-cols { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
-    .manline-mid { display: inline; }
+  }
+
+  @media (min-width: 900px) {
+    .foot-top { grid-template-columns: minmax(0, 1fr) minmax(0, 1.9fr); gap: 52px; }
   }
 </style>

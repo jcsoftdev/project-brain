@@ -99,8 +99,17 @@ test.describe("touch targets", () => {
           const r = el.getBoundingClientRect();
           if (r.width === 0 || r.height === 0) return false;
           if (r.height >= 34) return false;
-          // inline within a paragraph or list item — exempt
-          if (el.closest("p, dd, li")) return false;
+          /*
+           * WCAG 2.5.8 exempts a link sitting inline in a run of text — giving
+           * it a 44px box would wreck the line. Detected by computed display
+           * plus a text-bearing parent, rather than by listing tag names:
+           * the previous version only knew about p/dd/li and so flagged the
+           * same kind of link inside a <span>.
+           */
+          const inline = getComputedStyle(el).display === "inline";
+          const parentHasProse = (el.parentElement?.textContent || "").trim().length
+            > (el.textContent || "").trim().length;
+          if (inline && parentHasProse) return false;
           return true;
         })
         .map((el) => `${(el.textContent || "").trim().slice(0, 24)} (${Math.round(el.getBoundingClientRect().height)}px)`),
@@ -143,44 +152,71 @@ test.describe("colour contrast", () => {
         return (hi + 0.05) / (lo + 0.05);
       };
 
-      // Text usually sits on a transparent element — walk up for the real ground.
+      /*
+       * Text usually sits on a transparent element, so walk up for the ground.
+       *
+       * Semi-transparent layers must be COMPOSITED, not treated as opaque: a
+       * terracotta tag on a 13% terracotta tint was previously measured against
+       * the tint itself and scored 1:1 — comparing a colour with itself. Real
+       * perceived contrast is against what the eye actually sees, which is the
+       * stack flattened onto the first opaque layer beneath it.
+       */
       const groundOf = (el: Element) => {
+        const layers: number[][] = [];
         let node: Element | null = el;
+
         while (node) {
           const c = getComputedStyle(node).backgroundColor;
-          if (c && !/rgba\(0, 0, 0, 0\)|transparent/.test(c)) return c;
+          const p = c.match(/[\d.]+/g)?.map(Number) ?? [];
+          if (p.length >= 3) {
+            const alpha = p.length > 3 ? p[3] : 1;
+            if (alpha > 0) {
+              layers.push([p[0], p[1], p[2], alpha]);
+              if (alpha === 1) break;
+            }
+          }
           node = node.parentElement;
         }
-        return "rgb(0, 0, 0)";
+        if (!layers.length) return "rgb(0, 0, 0)";
+
+        // flatten back-to-front: the deepest opaque layer upward
+        let [r, g, b] = layers[layers.length - 1];
+        for (let i = layers.length - 2; i >= 0; i--) {
+          const [sr, sg, sb, sa] = layers[i];
+          r = sr * sa + r * (1 - sa);
+          g = sg * sa + g * (1 - sa);
+          b = sb * sa + b * (1 - sa);
+        }
+        return `rgb(${r}, ${g}, ${b})`;
       };
 
       const roles: [string, string][] = [
-        ["hero description", "p.desc"],
-        ["man-page label", ".manline span"],
-        ["section label", ".head"],
-        ["headline", "h1"],
+        ["hero lead", ".hero .lead"],
         ["section lead", ".section-lead"],
         ["eyebrow", ".eyebrow"],
         ["nav link", ".nav-links a"],
-        ["card body", ".brain p"],
+        ["card body", ".card p"],
+        ["card tag", ".tag"],
+        ["tick item", ".ticks li"],
+        ["hook term", ".hooks dt"],
         ["table cell", ".dt td.is-prose:not(:first-child)"],
         ["table header", ".dt th"],
         ["code chip", ".dt td code"],
         ["command", ".copyable code"],
         ["prompt glyph", ".copyable .prompt"],
+        ["terminal command", ".term .cm"],
+        ["terminal tree", ".term .tree"],
+        ["terminal meta", ".term .meta"],
         ["transcript question", ".ask"],
         ["transcript tool", ".reply code"],
         ["transcript result", ".reply .dim"],
-        ["box label", ".box-label"],
-        ["hook term", ".hooks dt"],
-        ["footer link", ".foot-cols a"],
-        ["footer heading", ".foot-cols h3"],
-        ["tick item", ".ticks li"],
+        ["tool group heading", ".tool-h"],
+        ["step number", ".step-n"],
+        ["host list item", ".hosts li"],
         ["okf term", ".okf-findings dt"],
         ["okf exit marker", ".okf-findings b"],
-        ["host list item", ".hosts li"],
-        ["step number", ".step-n"],
-        ["tool group heading", ".tool-h"],
+        ["footer link", ".foot-cols a"],
+        ["footer heading", ".foot-cols h3"],
       ];
 
       const out = roles.map(([name, selector]) => {
@@ -236,11 +272,11 @@ test.describe("colour contrast", () => {
      */
     const declared = await page.evaluate(() => {
       const root = getComputedStyle(document.documentElement);
-      return ["--p-100", "--p-200", "--p-300", "--p-400", "--p-500", "--on-accent"]
+      return ["--terra", "--sea", "--ochre", "--on-terra", "--fg", "--fg-2", "--fg-3"]
         .map((name) => [name, root.getPropertyValue(name).trim()] as const)
         .filter(([, value]) => value.length > 0);
     });
 
-    expect(declared.length, "the palette scale is not fully declared on :root").toBe(6);
+    expect(declared.length, "the palette is not fully declared on :root").toBe(7);
   });
 });

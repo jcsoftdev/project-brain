@@ -1,114 +1,86 @@
 ---
+import Terminal from "./Terminal.astro";
 import Copyable from "./Copyable.astro";
+
+/*
+ * Illustrative session. Symbol and file paths are taken from this repository,
+ * and the output shape matches what `impact` prints, but this was not captured
+ * from a live run — it is a mockup of real behaviour, not a transcript.
+ */
+const SESSION = [
+  { t: "cmd" as const, c: "project-brain impact parseConfig" },
+  { t: "gap" as const },
+  { t: "sym" as const, c: "parseConfig" },
+  { t: "tree" as const, c: "├─ loadSettings      src/config/load.ts:24" },
+  { t: "tree" as const, c: "│  ├─ createServer   src/server.ts:88" },
+  { t: "tree" as const, c: "│  └─ runSync        src/indexer/sync.ts:141" },
+  { t: "tree" as const, c: "└─ validateEnv       src/config/env.ts:12" },
+  { t: "gap" as const },
+  { t: "meta" as const, c: "7 symbols affected · depth 3 · 4ms" },
+];
 ---
 
-<div class="hero">
-  <div class="wrap hero-inner">
-    <!--
-      A man page header. It is the oldest convention in this medium for saying
-      what a program is, and it fits a tool whose whole surface is a CLI and an
-      MCP server. It also gives the page a factual opening instead of a claim.
-    -->
-    <div class="manline">
-      <span>project-brain(1)</span>
-      <span class="manline-mid quiet">General Commands Manual</span>
-      <!-- Deliberately not a version number: nothing here reads package.json,
-           so a hardcoded one starts lying at the next release. -->
-      <span>Local-first</span>
-    </div>
+<section class="hero">
+  <div class="wash" aria-hidden="true"></div>
 
-    <p class="head">NAME</p>
-    <p class="name-line">
-      <b>project-brain</b> <span class="quiet">&mdash;</span> semantic and structural memory of your codebase
-    </p>
-
-    <h1>Your AI assistant stops guessing about your codebase.</h1>
-
-    <p class="head">DESCRIPTION</p>
-    <p class="desc">
-      Two indexes, both on your machine. A <b>LanceDB</b> vector store that finds code by
-      meaning, and a <b>tree-sitter</b> symbol graph that answers exactly who calls what and
-      what breaks if you change it. Your assistant reaches for whichever one the
-      question needs.
-    </p>
-
-    <p class="head">SYNOPSIS</p>
-    <div class="cta">
-      <Copyable command="brew install jcsoftdev/tap/project-brain" />
-      <div class="cta-links">
+  <div class="wrap hero-in">
+    <div class="copy">
+      <h1>Your AI stops <em>guessing</em> about your codebase.</h1>
+      <p class="lead">
+        Two indexes, both on your machine. A vector store that finds code by meaning,
+        and a symbol graph that answers exactly who calls what.
+      </p>
+      <div class="acts">
         <a class="btn btn-primary" href="#start">Quick start</a>
         <a class="btn" href="https://github.com/jcsoftdev/project-brain" rel="noopener">Source</a>
       </div>
+      <div class="inst"><Copyable command="brew install jcsoftdev/tap/project-brain" /></div>
+    </div>
+
+    <div class="shot">
+      <Terminal lines={SESSION} />
     </div>
   </div>
-</div>
+</section>
 
 <style>
-  .hero-inner { padding-block: 40px 52px; }
+  .hero { position: relative; overflow: hidden; border-top: none; padding-block: 48px 68px; }
 
-  /* The header/footer line of a man page: name left, section centre, version right. */
-  .manline {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    font-size: 11px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--fg-dim);
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--rule);
-    margin-bottom: 34px;
-  }
-  .manline-mid { display: none; }
-
-  /*
-   * Labels in the man-page conceit, not document structure — making them
-   * headings put an h2 above the h1 and broke the outline.
-   */
-  .head {
-    font-size: 11.5px;
-    letter-spacing: 0.22em;
-    color: var(--accent);
-    font-weight: 600;
-    margin-bottom: 10px;
+  /* The ground is lit rather than flat — the single thing that separates a
+     considered dark page from a void with text on it. */
+  .wash {
+    position: absolute;
+    top: -240px;
+    right: -180px;
+    width: 980px;
+    height: 660px;
+    background:
+      radial-gradient(closest-side, rgba(232, 122, 82, 0.22), transparent 70%),
+      radial-gradient(closest-side, rgba(224, 178, 92, 0.13), transparent 72%) 240px 90px / 620px 460px no-repeat,
+      radial-gradient(closest-side, rgba(95, 191, 174, 0.12), transparent 72%) -110px 210px / 700px 480px no-repeat;
+    pointer-events: none;
   }
 
-  .name-line { color: var(--fg-muted); font-size: 14px; margin-bottom: 34px; }
-  .name-line b { color: var(--fg); font-weight: 600; }
+  .hero-in { position: relative; display: grid; gap: 36px; }
 
-  /*
-   * The one place the page raises its voice. Still the same typeface — the
-   * emphasis is size and tracking, not a second font or a gradient fill.
-   */
-  h1 {
-    font-size: clamp(24px, 5.4vw, 40px);
-    line-height: 1.25;
-    letter-spacing: -0.035em;
-    max-width: 20ch;
-    margin-bottom: 40px;
-  }
+  h1 { font-size: clamp(32px, 6.2vw, 52px); margin-bottom: 18px; }
+  h1 em { font-style: normal; color: var(--terra); }
 
-  .desc {
-    color: var(--fg-muted);
-    font-size: 14px;
-    line-height: 1.8;
-    max-width: 68ch;
-    margin-bottom: 34px;
-  }
-  .desc b { color: var(--accent-soft); font-weight: 600; }
+  .lead { color: var(--fg-2); font-size: clamp(15.5px, 2.4vw, 17px); line-height: 1.6; max-width: 46ch; margin-bottom: 26px; }
 
-  .cta { display: grid; gap: 14px; max-width: 620px; }
-  .cta-links { display: grid; gap: 10px; }
+  .acts { display: grid; gap: 10px; margin-bottom: 18px; }
+  /* The most prominent command on the page has to be copyable, not decorative. */
+  .inst { max-width: 480px; }
+
+  .shot { min-width: 0; }
 
   @media (min-width: 600px) {
-    .hero-inner { padding-block: 52px 72px; }
-    .manline-mid { display: inline; }
-    .cta-links { display: flex; gap: 12px; flex-wrap: wrap; }
-    .name-line, .desc { font-size: 14.5px; }
+    .hero { padding-block: 60px 84px; }
+    .acts { display: flex; gap: 12px; flex-wrap: wrap; }
   }
 
-  @media (min-width: 880px) {
-    .hero-inner { padding-block: 64px 88px; }
-    h1 { margin-bottom: 48px; }
+  @media (min-width: 900px) {
+    .hero { padding-block: 76px 100px; }
+    .hero-in { grid-template-columns: 1fr 1.05fr; gap: 52px; align-items: center; }
   }
 </style>

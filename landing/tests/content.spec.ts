@@ -12,7 +12,7 @@ test("the shell is present and titled", async ({ page }) => {
 
   await expect(page).toHaveTitle(/project-brain/);
   await expect(page.locator("h1")).toHaveCount(1);
-  await expect(page.locator("h1")).toContainText("Your AI assistant stops");
+  await expect(page.locator("h1")).toContainText("Your AI stops");
 });
 
 test("social and canonical metadata is complete", async ({ page }) => {

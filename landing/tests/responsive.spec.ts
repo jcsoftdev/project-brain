@@ -10,30 +10,40 @@ import { test, expect, type Page } from "@playwright/test";
 const WIDTHS = [320, 375, 414, 599, 600, 768, 879, 880, 1100, 1440];
 
 /**
- * Containers that are *allowed* to scroll sideways, because they were built to.
- * Anything else exceeding the viewport is a layout bug.
+ * An element may legitimately extend past the viewport if an ancestor clips or
+ * scrolls it — a decorative glow inside `overflow: hidden`, or a table inside
+ * its own scroll container. Everything else exceeding the viewport is a bug.
+ *
+ * This is computed rather than listed: a hand-maintained allowlist silently
+ * rots into "whatever currently fails", which is the opposite of a test.
  */
-const INTENTIONAL_SCROLLERS = [".hosts ul"];
-
 async function overflowingElements(page: Page) {
-  return page.evaluate((allowed) => {
+  return page.evaluate(() => {
     const vw = document.documentElement.clientWidth;
     const out: string[] = [];
+
+    const clippedByAncestor = (el: Element) => {
+      let n: Element | null = el.parentElement;
+      while (n && n !== document.documentElement) {
+        const ox = getComputedStyle(n).overflowX;
+        if (ox === "hidden" || ox === "auto" || ox === "scroll" || ox === "clip") return true;
+        n = n.parentElement;
+      }
+      return false;
+    };
 
     document.querySelectorAll<HTMLElement>("*").forEach((el) => {
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) return;
       if (r.right <= vw + 1 && r.left >= -1) return;
-      if (allowed.some((sel) => el.closest(sel))) return;
-      // Decorative blur, deliberately oversized inside an overflow:hidden parent.
-      if (el.classList.contains("hero-glow")) return;
+      if (clippedByAncestor(el)) return;
 
       const cls = typeof el.className === "string" ? el.className : "";
       out.push(`${el.tagName.toLowerCase()}${cls ? "." + cls.trim().split(/\s+/).join(".") : ""}`);
     });
 
     return out;
-  }, INTENTIONAL_SCROLLERS);
+  });
 }
 
 test.describe("no horizontal overflow", () => {
@@ -279,13 +289,20 @@ test.describe("hero adapts to the viewport", () => {
     }
   });
 
-  test("the man-page header keeps its outer fields at every width", async ({ page }) => {
+  test("the hero terminal never clips its own output", async ({ page }) => {
     await page.goto("/");
 
-    // The centre field is a nicety and drops on a phone; the outer two never do.
-    await page.setViewportSize({ width: 320, height: 900 });
-    const spans = page.locator(".manline span");
-    await expect(spans.first()).toBeVisible();
-    await expect(spans.last()).toBeVisible();
+    /*
+     * The terminal is the page's central claim — it shows `impact` resolving a
+     * call tree. If the window clips that output the argument is lost, so it
+     * gets its own check separate from the general overflow sweep.
+     */
+    for (const width of [375, 768, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const clipped = await page.locator(".term").evaluate(
+        (el) => el.scrollWidth > el.clientWidth + 1,
+      );
+      expect(clipped, `the terminal window itself clips at ${width}px`).toBe(false);
+    }
   });
 });
