@@ -100,12 +100,12 @@ test("the copy button actually writes the command to the clipboard", async ({ pa
 
   await block.locator("button.copy-btn").click();
 
-  await expect(block.locator(".copy-text")).toHaveText("Copied");
+  await expect(block.locator(".copy-text")).toHaveText("copied");
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());
   expect(clipboard).toBe(expected);
 
   // The confirmation is temporary, not a stuck state.
-  await expect(block.locator(".copy-text")).toHaveText("Copy", { timeout: 4000 });
+  await expect(block.locator(".copy-text")).toHaveText("copy", { timeout: 4000 });
 });
 
 test.describe("the page uses one vocabulary for its sections", () => {

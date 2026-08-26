@@ -19,12 +19,7 @@ import { SECTIONS } from "../data/sections";
     </nav>
 
     <div class="nav-actions">
-      <a class="nav-gh" href="https://github.com/jcsoftdev/project-brain" rel="noopener" aria-label="project-brain on GitHub">
-        <svg width="17" height="17" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
-        </svg>
-        <span class="nav-gh-text">GitHub</span>
-      </a>
+      <a class="nav-gh" href="https://github.com/jcsoftdev/project-brain" rel="noopener">github</a>
 
       <!--
         Below 880px the five labels are ~480px of text — wider than the
@@ -39,13 +34,8 @@ import { SECTIONS } from "../data/sections";
         aria-controls="section-menu"
         data-nav-toggle
       >
-        <svg class="icon-open" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-          <path d="M2 4h12M2 8h12M2 12h12" />
-        </svg>
-        <svg class="icon-close" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-          <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />
-        </svg>
-        <span>Menu</span>
+        <span class="label-open">menu</span>
+        <span class="label-close">close</span>
       </button>
     </div>
   </div>
@@ -62,9 +52,9 @@ import { SECTIONS } from "../data/sections";
     position: sticky;
     top: 0;
     z-index: 50;
-    background: rgba(6, 12, 14, 0.9);
-    backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border-soft);
+    background: rgba(6, 12, 14, 0.94);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--rule);
   }
 
   .nav-top {
@@ -72,105 +62,82 @@ import { SECTIONS } from "../data/sections";
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    min-height: 56px;
+    min-height: 54px;
   }
 
   .brand {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 9px;
     min-height: var(--tap);
     color: var(--fg);
-    font-family: var(--mono);
-    font-size: 14.5px;
+    font-size: 13.5px;
     font-weight: 600;
     letter-spacing: -0.01em;
   }
-  .brand:hover { text-decoration: none; }
+  .brand:hover { text-decoration: none; color: var(--accent); }
   .brand svg { flex-shrink: 0; }
 
-  /* Inline links are a desktop affordance — the disclosure covers everything below. */
   .nav-links { display: none; }
 
   .nav-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
-  .nav-gh {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    min-height: 36px;
-    min-width: 36px;
-    font-size: 13.5px;
-    color: var(--fg-muted);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px 10px;
-  }
-  .nav-gh:hover { color: var(--fg); border-color: var(--fg-dim); text-decoration: none; }
-  /* The wordmark costs width a 320px viewport does not have; the icon reads alone. */
-  .nav-gh-text { display: none; }
-
+  /* Every control is a bracketed word. No icon buttons — the page is characters. */
+  .nav-gh,
   .nav-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
     min-height: 36px;
+    padding: 6px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 0;
     background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--fg-muted);
-    font-family: var(--sans);
-    font-size: 13.5px;
-    padding: 6px 11px;
+    color: var(--fg-dim);
+    font-family: var(--mono);
+    font-size: 12px;
     cursor: pointer;
   }
-  .nav-toggle:hover { color: var(--fg); border-color: var(--fg-dim); }
-  .nav-toggle .icon-close { display: none; }
+  .nav-gh::before, .nav-toggle::before { content: "["; margin-right: 6px; }
+  .nav-gh::after, .nav-toggle::after { content: "]"; margin-left: 6px; }
+  .nav-gh:hover, .nav-toggle:hover {
+    color: var(--accent);
+    border-color: var(--accent-dim);
+    text-decoration: none;
+  }
   .nav-toggle[aria-expanded="true"] { color: var(--accent); border-color: var(--accent-dim); }
-  .nav-toggle[aria-expanded="true"] .icon-open { display: none; }
-  .nav-toggle[aria-expanded="true"] .icon-close { display: inline; }
 
-  /*
-   * The panel is `hidden` when closed, so it leaves the accessibility tree
-   * entirely rather than sitting off-screen for a screen reader to find.
-   * Display is only ever set on the :not([hidden]) state, so the attribute's
-   * own display:none is never overridden.
-   */
+  /* The label flips to the shell's own word for closing something. */
+  .nav-toggle .label-open { display: inline; }
+  .nav-toggle .label-close { display: none; }
+  .nav-toggle[aria-expanded="true"] .label-open { display: none; }
+  .nav-toggle[aria-expanded="true"] .label-close { display: inline; }
+
   .nav-menu:not([hidden]) {
     display: block;
-    border-top: 1px solid var(--border-soft);
+    border-top: 1px solid var(--rule);
     background: var(--bg-soft);
   }
-  .nav-menu-inner { display: grid; padding-block: 8px 12px; }
+  .nav-menu-inner { display: grid; padding-block: 4px 10px; }
   .nav-menu a {
     display: flex;
     align-items: center;
     min-height: var(--tap);
-    font-size: 15px;
+    font-size: 14px;
     color: var(--fg-muted);
-    border-bottom: 1px solid var(--border-soft);
+    border-bottom: 1px solid var(--rule);
   }
+  .nav-menu a::before { content: "> "; color: var(--accent-quiet); margin-right: 8px; }
   .nav-menu a:last-child { border-bottom: none; }
-  .nav-menu a:hover { color: var(--fg); text-decoration: none; }
-
-  @media (min-width: 600px) {
-    .nav-gh-text { display: inline; }
-    .nav-gh { padding: 6px 12px; }
-  }
+  .nav-menu a:hover { color: var(--accent); text-decoration: none; }
+  .nav-menu a:hover::before { color: var(--accent); }
 
   @media (min-width: 880px) {
-    .nav-top { min-height: 60px; gap: 24px; }
-    .brand { font-size: 15px; gap: 9px; }
-    .nav-links {
-      display: flex;
-      gap: 26px;
-      font-size: 14px;
-    }
-    .nav-links a { color: var(--fg-muted); }
-    .nav-links a:hover { color: var(--fg); text-decoration: none; }
-
-    /* Past the breakpoint the disclosure is redundant — the links are inline. */
+    .nav-top { min-height: 58px; gap: 24px; }
+    .brand { font-size: 14px; }
+    .nav-links { display: flex; gap: 22px; font-size: 12.5px; }
+    /* Inline nav links still need a real target height, not just a text box. */
+    .nav-links a { display: inline-flex; align-items: center; min-height: 36px; color: var(--fg-dim); }
+    .nav-links a:hover { color: var(--accent); text-decoration: none; }
     .nav-toggle { display: none; }
     .nav-menu:not([hidden]) { display: none; }
   }

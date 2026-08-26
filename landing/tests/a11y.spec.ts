@@ -155,7 +155,9 @@ test.describe("colour contrast", () => {
       };
 
       const roles: [string, string][] = [
-        ["hero lead", "p.hero-lead"],
+        ["hero description", "p.desc"],
+        ["man-page label", ".manline span"],
+        ["section label", ".head"],
         ["headline", "h1"],
         ["section lead", ".section-lead"],
         ["eyebrow", ".eyebrow"],
@@ -166,15 +168,19 @@ test.describe("colour contrast", () => {
         ["code chip", ".dt td code"],
         ["command", ".copyable code"],
         ["prompt glyph", ".copyable .prompt"],
-        ["stat number", ".hero-stats b"],
-        ["stat label", ".hero-stats span"],
+        ["transcript question", ".ask"],
+        ["transcript tool", ".reply code"],
+        ["transcript result", ".reply .dim"],
+        ["box label", ".box-label"],
+        ["hook term", ".hooks dt"],
         ["footer link", ".foot-cols a"],
         ["footer heading", ".foot-cols h3"],
         ["tick item", ".ticks li"],
         ["okf term", ".okf-findings dt"],
         ["okf exit marker", ".okf-findings b"],
-        ["tag semantic", ".tag-semantic"],
-        ["tag structural", ".tag-structural"],
+        ["host list item", ".hosts li"],
+        ["step number", ".step-n"],
+        ["tool group heading", ".tool-h"],
       ];
 
       const out = roles.map(([name, selector]) => {

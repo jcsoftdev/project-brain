@@ -262,31 +262,30 @@ test.describe("section navigation is always reachable", () => {
 });
 
 test.describe("hero adapts to the viewport", () => {
-  test("stats are 2-up on a phone and 4-up on desktop", async ({ page }) => {
-    await page.setViewportSize({ width: 375, height: 900 });
+  test("the headline reflows without a hard break", async ({ page }) => {
     await page.goto("/");
-    const mobileCols = await page.locator(".hero-stats").evaluate(
-      (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
-    );
-    expect(mobileCols).toBe(2);
 
-    await page.setViewportSize({ width: 1440, height: 900 });
-    const desktopCols = await page.locator(".hero-stats").evaluate(
-      (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
-    );
-    expect(desktopCols).toBe(4);
+    /*
+     * The headline is capped at 20ch and wraps on its own. Nothing hard-codes
+     * where the lines fall, so it must never overflow its column at any width.
+     */
+    for (const width of [320, 600, 880, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      const overflows = await page.locator("h1").evaluate((el) => {
+        const parent = el.parentElement!;
+        return el.getBoundingClientRect().right > parent.getBoundingClientRect().right + 1;
+      });
+      expect(overflows, `the headline overflows its column at ${width}px`).toBe(false);
+    }
   });
 
-  test("the headline's forced line break is a desktop-only choice", async ({ page }) => {
+  test("the man-page header keeps its outer fields at every width", async ({ page }) => {
     await page.goto("/");
-    // A <br> has no box, so visibility assertions can never pass on one —
-    // the computed display is what the breakpoint actually toggles.
-    const display = () => page.locator("h1 br").first().evaluate((el) => getComputedStyle(el).display);
 
-    await page.setViewportSize({ width: 375, height: 900 });
-    expect(await display(), "the hero break should not fire on a phone").toBe("none");
-
-    await page.setViewportSize({ width: 1100, height: 900 });
-    expect(await display(), "the hero break should fire on desktop").toBe("inline");
+    // The centre field is a nicety and drops on a phone; the outer two never do.
+    await page.setViewportSize({ width: 320, height: 900 });
+    const spans = page.locator(".manline span");
+    await expect(spans.first()).toBeVisible();
+    await expect(spans.last()).toBeVisible();
   });
 });

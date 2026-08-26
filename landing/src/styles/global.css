@@ -1,83 +1,62 @@
 /*
- * Mobile-first. Base styles target the smallest viewport (~320px).
- * Every media query is min-width — layout only ever gets added, never undone.
+ * Terminal-native.
  *
- * Breakpoints:
- *   (base)  0px+     phone, single column
- *   sm      600px+   large phone / small tablet, first 2-up grids
- *   md      880px+   tablet, full nav, 3-up grids
- *   lg      1100px+  desktop, 4-up grids, widest type
+ * The rules this design actually follows, so a later change can keep them or
+ * break them deliberately rather than by accident:
+ *
+ *   1. One typeface. Monospace everywhere, prose included. Readability comes
+ *      from measure and leading, not from switching to a friendlier face.
+ *   2. Zero radius. Nothing is rounded.
+ *   3. Structure is carried by hairline rules and whitespace, never by filled
+ *      cards floating on a different grey.
+ *   4. No gradients, no glows, no shadows, no blur.
+ *   5. Teal is the only non-grey on the page, and it marks one thing:
+ *      something the machine said or something you can act on.
+ *
+ * Palette: https://coolors.co/a1d2ce-78cad2-62a8ac-5497a7-50858b
+ * The five swatches are accents; grounds and type are derived at the same hue
+ * (~187) so the darks read as unlit palette rather than unrelated grey.
  */
 
 :root {
-  /*
-   * Palette: https://coolors.co/a1d2ce-78cad2-62a8ac-5497a7-50858b
-   *
-   * All five swatches sit in a narrow teal band around hue 186 at middling
-   * lightness. That makes them a good accent family and a bad everything else:
-   * none is dark enough to sit behind text, none is light enough to be text on
-   * a dark ground. So the five are used as accents, and the grounds and type
-   * are derived at the same hue — the darks read as "unlit palette" rather
-   * than as neutral grey that happens to be nearby.
-   */
-  --p-100: #a1d2ce; /* palest  — soft highlights, the light end of gradients */
-  --p-200: #78cad2; /* most vivid — the primary accent, and the only one used on its own */
-  --p-300: #62a8ac; /* mid    — hover states, secondary marks */
-  --p-400: #5497a7; /* deep   — the blue end of gradients, tertiary marks */
-  --p-500: #50858b; /* darkest — outlines and the quietest marks */
+  --p-100: #a1d2ce;
+  --p-200: #78cad2;
+  --p-300: #62a8ac;
+  --p-400: #5497a7;
+  --p-500: #50858b;
 
-  /*
-   * Grounds. Hue held at ~187 with saturation falling as it darkens, so the
-   * page reads as one material lit from a single source.
-   */
-  --bg: #060c0e;        /* page */
-  --bg-soft: #0a1416;   /* raised strips — nav menu, hosts row, closing CTA */
-  --bg-card: #0d1a1c;   /* cards and tables */
-  --bg-inset: #12262a;  /* inline code chips, set inside cards */
-  --border: #1b3033;
-  --border-soft: #142427;
+  --bg: #060c0e;
+  --bg-soft: #0a1416;
+  --bg-inset: #12262a;
 
-  /*
-   * Type. Tinted toward the palette rather than pure white/grey — pure
-   * neutrals next to a saturated teal read as slightly pink by contrast.
-   * Contrast against --bg: fg 17.4:1, muted 10.0:1, dim 5.4:1. All clear AA;
-   * fg and muted clear AAA.
-   */
+  /* Rules do the work cards used to do, so there are two weights of them. */
+  --rule: #17292c;
+  --rule-bright: #22383c;
+
+  /* Contrast against --bg: 17.4 / 10.0 / 5.4. All clear AA. */
   --fg: #e6f2f1;
   --fg-muted: #9fbdbd;
   --fg-dim: #6d8b8e;
 
-  /* Roles. Components reference these, never the raw swatches. */
   --accent: var(--p-200);
   --accent-dim: var(--p-300);
   --accent-soft: var(--p-100);
-  --accent-deep: var(--p-400);
   --accent-quiet: var(--p-500);
-  --accent-glow: rgba(120, 202, 210, 0.13);
-  /* Text laid on top of a filled --accent surface. 10.0:1 against it. */
   --on-accent: #04191c;
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
-  --maxw: 1080px;
-  --radius: 12px;
 
-  /* Fluid gutter: 16px on a phone, 24px from tablet up, plus notch insets. */
+  --maxw: 1000px;
   --gutter: 16px;
-  --section-y: 56px;
-  --tap: 44px; /* minimum touch target */
+  --section-y: 52px;
+  --tap: 44px;
 }
 
 * { box-sizing: border-box; }
 
 html {
-  scroll-behavior: smooth;
   -webkit-text-size-adjust: 100%;
-  /*
-   * Sticky nav must not cover an anchored heading. The header is a single
-   * 56px row now that the section links live in a disclosure rather than a
-   * second row, so the offset tracks that plus a little breathing room.
-   */
+  scroll-behavior: smooth;
   scroll-padding-top: 72px;
 }
 
@@ -85,38 +64,29 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--sans);
-  font-size: 16px;
-  line-height: 1.6;
+  /* One typeface. This is the whole design decision in a single line. */
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.75;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
 }
 
 a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-
-/* Every interactive element clears the 44px touch target on a phone. */
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
 a, button { touch-action: manipulation; }
 
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-
-code, kbd, pre { font-family: var(--mono); }
+:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
 
 h1, h2, h3 {
-  line-height: 1.18;
-  letter-spacing: -0.02em;
   margin: 0;
-  font-weight: 650;
-  /* Long identifiers must not push the page wider than the phone. */
+  font-weight: 600;
+  line-height: 1.22;
+  letter-spacing: -0.01em;
   overflow-wrap: break-word;
 }
 
 p { margin: 0; overflow-wrap: break-word; }
-
 img, svg { max-width: 100%; }
 
 .wrap {
@@ -126,90 +96,131 @@ img, svg { max-width: 100%; }
   padding-inline: max(var(--gutter), env(safe-area-inset-left));
 }
 
-section { padding-block: var(--section-y); border-top: 1px solid var(--border-soft); }
+/* Sections are separated by a rule, never by a change of background. */
+section { padding-block: var(--section-y); border-top: 1px solid var(--rule); }
 section:first-of-type { border-top: none; }
 
+/*
+ * Section headings follow man-page convention: an uppercase name, flush left,
+ * with the rule running out to the right margin. It is the oldest way of
+ * labelling a section in this medium and it costs nothing.
+ */
 .eyebrow {
-  font-family: var(--mono);
+  display: flex;
+  align-items: center;
+  gap: 14px;
   font-size: 11.5px;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--accent);
-  margin-bottom: 12px;
+  margin-bottom: 22px;
+}
+.eyebrow::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
 }
 
-.section-title { font-size: clamp(23px, 5.2vw, 34px); margin-bottom: 12px; }
+.section-title {
+  font-size: clamp(19px, 3.6vw, 25px);
+  margin-bottom: 14px;
+  letter-spacing: -0.02em;
+}
 
+/* Prose in monospace needs a short measure and generous leading to stay easy. */
 .section-lead {
   color: var(--fg-muted);
-  font-size: clamp(15px, 3.6vw, 17px);
-  max-width: 640px;
-  margin-bottom: 32px;
+  font-size: 14px;
+  line-height: 1.8;
+  max-width: 68ch;
+  margin-bottom: 34px;
 }
 
-.card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px;
+/*
+ * A box with its name sitting on the top rule — the CSS equivalent of
+ * ┌─ SEMANTIC ─────┐. The label's background must match the page ground, which
+ * is why no section is allowed its own fill.
+ */
+.box {
+  position: relative;
+  border: 1px solid var(--rule);
+  padding: 26px 18px 20px;
+}
+.box-label {
+  position: absolute;
+  top: -8px;
+  left: 14px;
+  padding-inline: 8px;
+  background: var(--bg);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
 }
 
-/* Grids start single-column. Columns are added at breakpoints, never removed. */
-.grid { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+.grid { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); }
 
-.mono { font-family: var(--mono); }
 .dim { color: var(--fg-muted); }
+.quiet { color: var(--fg-dim); }
 
-.tag {
-  display: inline-block;
-  font-family: var(--mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  padding: 3px 8px;
-  border-radius: 5px;
-  border: 1px solid var(--border);
-  color: var(--fg-dim);
-}
-
-/* Shared button, sized for a thumb before it is sized for a cursor. */
+/*
+ * Buttons are bracketed the way a shell offers a choice. The primary one is
+ * reverse-video, which is what a terminal does to say "this one".
+ */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: var(--tap);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 10px 20px;
-  font-size: 15px;
-  font-weight: 500;
+  padding: 9px 16px;
+  border: 1px solid var(--rule-bright);
+  border-radius: 0;
+  font-family: var(--mono);
+  font-size: 13.5px;
   color: var(--fg);
+  background: transparent;
 }
-.btn:hover { border-color: var(--fg-dim); text-decoration: none; }
+.btn::before { content: "["; color: var(--fg-dim); margin-right: 9px; }
+.btn::after { content: "]"; color: var(--fg-dim); margin-left: 9px; }
+.btn:hover { border-color: var(--accent-dim); color: var(--accent); text-decoration: none; }
+.btn:hover::before, .btn:hover::after { color: var(--accent-dim); }
+
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--on-accent);
-  font-weight: 600;
 }
-.btn-primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
+.btn-primary::before, .btn-primary::after { color: var(--on-accent); opacity: 0.55; }
+.btn-primary:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
+  color: var(--on-accent);
+}
+.btn-primary:hover::before, .btn-primary:hover::after { color: var(--on-accent); }
 
-/* ── sm: 600px+ ─────────────────────────────────────────────── */
+/* Inline code is already the page's typeface, so it is marked by ground alone. */
+code { font-family: var(--mono); }
+p code, li code, dd code, td code, th code {
+  background: var(--bg-inset);
+  padding: 1px 6px;
+  color: var(--accent-soft);
+  overflow-wrap: break-word;
+}
+
 @media (min-width: 600px) {
-  :root { --gutter: 24px; --section-y: 72px; }
-  body { line-height: 1.65; }
-  .card { padding: 22px; }
-  .grid { gap: 16px; }
+  :root { --gutter: 24px; --section-y: 68px; }
+  body { font-size: 14.5px; }
+  .box { padding: 28px 22px 22px; }
   .grid-2, .grid-3, .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
-/* ── md: 880px+ ─────────────────────────────────────────────── */
 @media (min-width: 880px) {
-  :root { --section-y: 88px; }
+  :root { --section-y: 84px; }
+  html { scroll-padding-top: 76px; }
   .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .eyebrow { font-size: 12px; }
 }
 
-/* ── lg: 1100px+ ────────────────────────────────────────────── */
 @media (min-width: 1100px) {
   .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
@@ -217,9 +228,4 @@ section:first-of-type { border-top: none; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
-}
-
-/* The header is 60px from md up. */
-@media (min-width: 880px) {
-  html { scroll-padding-top: 76px; }
 }

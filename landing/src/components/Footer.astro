@@ -5,85 +5,81 @@ const year = 2026;
 ---
 
 <footer>
-  <div class="wrap foot">
-    <div class="foot-brand">
-      <strong class="mono">project-brain</strong>
-      <p class="dim">
-        Local-first MCP server that gives AI tools semantic memory of your codebase.
-        MIT licensed &middot; &copy; {year} <a href="https://github.com/jcsoftdev" rel="noopener">jcsoftdev</a>
-      </p>
-    </div>
-
+  <div class="wrap">
     <div class="foot-cols">
       <div>
-        <h3>Project</h3>
-        <a href="https://github.com/jcsoftdev/project-brain" rel="noopener">GitHub</a>
-        <a href="https://www.npmjs.com/package/project-brain" rel="noopener">npm</a>
-        <a href="https://github.com/jcsoftdev/homebrew-tap" rel="noopener">Homebrew tap</a>
-        <a href="https://github.com/jcsoftdev/project-brain/releases" rel="noopener">Releases</a>
-      </div>
-      <div>
-        <h3>Docs</h3>
+        <h3>Sections</h3>
         {SECTIONS.map((s) => <a href={s.href}>{s.label}</a>)}
       </div>
       <div>
-        <h3>Related</h3>
-        <a href="https://modelcontextprotocol.io" rel="noopener">Model Context Protocol</a>
-        <a href="https://ollama.com" rel="noopener">Ollama</a>
-        <a href="https://lancedb.com" rel="noopener">LanceDB</a>
-        <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md" rel="noopener">OKF spec</a>
+        <h3>Project</h3>
+        <a href="https://github.com/jcsoftdev/project-brain" rel="noopener">github</a>
+        <a href="https://www.npmjs.com/package/project-brain" rel="noopener">npm</a>
+        <a href="https://github.com/jcsoftdev/homebrew-tap" rel="noopener">homebrew tap</a>
+        <a href="https://github.com/jcsoftdev/project-brain/releases" rel="noopener">releases</a>
       </div>
+      <div>
+        <h3>See also</h3>
+        <a href="https://modelcontextprotocol.io" rel="noopener">model context protocol</a>
+        <a href="https://ollama.com" rel="noopener">ollama</a>
+        <a href="https://lancedb.com" rel="noopener">lancedb</a>
+        <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md" rel="noopener">okf spec</a>
+      </div>
+    </div>
+
+    <!-- Closing line of a man page: name, date, and where it came from. -->
+    <div class="manline">
+      <span>project-brain(1)</span>
+      <span class="manline-mid">MIT &middot; {year}</span>
+      <span><a href="https://github.com/jcsoftdev" rel="noopener">jcsoftdev</a></span>
     </div>
   </div>
 </footer>
 
 <style>
-  footer { border-top: 1px solid var(--border-soft); padding-block: 44px 52px; }
-
-  /* Single column on a phone; the link columns pair up from sm and split at md. */
-  .foot {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 34px;
-  }
-
-  .foot-brand strong { display: block; font-size: 15px; margin-bottom: 9px; }
-  .foot-brand p { font-size: 14px; max-width: 340px; }
+  footer { border-top: 1px solid var(--rule); padding-block: 40px 28px; }
 
   .foot-cols {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 26px 20px;
+    margin-bottom: 34px;
   }
   .foot-cols h3 {
-    font-family: var(--mono);
-    font-size: 11px;
-    letter-spacing: 0.1em;
+    font-size: 10.5px;
+    letter-spacing: 0.2em;
     text-transform: uppercase;
-    color: var(--fg-dim);
-    font-weight: 500;
-    margin: 0 0 10px;
+    color: var(--accent);
+    font-weight: 600;
+    margin: 0 0 8px;
   }
-  /* Footer links are the densest tap targets on the page — give them height. */
   .foot-cols a {
     display: flex;
     align-items: center;
-    min-height: 34px;
-    font-size: 14px;
+    min-height: 36px;
+    font-size: 13px;
     color: var(--fg-muted);
   }
-  .foot-cols a:hover { color: var(--fg); text-decoration: none; }
+  .foot-cols a:hover { color: var(--accent); text-decoration: none; }
+
+  .manline {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+  }
+  .manline-mid { display: none; }
+  .manline a { display: inline-flex; align-items: center; min-height: 34px; color: var(--fg-dim); }
+  .manline a:hover { color: var(--accent); }
 
   @media (min-width: 600px) {
-    footer { padding-block: 52px 60px; }
-    .foot { gap: 40px; }
+    footer { padding-block: 52px 32px; }
     .foot-cols { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px; }
-  }
-
-  @media (min-width: 880px) {
-    footer { padding-block: 56px 64px; }
-    .foot { grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr); gap: 48px; }
-    .foot-cols h3 { font-size: 11.5px; margin-bottom: 14px; }
-    .foot-cols a { min-height: 0; margin-bottom: 9px; }
+    .manline-mid { display: inline; }
   }
 </style>

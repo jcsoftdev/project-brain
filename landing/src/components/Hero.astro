@@ -3,121 +3,112 @@ import Copyable from "./Copyable.astro";
 ---
 
 <div class="hero">
-  <div class="hero-glow" aria-hidden="true"></div>
   <div class="wrap hero-inner">
-    <h1>
-      Your AI assistant stops<br />
-      guessing about <span class="hl">your codebase</span>.
-    </h1>
-
-    <p class="hero-lead">
-      project-brain is a local-first MCP server that gives AI tools two kinds of memory of your
-      code: <strong>semantic</strong> &mdash; a LanceDB vector index that finds code by meaning &mdash; and
-      <strong>structural</strong> &mdash; a tree-sitter symbol graph that answers exactly who calls what,
-      and what breaks if you change it.
-    </p>
-
-    <div class="hero-cta">
-      <Copyable command="brew install jcsoftdev/tap/project-brain" />
-      <div class="hero-links">
-        <a class="btn btn-primary" href="#start">Quick start</a>
-        <a class="btn" href="https://github.com/jcsoftdev/project-brain" rel="noopener">Read the docs</a>
-      </div>
+    <!--
+      A man page header. It is the oldest convention in this medium for saying
+      what a program is, and it fits a tool whose whole surface is a CLI and an
+      MCP server. It also gives the page a factual opening instead of a claim.
+    -->
+    <div class="manline">
+      <span>project-brain(1)</span>
+      <span class="manline-mid quiet">General Commands Manual</span>
+      <!-- Deliberately not a version number: nothing here reads package.json,
+           so a hardcoded one starts lying at the next release. -->
+      <span>Local-first</span>
     </div>
 
-    <div class="hero-stats">
-      <div><b>0</b><span>services to run</span></div>
-      <div><b>7</b><span>AI tools auto-registered</span></div>
-      <div><b>20+</b><span>MCP tools exposed</span></div>
-      <div><b>100%</b><span>on your machine</span></div>
+    <p class="head">NAME</p>
+    <p class="name-line">
+      <b>project-brain</b> <span class="quiet">&mdash;</span> semantic and structural memory of your codebase
+    </p>
+
+    <h1>Your AI assistant stops guessing about your codebase.</h1>
+
+    <p class="head">DESCRIPTION</p>
+    <p class="desc">
+      Two indexes, both on your machine. A <b>LanceDB</b> vector store that finds code by
+      meaning, and a <b>tree-sitter</b> symbol graph that answers exactly who calls what and
+      what breaks if you change it. Your assistant reaches for whichever one the
+      question needs.
+    </p>
+
+    <p class="head">SYNOPSIS</p>
+    <div class="cta">
+      <Copyable command="brew install jcsoftdev/tap/project-brain" />
+      <div class="cta-links">
+        <a class="btn btn-primary" href="#start">Quick start</a>
+        <a class="btn" href="https://github.com/jcsoftdev/project-brain" rel="noopener">Source</a>
+      </div>
     </div>
   </div>
 </div>
 
 <style>
+  .hero-inner { padding-block: 40px 52px; }
+
+  /* The header/footer line of a man page: name left, section centre, version right. */
+  .manline {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 34px;
+  }
+  .manline-mid { display: none; }
+
   /*
-   * Mobile-first hero. Base is a single column sized for a 320px viewport;
-   * min-width queries add breathing room and the 4-up stat row.
+   * Labels in the man-page conceit, not document structure — making them
+   * headings put an h2 above the h1 and broke the outline.
    */
-  .hero { position: relative; overflow: hidden; }
-
-  .hero-glow {
-    position: absolute;
-    top: -220px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(900px, 160vw);
-    height: 520px;
-    background: radial-gradient(closest-side, var(--accent-glow), transparent 72%);
-    pointer-events: none;
-  }
-
-  .hero-inner { position: relative; padding-block: 64px 56px; }
-
-  h1 {
-    font-size: clamp(30px, 8.4vw, 60px);
-    letter-spacing: -0.03em;
-    margin-bottom: 18px;
-  }
-  /* The forced break is a desktop line-length choice, not a phone one. */
-  h1 br { display: none; }
-
-  .hl {
-    /* Pale to deep across the palette — the whole ramp in one phrase. */
-    background: linear-gradient(96deg, var(--p-100) 0%, var(--p-200) 42%, var(--p-400) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-
-  .hero-lead {
-    color: var(--fg-muted);
-    font-size: clamp(15px, 4vw, 19px);
-    max-width: 700px;
-    margin-bottom: 28px;
-  }
-  .hero-lead strong { color: var(--fg); font-weight: 600; }
-
-  .hero-cta { max-width: 640px; display: grid; gap: 14px; }
-
-  /* Full-width stacked buttons are the reliable phone target; side by side from sm. */
-  .hero-links { display: grid; gap: 10px; }
-
-  .hero-stats {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 20px 16px;
-    margin-top: 42px;
-    padding-top: 26px;
-    border-top: 1px solid var(--border-soft);
-  }
-  .hero-stats div { display: flex; flex-direction: column; gap: 2px; }
-  .hero-stats b {
-    font-family: var(--mono);
-    font-size: clamp(22px, 6vw, 26px);
-    font-weight: 600;
+  .head {
+    font-size: 11.5px;
+    letter-spacing: 0.22em;
     color: var(--accent);
-    letter-spacing: -0.02em;
+    font-weight: 600;
+    margin-bottom: 10px;
   }
-  .hero-stats span { font-size: 13px; color: var(--fg-dim); }
+
+  .name-line { color: var(--fg-muted); font-size: 14px; margin-bottom: 34px; }
+  .name-line b { color: var(--fg); font-weight: 600; }
+
+  /*
+   * The one place the page raises its voice. Still the same typeface — the
+   * emphasis is size and tracking, not a second font or a gradient fill.
+   */
+  h1 {
+    font-size: clamp(24px, 5.4vw, 40px);
+    line-height: 1.25;
+    letter-spacing: -0.035em;
+    max-width: 20ch;
+    margin-bottom: 40px;
+  }
+
+  .desc {
+    color: var(--fg-muted);
+    font-size: 14px;
+    line-height: 1.8;
+    max-width: 68ch;
+    margin-bottom: 34px;
+  }
+  .desc b { color: var(--accent-soft); font-weight: 600; }
+
+  .cta { display: grid; gap: 14px; max-width: 620px; }
+  .cta-links { display: grid; gap: 10px; }
 
   @media (min-width: 600px) {
-    .hero-inner { padding-block: 88px 78px; }
-    h1 { margin-bottom: 22px; }
-    .hero-lead { margin-bottom: 34px; }
-    .hero-links { display: flex; gap: 12px; flex-wrap: wrap; }
-    .hero-stats { gap: 16px; margin-top: 54px; padding-top: 30px; }
-    .hero-stats span { font-size: 13.5px; }
+    .hero-inner { padding-block: 52px 72px; }
+    .manline-mid { display: inline; }
+    .cta-links { display: flex; gap: 12px; flex-wrap: wrap; }
+    .name-line, .desc { font-size: 14.5px; }
   }
 
   @media (min-width: 880px) {
-    .hero-glow { top: -320px; height: 620px; }
-    .hero-inner { padding-block: 108px 96px; }
-    h1 br { display: inline; }
-    .hero-stats {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      margin-top: 62px;
-      padding-top: 32px;
-    }
+    .hero-inner { padding-block: 64px 88px; }
+    h1 { margin-bottom: 48px; }
   }
 </style>
