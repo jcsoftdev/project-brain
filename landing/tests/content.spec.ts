@@ -23,7 +23,8 @@ test("social and canonical metadata is complete", async ({ page }) => {
   expect(await meta('meta[name="description"]')).toBeTruthy();
   expect(await meta('meta[property="og:title"]')).toContain("project-brain");
   expect(await meta('meta[property="og:description"]')).toBeTruthy();
-  expect(await meta('meta[property="og:image"]')).toContain("og.svg");
+  // PNG since the SEO pass — SVG share images render blank on every major platform.
+  expect(await meta('meta[property="og:image"]')).toContain("og.png");
   expect(await meta('meta[name="twitter:card"]')).toBe("summary_large_image");
   await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", /brain\.jcsoftdev\.com/);
 });
@@ -176,6 +177,104 @@ test.describe("the page uses one vocabulary for its sections", () => {
         (await eyebrow.textContent())!.trim().toLowerCase(),
         `nav says "${label}" but ${href} announces itself as something unrelated`,
       ).toContain(label.toLowerCase());
+    }
+  });
+});
+
+test.describe("SEO surface", () => {
+  /*
+   * Every one of these was missing at some point during the redesign, and one
+   * — the JSON-LD — was silently dropped by a rewrite and nobody noticed until
+   * an audit. Metadata has no visual output, so it only stays correct if
+   * something asserts it.
+   */
+  test("the share image is a PNG, and declares its size", async ({ page }) => {
+    await page.goto("/");
+
+    const og = await page.locator('meta[property="og:image"]').getAttribute("content");
+    /*
+     * PNG, not SVG. Facebook, LinkedIn and X do not rasterise SVG for link
+     * previews — they render nothing, so a shared link came out blank. This
+     * caught exactly that.
+     */
+    expect(og, "og:image must be a raster format").toMatch(/\.png$/);
+
+    expect(await page.locator('meta[property="og:image:width"]').getAttribute("content")).toBe("1200");
+    expect(await page.locator('meta[property="og:image:height"]').getAttribute("content")).toBe("630");
+    expect(await page.locator('meta[property="og:image:type"]').getAttribute("content")).toBe("image/png");
+    expect(await page.locator('meta[property="og:image:alt"]').getAttribute("content")).toBeTruthy();
+
+    // Twitter reads its own tags before falling back to og:*.
+    expect(await page.locator('meta[name="twitter:image"]').getAttribute("content")).toBe(og);
+  });
+
+  test("the share image actually exists and is the size it claims", async ({ request, page }) => {
+    await page.goto("/");
+    const og = (await page.locator('meta[property="og:image"]').getAttribute("content"))!;
+
+    const res = await request.get(new URL(og).pathname);
+    expect(res.status(), "og:image 404s — the preview would be blank").toBe(200);
+    expect(res.headers()["content-type"]).toContain("png");
+
+    // PNG dimensions live in the IHDR chunk: bytes 16-23 of the file.
+    const buf = await res.body();
+    expect(buf.readUInt32BE(16)).toBe(1200);
+    expect(buf.readUInt32BE(20)).toBe(630);
+  });
+
+  test("robots and sitemap agree, and the sitemap resolves", async ({ request }) => {
+    const robots = await request.get("/robots.txt");
+    expect(robots.status()).toBe(200);
+
+    const body = await robots.text();
+    const line = body.split("\n").find((l) => l.toLowerCase().startsWith("sitemap:"));
+    expect(line, "robots.txt advertises no sitemap").toBeTruthy();
+
+    /*
+     * The previous robots.txt pointed at /sitemap.xml, which did not exist —
+     * every crawler that followed it got a 404. Advertising a sitemap is only
+     * useful if the sitemap is there.
+     */
+    const url = new URL(line!.split(/:\s*/).slice(1).join(":").trim());
+    const sitemap = await request.get(url.pathname);
+    expect(sitemap.status(), `${url.pathname} is advertised but returns ${sitemap.status()}`).toBe(200);
+
+    const xml = await sitemap.text();
+    expect(xml).toContain("brain.jcsoftdev.com");
+    expect(xml, "the 404 page must not be listed for indexing").not.toContain("/404");
+  });
+
+  test("the page declares itself indexable, structured and canonical", async ({ page }) => {
+    await page.goto("/");
+
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", /brain\.jcsoftdev\.com/);
+    expect(await page.locator('meta[name="robots"]').getAttribute("content")).toContain("index");
+
+    const ld = JSON.parse((await page.locator('script[type="application/ld+json"]').textContent())!);
+    expect(ld["@type"]).toBe("SoftwareApplication");
+    expect(ld.codeRepository).toContain("github.com/jcsoftdev/project-brain");
+    expect(ld.image).toMatch(/\.png$/);
+  });
+
+  test("above-the-fold fonts are preloaded", async ({ page }) => {
+    await page.goto("/");
+
+    /*
+     * Both are used above the fold — the display face in the headline, the
+     * mono in the terminal. Without a preload they are discovered only once
+     * the CSS parses, which is a visible swap on the largest text on the page.
+     */
+    const preloads = await page.locator('link[rel="preload"][as="font"]').evaluateAll((els) =>
+      els.map((el) => (el as HTMLLinkElement).getAttribute("href")),
+    );
+    expect(preloads).toContain("/fonts/outfit.woff2");
+    expect(preloads).toContain("/fonts/jetbrains-mono.woff2");
+
+    for (const href of preloads) {
+      expect(
+        await page.locator(`link[href="${href}"]`).getAttribute("crossorigin"),
+        `${href} preloaded without crossorigin — the browser fetches it twice`,
+      ).not.toBeNull();
     }
   });
 });

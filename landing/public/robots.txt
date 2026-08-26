@@ -1,4 +1,8 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://brain.jcsoftdev.com/sitemap.xml
+# @astrojs/sitemap emits an index plus the child sitemaps, so this points at
+# the index rather than a bare sitemap.xml — the previous file advertised
+# /sitemap.xml, which did not exist and returned 404 to every crawler that
+# asked for it.
+Sitemap: https://brain.jcsoftdev.com/sitemap-index.xml
