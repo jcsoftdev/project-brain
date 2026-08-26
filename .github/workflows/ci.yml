@@ -25,6 +25,39 @@ jobs:
       - name: Tests
         run: bun test
 
+  landing:
+    name: Landing (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        working-directory: landing
+        run: bun install --frozen-lockfile
+
+      # Chromium only. The suite asserts CSS breakpoints and contrast, not
+      # engine differences, so a second browser costs minutes and proves
+      # nothing.
+      - name: Install Chromium
+        working-directory: landing
+        run: bunx playwright install --with-deps chromium
+
+      - name: Tests
+        working-directory: landing
+        run: bunx playwright test
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: landing/playwright-report/
+          retention-days: 7
+
   compile-smoke:
     name: Compiled-binary smoke (linux)
     runs-on: ubuntu-latest
