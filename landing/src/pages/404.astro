@@ -1,0 +1,35 @@
+---
+import Layout from "../layouts/Layout.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+---
+
+<Layout
+  title="Not found — project-brain"
+  description="That page does not exist on brain.jcsoftdev.com."
+>
+  <Nav />
+  <section class="nf">
+    <div class="wrap">
+      <p class="eyebrow">404</p>
+      <h1 class="section-title">No such page.</h1>
+      <p class="section-lead">
+        Nothing is indexed at that path. The tool is better at finding things than this
+        site is &mdash; try the quick start, or read the source.
+      </p>
+      <div class="acts">
+        <a class="btn btn-primary" href="/">Back to the start</a>
+        <a class="btn" href="https://github.com/jcsoftdev/project-brain" rel="noopener">Source</a>
+      </div>
+    </div>
+  </section>
+  <Footer />
+</Layout>
+
+<style>
+  .nf { border-top: none; padding-block: 80px 100px; }
+  .acts { display: grid; gap: 10px; }
+  @media (min-width: 600px) {
+    .acts { display: flex; gap: 12px; }
+  }
+</style>
