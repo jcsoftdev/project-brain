@@ -154,7 +154,7 @@ switch (command) {
         "@modelcontextprotocol/sdk/server/stdio.js"
       );
       const { createServer } = await import("./server.js");
-      const { maybeStartWatcher, createShutdownHandler } = await import(
+      const { startWatchElection, createShutdownHandler } = await import(
         "./serve.js"
       );
       const { ORPHAN_CHECK_MS } = await import("./constants.js");
@@ -163,9 +163,13 @@ switch (command) {
       const cwd = process.cwd();
       const { server, store, embeddings, graph, foreignGraphs } = await createServer({ dbPath, embedModel, projectRoot: cwd });
 
-      // Attempt to start file watcher if project config exists.
+      // Watch this project — but only if no other server already is. Several
+      // MCP hosts open in one repo is ordinary, and each used to run its own
+      // watcher over the same root, turning one save into N identical syncs.
+      // Losing the election costs nothing: serving never depended on the
+      // watcher, and the retry picks the root up if the winner dies.
       // Pass the server's shared graph so the watcher writes the SAME graph.db.
-      const watcher = await maybeStartWatcher(cwd, { store, embeddings, graph });
+      const watcher = await startWatchElection(cwd, { store, embeddings, graph });
 
       // Graceful shutdown — closes the shared graph connection AND every
       // foreign project graph the structural tools opened along the way.

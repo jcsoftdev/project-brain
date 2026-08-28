@@ -56,6 +56,8 @@ export const SECTION_MARKER_START = "<!-- project-brain:start -->";
 export const SECTION_MARKER_END = "<!-- project-brain:end -->";
 
 /** Paths to ignore in file watcher (always, regardless of .gitignore). */
+export const WATCH_ELECTION_RETRY_MS = 30_000; // a loser re-checks the root this often
+
 export const WATCHER_ALWAYS_IGNORE = [
   // universal
   "node_modules/",
