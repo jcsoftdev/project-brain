@@ -112,6 +112,46 @@ describe("LanceDbStore.optimize", () => {
 
     expect(spy.calls).toHaveLength(2);
   });
+
+  it("logs a failing optimize instead of swallowing it", async () => {
+    // Non-fatal is right; SILENT is not, and the two got conflated. compact()
+    // caught with an empty block on the reasoning that "a failed compaction
+    // leaves the table queryable" — true, and beside the point. Every other
+    // catch in this file already logs for exactly this reason (search,
+    // listModules, getModuleChunks, ftsSearch): a failure that repeats forever
+    // must not be indistinguishable from success.
+    //
+    // What it cost: lance 7.0.0 panics in the FTS incremental merge whenever
+    // the inverted index carries a stale TokenSet.next_id (lance #8310, fixed
+    // in lance-index 10.0.0). On the creai table that fires on EVERY sync, so
+    // optimize never completed and the FTS index silently stopped being
+    // updated — search_code kept answering, from an index frozen days back,
+    // with nothing anywhere saying so. Measured: 4 panics in 12 minutes, not
+    // one line of output from project-brain itself.
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map((a) => String(a)).join(" "));
+    };
+    try {
+      await spyOnTableOptimize(async () => {
+        throw new Error(
+          "index out of bounds: the len is 141632 but the index is 141859"
+        );
+      });
+      await store.optimize("proj"); // still must not throw
+    } finally {
+      console.warn = original;
+    }
+
+    // Names the project (which table is stale) and carries the underlying
+    // message (what to search upstream for).
+    expect(
+      warnings.some(
+        (w) => w.includes("proj") && w.includes("index out of bounds")
+      )
+    ).toBe(true);
+  });
 });
 
 describe("LanceDbStore.optimize — cross-process lock", () => {

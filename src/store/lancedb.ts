@@ -530,7 +530,7 @@ export class LanceDbStore implements VectorStore {
     if (!release) return; // another process holds it — its work covers ours
 
     try {
-      await this.compact(table);
+      await this.compact(table, project);
     } finally {
       await release();
     }
@@ -565,7 +565,7 @@ export class LanceDbStore implements VectorStore {
   }
 
   /** The compaction itself, with the lock assumed already held. */
-  private async compact(table: any): Promise<void> {
+  private async compact(table: any, project: string): Promise<void> {
     try {
       // An explicit retention window: called with no options, lance keeps every
       // version, and 15,873 of them accumulated against 3GB of real content.
@@ -573,8 +573,22 @@ export class LanceDbStore implements VectorStore {
       // in-progress transaction in a process this lock cannot see.
       const cleanupOlderThan = new Date(Date.now() - OPTIMIZE_RETENTION_MS);
       await table.optimize({ cleanupOlderThan });
-    } catch {
-      // Non-fatal: a failed compaction leaves the table queryable.
+    } catch (err) {
+      // Non-fatal — the table stays queryable — but NOT silent. This catch was
+      // an empty block, and that is how a permanent maintenance failure passed
+      // for normal operation: lance 7.0.0 panics in the FTS incremental merge
+      // when the inverted index holds a stale TokenSet.next_id (lance #8310,
+      // fixed in lance-index 10.0.0), which on a real table fired on every
+      // single sync. optimize therefore never completed, the FTS index stopped
+      // being updated, and search_code kept answering from a frozen index for
+      // days with nothing to indicate it.
+      //
+      // Same shape as search()/ftsSearch()/listModules() above: degrade, but
+      // say so. A failure that repeats forever must not look like success.
+      console.warn(
+        `[project-brain] optimize failed for '${project}':`,
+        err instanceof Error ? err.message : err
+      );
     }
   }
 
@@ -666,7 +680,7 @@ export class LanceDbStore implements VectorStore {
     // (freshly created or pre-existing) so index staleness doesn't silently
     // degrade newly-added rows back to brute-force scan.
     if (hasVectorIndex) {
-      await this.compact(table);
+      await this.compact(table, project);
     }
     } finally {
       await release();
