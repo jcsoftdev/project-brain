@@ -19,6 +19,8 @@ import flowIntegrity from "../../templates/skills/brain-audit/references/flow-in
 import backend from "../../templates/skills/brain-audit/references/backend.md" with { type: "text" };
 import api from "../../templates/skills/brain-audit/references/api.md" with { type: "text" };
 import frontend from "../../templates/skills/brain-audit/references/frontend.md" with { type: "text" };
+import designSystem from "../../templates/skills/brain-audit/references/design-system.md" with { type: "text" };
+import visualDesign from "../../templates/skills/brain-audit/references/visual-design.md" with { type: "text" };
 import accessibility from "../../templates/skills/brain-audit/references/accessibility.md" with { type: "text" };
 import mobile from "../../templates/skills/brain-audit/references/mobile.md" with { type: "text" };
 import database from "../../templates/skills/brain-audit/references/database.md" with { type: "text" };
@@ -49,6 +51,21 @@ import i18n from "../../templates/skills/brain-audit/references/i18n.md" with { 
 import contractDrift from "../../templates/skills/brain-audit/references/contract-drift.md" with { type: "text" };
 // H. Meta
 import promptSpecGap from "../../templates/skills/brain-audit/references/prompt-spec-gap.md" with { type: "text" };
+// I. Correctness primitives
+import typeSafety from "../../templates/skills/brain-audit/references/type-safety.md" with { type: "text" };
+import stateModel from "../../templates/skills/brain-audit/references/state-model.md" with { type: "text" };
+import crossSurfaceParity from "../../templates/skills/brain-audit/references/cross-surface-parity.md" with { type: "text" };
+import temporal from "../../templates/skills/brain-audit/references/temporal.md" with { type: "text" };
+import numeric from "../../templates/skills/brain-audit/references/numeric.md" with { type: "text" };
+import idempotency from "../../templates/skills/brain-audit/references/idempotency.md" with { type: "text" };
+import multiTenancy from "../../templates/skills/brain-audit/references/multi-tenancy.md" with { type: "text" };
+import featureFlags from "../../templates/skills/brain-audit/references/feature-flags.md" with { type: "text" };
+import toolingBaseline from "../../templates/skills/brain-audit/references/tooling-baseline.md" with { type: "text" };
+// J. Provenance and reach
+import supplyChain from "../../templates/skills/brain-audit/references/supply-chain.md" with { type: "text" };
+import repoHistory from "../../templates/skills/brain-audit/references/repo-history.md" with { type: "text" };
+import webMetadata from "../../templates/skills/brain-audit/references/web-metadata.md" with { type: "text" };
+import analytics from "../../templates/skills/brain-audit/references/analytics.md" with { type: "text" };
 
 /**
  * Relative path → embedded content.
@@ -70,6 +87,7 @@ export const BRAIN_AUDIT_FILES: Record<string, string> = {
   "references/abuse.md": abuse,
   "references/accessibility.md": accessibility,
   "references/ai.md": ai,
+  "references/analytics.md": analytics,
   "references/api.md": api,
   "references/backend.md": backend,
   "references/complexity.md": complexity,
@@ -77,19 +95,25 @@ export const BRAIN_AUDIT_FILES: Record<string, string> = {
   "references/consistency.md": consistency,
   "references/contract-drift.md": contractDrift,
   "references/cost.md": cost,
+  "references/cross-surface-parity.md": crossSurfaceParity,
   "references/database.md": database,
   "references/dependencies-licensing.md": dependenciesLicensing,
+  "references/design-system.md": designSystem,
   "references/devops.md": devops,
   "references/documentation.md": documentation,
   "references/failure.md": failure,
+  "references/feature-flags.md": featureFlags,
   "references/flow-integrity.md": flowIntegrity,
   "references/frontend.md": frontend,
   "references/functional.md": functional,
   "references/future.md": future,
   "references/goal.md": goal,
   "references/i18n.md": i18n,
+  "references/idempotency.md": idempotency,
   "references/infrastructure.md": infrastructure,
   "references/mobile.md": mobile,
+  "references/multi-tenancy.md": multiTenancy,
+  "references/numeric.md": numeric,
   "references/observability.md": observability,
   "references/packaging.md": packaging,
   "references/performance.md": performance,
@@ -97,10 +121,18 @@ export const BRAIN_AUDIT_FILES: Record<string, string> = {
   "references/product.md": product,
   "references/prompt-spec-gap.md": promptSpecGap,
   "references/reachability.md": reachability,
+  "references/repo-history.md": repoHistory,
   "references/scalability.md": scalability,
   "references/security.md": security,
+  "references/state-model.md": stateModel,
+  "references/supply-chain.md": supplyChain,
+  "references/temporal.md": temporal,
   "references/testing.md": testing,
+  "references/tooling-baseline.md": toolingBaseline,
+  "references/type-safety.md": typeSafety,
   "references/versioning-compatibility.md": versioningCompatibility,
+  "references/visual-design.md": visualDesign,
+  "references/web-metadata.md": webMetadata,
 };
 
 /**

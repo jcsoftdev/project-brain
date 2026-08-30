@@ -6,48 +6,58 @@ Gate: auth, external input, or a network boundary was detected.
 
 ## Resource abuse
 
-- [ ] Every endpoint that costs money or time has a rate limit. Absent limits on expensive operations is `High` — cross-reference `cost.md` where the operation bills per call.
-- [ ] Rate limits are keyed on something the user cannot trivially rotate. Per-IP alone is weak; per-account is better.
-- [ ] Request and payload size are bounded before parsing, not after.
-- [ ] Uploads are bounded in size, count, and total per account, and the type is verified from content rather than from the filename.
-- [ ] Anything that fans out — a single request causing N downstream calls — has a bound on N.
-- [ ] Expensive queries reachable by an unauthenticated caller.
+- [ ] Every endpoint that costs money or time has a rate limit. `search_code` for a rate-limit middleware (`express-rate-limit`, `slowapi`, `RateLimiter`, `@Throttle`, or the project's own), then list the routes it actually wraps against every expensive or billed route from `get_architecture`'s route table. The gap between the two lists is the finding — the mere absence of the word "rate limit" is not; a project can rate-limit at the gateway and never mention it in application code, so check for an upstream gateway config too before concluding there is none. CWE-770 Allocation of Resources Without Limits or Throttling, #25 in the 2025 CWE Top 25 — the CWE anchoring this whole section. Absent limits on a billed operation is `High` — cross-reference `cost.md`.
+- [ ] Rate limits are keyed on something the user cannot trivially rotate. Read the limiter's key function: per-IP alone is weak (rotates behind CGNAT or a VPN); per-account or per-API-key is better.
+- [ ] Request and payload size are bounded before parsing, not after. `search_code` the body-parser configuration (`bodyParser.json({limit:`, `express.json({limit:`, `client_max_body_size`, framework equivalent) and confirm the limit is wired into the middleware chain ahead of the route, not merely declared and unused.
+- [ ] Uploads are bounded in size, count, and total per account, and the type is verified from file content rather than filename or declared MIME type. `find_symbol` the upload handler and read the validator: an extension or `Content-Type` header check alone is the finding; a check against magic bytes (file-type sniffing) rules it out — read which one is actually implemented before flagging. CWE-434 Unrestricted Upload of File with Dangerous Type, #12 in the 2025 CWE Top 25.
+- [ ] Anything that fans out — a single request causing N downstream calls — has a bound on N. `find_callees` or `trace_path` from the handler: a loop over a user-supplied array (batch IDs, recipient lists, webhook targets) calling a downstream service once per item, with no cap on array length, is the finding.
+- [ ] Expensive queries reachable by an unauthenticated caller. Cross-list unauthenticated routes (from the route table) against `repo_map`'s top-ranked symbols or any join-heavy/aggregate query `find_symbol` turns up on those routes.
 
 ## Input as a weapon
 
-- [ ] Regexes applied to user input cannot backtrack catastrophically. Nested quantifiers over user-controlled length is a one-request denial of service.
-- [ ] Recursive processing of user input (nested JSON, deeply nested structures, zip, XML) has a depth limit.
-- [ ] Decompression has an output-size limit, not only an input-size limit.
-- [ ] Pagination and limit parameters are clamped. `?limit=1000000` should not be honoured.
-- [ ] Numeric input is range-checked; negative and zero are handled where they change behaviour.
+- [ ] Regexes applied to user input cannot backtrack catastrophically. `search_code` regex literals for nested-quantifier shapes (`(.*)+`, `(.+)+`, `(\w+)+`, or a group with a `+`/`*` quantifier itself quantified). Rule-out: trace the regex's input with `find_callers` — a pattern applied only to a trusted, internal, or fixed-length string is not user-reachable and is not the finding; confirm the input source before flagging.
+- [ ] Recursive processing of user input (nested JSON, deeply nested structures, zip, XML) has a depth limit. `search_code` the parser's configuration for a `maxDepth`/`depthLimit` option; its absence in a JSON parser that accepts arbitrary client bodies is the finding.
+- [ ] Decompression has an output-size limit, not only an input-size limit. `search_code` calls into `zlib`, `gunzip`, or archive-extraction libraries for a cap on decompressed output size — a zip bomb passes any input-size check trivially.
+- [ ] Pagination and limit parameters are clamped server-side. `find_symbol` the list/pagination handler and read whether the `limit` value is clamped (`Math.min(limit, MAX)` or equivalent) before being used in the query — a limit merely validated as "is a number" still lets `?limit=1000000` through.
+- [ ] Numeric input is range-checked; negative and zero are handled where they change behaviour. `search_code` the validation schema (`zod`, `joi`, `pydantic`, class-validator, or the project's own) for the field and check it declares a `min`/`max`, not just a type.
 
 ## Enumeration
 
-- [ ] Identifiers are not sequential where enumerating them leaks the corpus size or lets a user walk other records.
-- [ ] Existence is not disclosed by differential responses — status code, message, or timing between "not found" and "not permitted".
-- [ ] Bulk lookup endpoints are limited per call and per window.
-- [ ] Public search cannot be used to enumerate private records by narrowing.
+- [ ] Identifiers are not sequential where enumerating them leaks the corpus size or lets a user walk other records. `search_code` the schema for autoincrement primary keys, then trace whether that same ID is the one exposed in a URL or API response. Rule-out: an autoincrement PK used only internally, with a separate opaque public ID (UUID, slug) surfaced to clients, is not the finding — confirm which ID actually appears in the client-facing route before flagging. This is the enumeration half of BOLA (OWASP API Security Top 10:2023 API1, CWE-639) — `security.md`'s AuthZ section owns the missing-ownership-check half of the same defect; report the identifier choice here and the missing check there.
+- [ ] Existence is not disclosed by differential responses. `find_symbol` the handler and read the literal "not found" and "not permitted" branches side by side — same status code, same body shape, or the finding names the exact difference.
+- [ ] Bulk lookup endpoints are limited per call and per window. `find_symbol` the batch endpoint and check for a cap on the incoming ID array's length.
+- [ ] Public search cannot be used to enumerate private records by narrowing filters. Read the search handler's filter set for combinations (e.g. narrowing by email domain plus name prefix) that converge on a single private record through repeated queries.
 
 ## Business-logic abuse
 
-- [ ] Operations that grant value are idempotent or bounded — one coupon per account, one trial per user, one vote per poll. Cross-reference `concurrency.md`: the classic double-redeem is a read-modify-write race.
-- [ ] Quotas and counters cannot be reset by the user (re-registering, changing an email, deleting and recreating).
-- [ ] Ordering assumptions cannot be violated — can a user reach step 3 without steps 1 and 2? `trace_path` from each entry point to the privileged step.
-- [ ] Money, credits, and quantities reject negative values everywhere, including refunds and adjustments.
-- [ ] State transitions are validated against the current state, not merely applied.
+- [ ] Operations that grant value are idempotent or bounded — one coupon per account, one trial per user, one vote per poll. `find_symbol` the redeem/apply-coupon/vote handler and read whether the check-then-write is inside a transaction or backed by a unique constraint, versus a plain read-check-write with no such guard. Cross-reference `concurrency.md`: the classic double-redeem is a race, and this check only confirms the *logic* exists — the race itself is that module's finding.
+- [ ] Quotas and counters cannot be reset by the user re-registering, changing an email, or deleting and recreating an account. `find_symbol` the registration/account handler and check whether the quota key is the mutable field being changed (email) rather than an immutable identifier issued at first creation.
+- [ ] Ordering assumptions cannot be violated — can a user reach step 3 without steps 1 and 2? `trace_path` from each entry point to the privileged step; a path that reaches it without passing through the earlier steps' handlers is the finding.
+- [ ] Money, credits, and quantities reject negative values everywhere, including refunds and adjustments. `search_code` the amount/quantity validation schema for a `min(0)`-equivalent constraint, and check the refund and adjustment handlers specifically — these are often left unguarded even when the primary charge path validates correctly, because they are added later and copy less carefully.
+- [ ] State transitions are validated against the current state, not merely applied. `find_symbol` the transition function and read whether it checks the record's current state before writing the new one, or performs a blind assignment reachable from any state.
 
 ## Content abuse
 
-- [ ] User-generated content is escaped at render, and stored content cannot break out at any consumer — including emails, exports, and logs.
-- [ ] CSV/spreadsheet exports neutralise formula-leading characters.
-- [ ] Filenames from users are sanitised before being used on disk or in a header.
-- [ ] User-supplied URLs fetched by the server are validated against internal addresses.
+- [ ] User-generated content is escaped at render, and stored content cannot break out at any consumer — including emails, exports, and logs. `search_code` the template engine's autoescape setting and any explicit bypass (`{% autoescape false %}`, `dangerouslySetInnerHTML`, `| safe`) applied to a field that stores user input.
+- [ ] CSV/spreadsheet exports neutralise formula-leading characters. `find_symbol` the export function and read whether it prefixes cells starting with `=`, `+`, `-`, or `@` before writing them.
+- [ ] Filenames from users are sanitised before being used on disk or in a header. `find_symbol` the upload handler and read whether the stored filename is the raw client-supplied string or a sanitised/generated one (hash, UUID, stripped path).
+- [ ] User-supplied URLs fetched by the server are validated against internal and private addresses before the request is made. `search_code` for outbound HTTP calls (`fetch(`, `axios.get(`, `requests.get(`, `http.request(`) where the URL argument traces back to user input via `find_callers`, and check for an allowlist (preferred) or private-IP/link-local/loopback-range rejection ahead of the call — its absence on a server-side fetch of a user-supplied URL is the SSRF finding and is `Critical`. CWE-918, #22 in the 2025 CWE Top 25; SSRF is no longer its own OWASP Top 10 category — it was folded into A01:2025 Broken Access Control — cite CWE-918 or OWASP API Security Top 10:2023 API7 (SSRF) instead of "OWASP A10".
+- [ ] Where the private-address check exists, it runs against the *resolved* IP immediately before the connection, not only against the hostname string at input-validation time. Read the validation call site and the fetch call site together — if a DNS lookup can occur between the two (the check validates the hostname, then a separate resolve happens inside the HTTP client), an attacker-controlled DNS record can rebind a passing hostname to a private address after the check runs. A validator that resolves A/AAAA records itself and checks those IPs, immediately before the same connection is made, rules this out.
+
+## Out of static reach
+
+- Real behaviour under load — whether a rate limit actually holds at the traffic the endpoint sees in production, versus merely being configured.
+- Upstream WAF, CDN, or API-gateway rate limiting and payload-size enforcement that never appears in application source.
+- Whether a third-party payment or coupon provider enforces idempotency independently of this codebase's own guard.
+- Real-world timing differences for enumeration — network jitter can mask a gap that is clearly visible when reading the two code paths side by side, and can also expose one too small to see in source.
+- Whether the business rules encoded here match the product's actual legal or ToS constraints (refund windows, promotional limits) — that is a policy document this module cannot read.
 
 ## Severity guidance
 
 | Situation | Severity |
 |---|---|
 | Server fetches a user-supplied URL with no internal-address filter | Critical |
+| Internal-address filter checks the hostname but not the resolved IP (DNS-rebinding gap) | High |
 | No rate limit on an expensive or billed operation | High |
 | Catastrophic backtracking reachable from user input | High |
 | Unbounded request, payload, or decompression size | High |

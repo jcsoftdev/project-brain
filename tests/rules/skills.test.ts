@@ -198,7 +198,7 @@ describe("installSkill", () => {
  * reaches [] the guard is fully closed and every gate has real bytes behind it.
  */
 /**
- * EMPTY as of Work Unit 2 — every one of the 34 gated modules now has real
+ * EMPTY as of Work Unit 2 — every one of the 49 gated modules now has real
  * bytes behind it. The guard is fully closed: adding a gate row without a
  * reference file, or a reference file without a gate row, now fails.
  *
@@ -227,9 +227,9 @@ function extractGateReferences(skill: string): string[] {
 describe("gate table parity (guards v1 Defect 1)", () => {
   const gateRefs = extractGateReferences(BRAIN_AUDIT_FILES["SKILL.md"]);
 
-  it("names all 34 modules, with no duplicates", () => {
-    expect(gateRefs.length).toBe(34);
-    expect(new Set(gateRefs).size).toBe(34);
+  it("names all 49 modules, with no duplicates", () => {
+    expect(gateRefs.length).toBe(49);
+    expect(new Set(gateRefs).size).toBe(49);
   });
 
   it("every gate reference either ships or is explicitly deferred", () => {
