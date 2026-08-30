@@ -4,7 +4,7 @@ description: "Trigger: audit this project, comprehensive audit, full codebase au
 license: Apache-2.0
 metadata:
   author: jcsoftdev
-  version: "2.2"
+  version: "2.3"
   generator: project-brain
 ---
 
@@ -53,7 +53,7 @@ The single most likely failure of this audit is not missing a defect — it is r
 
 | Tier | Established by | Severity ceiling |
 |---|---|---|
-| `executed` | A command was run and its output read. Reserved — no module in this skill executes anything today. | Critical |
+| `executed` | A command was run and its output read. Only `runtime.md` reaches this tier, only when the user enabled execution, and only with the command and its exit code recorded. | Critical |
 | `traced` | A structural proof from project-brain: `trace_path`, `find_callers`, `find_callees`, or `impact` showing the path exists, or provably does not. | Critical |
 | `read` | A cited `file:line` whose content was actually read, quoted or paraphrased faithfully. | High |
 | `inferred` | A pattern, a naming smell, or an absence with no probe run against it. | Medium |
@@ -69,6 +69,20 @@ The single most likely failure of this audit is not missing a defect — it is r
 The counterweight, because this rule cuts both ways: **a clean result is only valid if the probes actually ran.** Not looking produces the same output as looking and finding nothing, and the two are indistinguishable in the report. So a module reporting clean states which probes it ran and what they returned. "No hardcoded colours — `search_code` for `#[0-9a-f]{3,8}` returned 4 hits, all inside the token file" is a clean result. "No issues found" is not a result at all.
 
 This matters more than it looks. Measured precision for frontier models on security review runs 29-42%, so most raw findings are false — but the same research finds that **models miss far more than they invent**, and that a report with fewer findings reads as more accurate precisely when it is least accurate. That is the precision paradox: the audit that missed everything and the audit that found nothing look identical on the page. Suppressing a real finding is the failure this skill is worst at noticing in itself.
+
+## Execution
+
+**This audit reads. It does not run anything unless the user says so, in this session, for this run.**
+
+Every other module in this skill is static, and that is a promise the user relies on: pointing an audit at a repository must not be a way to execute its code. The `Runtime` module is the single exception, and it is off unless three conditions all hold.
+
+1. **The user enabled it explicitly.** Not a default, not inferred from a project type, not carried over from a previous run, and not implied by confirming the module set. `Runtime` is offered separately from every other module, after the rest are chosen, and the offer states plainly what running it means: the project's code will execute on this machine.
+2. **The project declares the command.** `Runtime` runs what the repository already tells its own contributors to run — a script in the manifest, a step in a CI workflow, a documented command. **It never invents one.** This is the constraint that makes execution defensible: the audit runs what the authors already run, and the audit's own judgement is not what decides that a command is safe.
+3. **The command is not destructive.** A declared script whose name or body deploys, publishes, migrates, seeds, resets, or deletes is never run on inference. If a finding genuinely needs one, name it, say why, and let the user run it themselves.
+
+Refusing execution is always a valid answer and costs the audit only the `executed` tier. Every module already declares what it cannot see from source in its `Out of static reach` section; with execution off, those items are reported as Coverage Gaps exactly as they were before. **The static audit is complete without this module** — `Runtime` closes gaps, it does not fill holes.
+
+A finding at `executed` tier records the exact command, its exit code, and the output line that supports it. Without those three it is not `executed`; it is an `inferred` finding wearing a tier that lets it reach Critical, which is worse than an honest `inferred`. And a green run proves only that the project's own checks pass, which is as strong as those checks are — `tooling-baseline.md` is what measures that, and the two modules are read together or neither is worth much.
 
 ## Refutation
 
@@ -180,6 +194,7 @@ The `Reference` column is the exact filename under `references/` — load that f
 | | Documentation | `documentation.md` |
 | | Prompt/Spec Gap | `prompt-spec-gap.md` |
 | Linter, formatter, type-checker, test-runner, or scanner config present **or conspicuously absent** | Tooling Baseline | `tooling-baseline.md` |
+| **User enabled execution** — never proposed by detection alone, see `## Execution` | Runtime | `runtime.md` |
 | Project is a git repository | Repo History | `repo-history.md` |
 | Statically or gradually typed language | Type Safety | `type-safety.md` |
 | Server framework or API routes present | Backend | `backend.md` |
@@ -245,6 +260,7 @@ The absence gates (`Observability`, `Testing`, `Design System`, `Type Safety`, `
 | Locale files / translation keys | `search_code` for a locales directory or the translation function |
 | OpenAPI / GraphQL / protobuf / shared types | `search_code` for `openapi`, `.graphql`, `.proto`, or a shared-types package |
 | Hot path or measurable workload | `repo_map`'s top-ranked symbols, plus any loop over unbounded input |
+| Runnable commands the project declares | manifest scripts, CI workflow steps, and documented commands in the README. This establishes what `Runtime` *could* run and is worth recording even when execution stays off — a project that declares none cannot be verified by running it, which is itself worth saying |
 | Tooling configuration | `search_code` for the tool config filenames of the detected stack — linter, formatter, type checker, test runner, pre-commit framework, scanner. **Absence fires the gate**: a project whose tooling checks nothing is one where every defect this audit finds was invisible to automation, and that changes which other modules are worth running |
 | Git repository | a `.git` directory — the module reads history, so a shallow clone is `undetermined`, not `not applicable` |
 | Statically or gradually typed language | `get_architecture` language, plus a type-checker config (`tsconfig.json`, `mypy.ini`, `pyrightconfig.json`, `go.mod`) — the module audits the *escape hatches* from that checker, so a language with no checker configured is itself the finding |
@@ -265,12 +281,13 @@ The absence gates (`Observability`, `Testing`, `Design System`, `Type Safety`, `
 1. Discovery — stack, architecture, feature map, via the routing table.
 2. Apply gates → proposed module set with per-module rationale.
 3. **Present the proposal and wait for confirmation.** Report the token implication of the chosen set.
-4. For each confirmed module, read only its `references/<module>.md`, then verify against real code — project-brain first, `Read` only to confirm lines it points at. **Run the probe each check names.** A check whose probe was not run produces no finding, not an `inferred` one.
-5. Collect findings using the schema above, each with its evidence tier and its ruled-out alternative. Leave `Refutation` empty; step 7 fills it.
-6. **Present the Refutation Manifest and wait** — findings collected, how many are eligible at Medium or above, how many are left raw below threshold, how many refuters that means, and the resolved mode with model ids where they are known. Answers are `all`, `critical+high only`, or `none`. A user who replied `refute all` at step 3 has pre-authorised this; print the manifest as a notice and continue. `none` stamps every finding `declined by user` — it does not silently skip the stage.
-7. Refute. One subagent per eligible finding, fresh context, the brief and nothing else. Escalate to a second refuter only on `undetermined` at Critical or High, telling it which probes were already inconclusive.
-8. Apply the verdicts: drop `refuted` findings into the ledger, reduce `weakened` ones to the severity the refuter named, cap `undetermined` at Medium, and record the mode on every finding. Deduplicate here — the refuters could not, having each seen one finding.
-9. Record every module's `Out of static reach` items that mattered — they become Coverage Gaps, not silent omissions.
+4. **Offer `Runtime` separately, after the module set is settled, and wait.** State that enabling it executes the project's code on this machine, list the declared commands it would run, and name the ones it will not touch. Declining is normal and costs only the `executed` tier. Never fold this into step 3 — a user confirming twenty static modules has not consented to run anything.
+5. For each confirmed module, read only its `references/<module>.md`, then verify against real code — project-brain first, `Read` only to confirm lines it points at. **Run the probe each check names.** A check whose probe was not run produces no finding, not an `inferred` one.
+6. Collect findings using the schema above, each with its evidence tier and its ruled-out alternative. Leave `Refutation` empty; step 8 fills it.
+7. **Present the Refutation Manifest and wait** — findings collected, how many are eligible at Medium or above, how many are left raw below threshold, how many refuters that means, and the resolved mode with model ids where they are known. Answers are `all`, `critical+high only`, or `none`. A user who replied `refute all` at step 3 has pre-authorised it; print the manifest as a notice and continue. `none` stamps every finding `declined by user` — it does not silently skip the stage.
+8. Refute. One subagent per eligible finding, fresh context, the brief and nothing else. Escalate to a second refuter only on `undetermined` at Critical or High, telling it which probes were already inconclusive.
+9. Apply the verdicts: drop `refuted` findings into the ledger, reduce `weakened` ones to the severity the refuter named, cap `undetermined` at Medium, and record the mode on every finding. Deduplicate here — the refuters could not, having each seen one finding.
+10. Record every module's `Out of static reach` items that mattered — they become Coverage Gaps, not silent omissions.
 
 ## Output Contract
 
