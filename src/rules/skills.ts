@@ -1,7 +1,7 @@
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 
 import skillMd from "../../templates/skills/brain-audit/SKILL.md" with { type: "text" };
 import okfSkillMd from "../../templates/skills/brain-okf/SKILL.md" with { type: "text" };
@@ -275,6 +275,76 @@ export interface InstallResult {
   written: string[];
   /** Targets left untouched because ownership could not be proven. */
   skipped: SkippedTarget[];
+  /** Files this generator wrote in a previous release and has now dropped. */
+  removed: string[];
+}
+
+/**
+ * Stamp payload: this build's fingerprint, then every relative path it wrote.
+ *
+ * The file list is what makes pruning possible without guessing. Writing a
+ * manifest and never recording it means the next release can add files and
+ * rewrite files but can never *remove* one — and a directory refreshed by an
+ * older build then carries that build's SKILL.md beside reference files it has
+ * never heard of. brain-audit's gate table is the index of its own modules, so
+ * an orphaned reference file is a module no gate can enable: it ships, it is
+ * never loaded, and nothing on disk says why.
+ *
+ * A legacy single-line stamp parses to an empty file list, which disables
+ * pruning for that directory. That is the safe direction: we only ever delete
+ * a path we can prove a previous version of ourselves wrote.
+ */
+export interface Stamp {
+  hash: string;
+  files: string[];
+}
+
+export function parseStamp(raw: string): Stamp {
+  const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+  return { hash: lines[0] ?? "", files: lines.slice(1) };
+}
+
+function renderStamp(manifest: Record<string, string>): string {
+  return [MANIFEST_STAMP, ...Object.keys(manifest).sort()].join("\n") + "\n";
+}
+
+async function readStamp(skillDir: string): Promise<Stamp> {
+  try {
+    return parseStamp(await readFile(join(skillDir, STAMP_FILE), "utf8"));
+  } catch {
+    // Missing stamp means this copy predates stamping — treat as stale, and
+    // prune nothing, because we have no record of what we put there.
+    return { hash: "", files: [] };
+  }
+}
+
+/**
+ * Delete files a previous stamp claims we wrote and this manifest no longer
+ * ships. Never touches a path we did not record — a hand-written
+ * `references/custom.md` is the user's, and it survives every refresh.
+ */
+async function pruneOrphans(
+  skillDir: string,
+  recorded: string[],
+  manifest: Record<string, string>
+): Promise<string[]> {
+  const shipped = new Set(Object.keys(manifest));
+  const removed: string[] = [];
+  for (const rel of recorded) {
+    if (shipped.has(rel)) continue;
+    // A stamp is a file we wrote, but it is also a file on disk that an
+    // attacker or a bad merge could have edited. Refuse to follow it out of
+    // the directory it describes.
+    if (rel.startsWith("/") || rel.split("/").includes("..")) continue;
+    const dest = join(skillDir, rel);
+    try {
+      await rm(dest, { force: true });
+      removed.push(dest);
+    } catch {
+      // A read-only or already-vanished file must not break the refresh.
+    }
+  }
+  return removed;
 }
 
 /**
@@ -305,6 +375,7 @@ export async function inspectOwnership(skillDir: string): Promise<Ownership> {
 export async function installSkill(targetDirs: string[]): Promise<InstallResult> {
   const written: string[] = [];
   const skipped: SkippedTarget[] = [];
+  const removed: string[] = [];
 
   for (const dir of targetDirs) {
     for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
@@ -315,17 +386,20 @@ export async function installSkill(targetDirs: string[]): Promise<InstallResult>
         continue;
       }
 
+      const previous = ownership === "ours" ? await readStamp(skillDir) : { hash: "", files: [] };
+
       for (const [rel, content] of Object.entries(manifest)) {
         const dest = join(skillDir, rel);
         await mkdir(dirname(dest), { recursive: true });
         await writeFile(dest, content, "utf8");
       }
-      await writeFile(join(skillDir, STAMP_FILE), `${MANIFEST_STAMP}\n`, "utf8");
+      removed.push(...(await pruneOrphans(skillDir, previous.files, manifest)));
+      await writeFile(join(skillDir, STAMP_FILE), renderStamp(manifest), "utf8");
       written.push(skillDir);
     }
   }
 
-  return { written, skipped };
+  return { written, skipped, removed };
 }
 
 export interface RefreshResult {
@@ -337,6 +411,8 @@ export interface RefreshResult {
   upToDate: string[];
   /** Existing directories left alone because ownership could not be proven. */
   skipped: SkippedTarget[];
+  /** Files a previous stamp recorded that this build no longer ships. */
+  removed: string[];
 }
 
 /**
@@ -385,6 +461,7 @@ export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshR
   const added: string[] = [];
   const upToDate: string[] = [];
   const skipped: SkippedTarget[] = [];
+  const removed: string[] = [];
 
   for (const dir of targetDirs) {
     const adopted = await rootIsAdopted(dir);
@@ -401,7 +478,7 @@ export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshR
             await mkdir(dirname(dest), { recursive: true });
             await writeFile(dest, content, "utf8");
           }
-          await writeFile(join(skillDir, STAMP_FILE), `${MANIFEST_STAMP}\n`, "utf8");
+          await writeFile(join(skillDir, STAMP_FILE), renderStamp(manifest), "utf8");
           added.push(skillDir);
         } catch {
           // Same rule as below: a read-only or vanished directory must not
@@ -416,13 +493,8 @@ export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshR
         continue;
       }
 
-      let stamp = "";
-      try {
-        stamp = (await readFile(join(skillDir, STAMP_FILE), "utf8")).trim();
-      } catch {
-        // Missing stamp means this copy predates stamping — treat as stale.
-      }
-      if (stamp === MANIFEST_STAMP) {
+      const previous = await readStamp(skillDir);
+      if (previous.hash === MANIFEST_STAMP) {
         upToDate.push(skillDir);
         continue;
       }
@@ -433,7 +505,8 @@ export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshR
           await mkdir(dirname(dest), { recursive: true });
           await writeFile(dest, content, "utf8");
         }
-        await writeFile(join(skillDir, STAMP_FILE), `${MANIFEST_STAMP}\n`, "utf8");
+        removed.push(...(await pruneOrphans(skillDir, previous.files, manifest)));
+        await writeFile(join(skillDir, STAMP_FILE), renderStamp(manifest), "utf8");
         refreshed.push(skillDir);
       } catch {
         // A read-only or vanished directory must not break the command that
@@ -442,5 +515,5 @@ export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshR
     }
   }
 
-  return { refreshed, added, upToDate, skipped };
+  return { refreshed, added, upToDate, skipped, removed };
 }

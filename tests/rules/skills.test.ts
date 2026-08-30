@@ -24,6 +24,7 @@ import {
   getSkillTargetDirs,
   inspectOwnership,
   installSkill,
+  parseStamp,
   refreshStaleSkills,
 } from "../../src/rules/skills.js";
 
@@ -374,8 +375,9 @@ describe("refreshStaleSkills", () => {
   it("writes a stamp alongside the skill on install", async () => {
     await installSkill([root]);
     for (const name of Object.keys(SKILL_MANIFESTS)) {
-      const stamp = await readFile(join(root, name, STAMP_FILE), "utf8");
-      expect(stamp.trim()).toBe(MANIFEST_STAMP);
+      const stamp = parseStamp(await readFile(join(root, name, STAMP_FILE), "utf8"));
+      expect(stamp.hash).toBe(MANIFEST_STAMP);
+      expect(stamp.files.sort()).toEqual(Object.keys(SKILL_MANIFESTS[name]).sort());
     }
   });
 
@@ -406,7 +408,7 @@ describe("refreshStaleSkills", () => {
     expect(await readFile(join(skillDir, "SKILL.md"), "utf8")).toBe(
       BRAIN_AUDIT_FILES["SKILL.md"]
     );
-    expect((await readFile(join(skillDir, STAMP_FILE), "utf8")).trim()).toBe(MANIFEST_STAMP);
+    expect(parseStamp(await readFile(join(skillDir, STAMP_FILE), "utf8")).hash).toBe(MANIFEST_STAMP);
   });
 
   /**
@@ -485,7 +487,7 @@ describe("refreshStaleSkills", () => {
 
       expect(result.added).toEqual([missing]);
       expect(existsSync(join(missing, "SKILL.md"))).toBe(true);
-      expect(await readFile(join(missing, STAMP_FILE), "utf8")).toBe(`${MANIFEST_STAMP}\n`);
+      expect(parseStamp(await readFile(join(missing, STAMP_FILE), "utf8")).hash).toBe(MANIFEST_STAMP);
     });
 
     it("adds nothing when the adopted root is already complete", async () => {
@@ -527,5 +529,101 @@ describe("refreshStaleSkills", () => {
 
   it("does not throw on an unreadable root", async () => {
     await expect(refreshStaleSkills([join(root, "nope")])).resolves.toBeDefined();
+  });
+});
+
+/**
+ * Pruning (guards the mixed-state bug found on 2026-08-29).
+ *
+ * A real ~/.claude/skills/brain-audit ended up carrying a 34-module SKILL.md
+ * beside 49 reference files: an older build refreshed the directory from its
+ * own manifest and had no way to remove the 15 files a newer build had left
+ * there. brain-audit's gate table IS its module index, so each orphan was a
+ * module no gate could enable — shipped, never loadable, and silent about it.
+ *
+ * The stamp records what we wrote so the next write can take it back. What we
+ * never wrote is not ours to delete.
+ */
+describe("orphan pruning", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "pb-prune-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const skillName = "brain-audit";
+
+  it("removes a file the previous stamp recorded and this build no longer ships", async () => {
+    await installSkill([root]);
+    const skillDir = join(root, skillName);
+    const orphan = join(skillDir, "references", "retired-module.md");
+
+    // Stand in for an older release: a real file, recorded in a stale stamp.
+    await writeFile(orphan, "# Retired\n");
+    const current = parseStamp(await readFile(join(skillDir, STAMP_FILE), "utf8"));
+    await writeFile(
+      join(skillDir, STAMP_FILE),
+      ["an-older-release", ...current.files, "references/retired-module.md"].join("\n") + "\n"
+    );
+
+    const result = await refreshStaleSkills([root]);
+
+    expect(result.refreshed).toContain(skillDir);
+    expect(existsSync(orphan)).toBe(false);
+    expect(result.removed).toContain(orphan);
+  });
+
+  it("keeps a hand-written reference file the stamp never recorded", async () => {
+    await installSkill([root]);
+    const skillDir = join(root, skillName);
+    const mine = join(skillDir, "references", "custom.md");
+    await writeFile(mine, "mine");
+
+    // Stale the stamp WITHOUT recording custom.md — it was never ours.
+    const current = parseStamp(await readFile(join(skillDir, STAMP_FILE), "utf8"));
+    await writeFile(
+      join(skillDir, STAMP_FILE),
+      ["an-older-release", ...current.files].join("\n") + "\n"
+    );
+
+    const result = await refreshStaleSkills([root]);
+
+    expect(await readFile(mine, "utf8")).toBe("mine");
+    expect(result.removed).toEqual([]);
+  });
+
+  it("prunes nothing when the stamp predates file recording", async () => {
+    await installSkill([root]);
+    const skillDir = join(root, skillName);
+    const orphan = join(skillDir, "references", "retired-module.md");
+    await writeFile(orphan, "# Retired\n");
+    // Legacy format: hash only, no file list. We cannot prove we wrote
+    // anything, so we delete nothing.
+    await writeFile(join(skillDir, STAMP_FILE), "an-older-release\n");
+
+    const result = await refreshStaleSkills([root]);
+
+    expect(result.refreshed).toContain(skillDir);
+    expect(existsSync(orphan)).toBe(true);
+    expect(result.removed).toEqual([]);
+  });
+
+  it("refuses a recorded path that escapes the skill directory", async () => {
+    await installSkill([root]);
+    const skillDir = join(root, skillName);
+    const outside = join(root, "not-ours.md");
+    await writeFile(outside, "untouched");
+
+    await writeFile(
+      join(skillDir, STAMP_FILE),
+      ["an-older-release", "../not-ours.md", "/etc/passwd"].join("\n") + "\n"
+    );
+
+    const result = await refreshStaleSkills([root]);
+
+    expect(await readFile(outside, "utf8")).toBe("untouched");
+    expect(result.removed).toEqual([]);
   });
 });
