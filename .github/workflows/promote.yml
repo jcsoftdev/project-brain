@@ -1,0 +1,81 @@
+name: Promote dist-tag
+
+# Move `latest` onto a version that already shipped.
+#
+# The release workflow deliberately publishes under `next` when it cannot see
+# every platform package at that version, because optionalDependencies means a
+# missing platform package installs clean and then has no binary. That guard is
+# right, and it leaves a release stranded whenever it fires — including when it
+# fires on a race rather than on a real gap, which is what stranded 0.22.3,
+# 0.22.4 and 0.23.0 while `latest` sat on 0.22.2.
+#
+# Promoting is a publish-level operation, so it belongs where the publish
+# credential already lives. Doing it from a laptop needs a token with write
+# access to the package on someone's machine, which is a worse place for it
+# than repository secrets.
+#
+# This job re-runs the completeness check rather than trusting the operator.
+# A one-click way to point `latest` at an incomplete release would defeat the
+# guard it exists to recover from.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to promote to latest (e.g. 0.23.0, no leading v)"
+        required: true
+        type: string
+
+jobs:
+  promote:
+    name: Promote ${{ inputs.version }} to latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify the release is complete
+        shell: bash
+        run: |
+          VERSION="${VERSION#v}"
+          if ! npm view "project-brain@${VERSION}" version --prefer-online >/dev/null 2>&1; then
+            echo "::error::project-brain@${VERSION} is not published. Nothing to promote."
+            exit 1
+          fi
+          # Read the platform list from the published package rather than from
+          # this checkout: promoting an old version must check what THAT
+          # version promised, not what main promises today.
+          MISSING=""
+          for pkg in $(npm view "project-brain@${VERSION}" optionalDependencies --json --prefer-online \
+                        | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(Object.keys(JSON.parse(d||'{}')).join(' ')))"); do
+            if ! npm view "${pkg}@${VERSION}" version --prefer-online >/dev/null 2>&1; then
+              MISSING="${MISSING} ${pkg}"
+            fi
+          done
+          if [ -n "${MISSING}" ]; then
+            echo "::error::Refusing to promote ${VERSION} — platform packages missing:${MISSING}. Re-run the failed build job in the release run for this tag first."
+            exit 1
+          fi
+          echo "All platform packages present at ${VERSION}."
+        env:
+          VERSION: ${{ inputs.version }}
+
+      - name: Promote
+        shell: bash
+        run: |
+          VERSION="${VERSION#v}"
+          CURRENT="$(npm view project-brain dist-tags.latest --prefer-online 2>/dev/null || echo none)"
+          if [ "${CURRENT}" = "${VERSION}" ]; then
+            echo "latest already points at ${VERSION}, nothing to do."
+            exit 0
+          fi
+          npm dist-tag add "project-brain@${VERSION}" latest
+          echo "latest: ${CURRENT} -> ${VERSION}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ inputs.version }}
