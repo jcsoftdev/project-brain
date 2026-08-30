@@ -404,23 +404,49 @@ jobs:
       #
       # The target list is read from optionalDependencies rather than restated
       # here, so it cannot drift from what the root package actually promises.
+      # The check WAITS before it decides, because "not published" and "not
+      # visible yet" look identical from here and only one of them is a reason
+      # to withhold `latest`. A platform tarball is ~120MB and npm answers the
+      # publish with "your package is being processed and may take a few
+      # minutes to become available" — so a single probe fired the moment the
+      # build job ends reads a package that is on its way as a package that
+      # never shipped. That is what put 0.22.3, 0.22.4 and 0.23.0 under `next`
+      # while `latest` sat three releases behind on 0.22.2: every one of those
+      # releases was complete, and every one of them lost the race.
+      #
+      # --prefer-online is load-bearing. npm caches registry metadata, so a
+      # negative lookup taken on the first pass is replayed for the rest of the
+      # loop and the retry proves nothing. Forcing revalidation is what makes
+      # the wait a wait rather than a delay.
+      #
+      # The deadline is real: a genuinely failed platform build must still fall
+      # through to `next` rather than hanging the job to its 10-minute timeout,
+      # which would withhold the release from every platform that did build.
       - name: Decide dist-tag
         id: disttag
         shell: bash
         run: |
           VERSION="${VERSION#v}"
-          MISSING=""
-          for pkg in $(node -e "console.log(Object.keys(require('./package.json').optionalDependencies||{}).join(' '))"); do
-            if ! npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
-              MISSING="${MISSING} ${pkg}"
-            fi
+          PKGS="$(node -e "console.log(Object.keys(require('./package.json').optionalDependencies||{}).join(' '))")"
+          DEADLINE=$(( SECONDS + 360 ))
+          while :; do
+            MISSING=""
+            for pkg in ${PKGS}; do
+              if ! npm view "${pkg}@${VERSION}" version --prefer-online >/dev/null 2>&1; then
+                MISSING="${MISSING} ${pkg}"
+              fi
+            done
+            [ -z "${MISSING}" ] && break
+            [ "${SECONDS}" -ge "${DEADLINE}" ] && break
+            echo "Not visible on the registry yet, waiting:${MISSING}"
+            sleep 20
           done
           if [ -z "${MISSING}" ]; then
             echo "tag=latest" >> "$GITHUB_OUTPUT"
             echo "All platform packages present at ${VERSION} — publishing to latest."
           else
             echo "tag=next" >> "$GITHUB_OUTPUT"
-            echo "::warning::Missing platform packages at ${VERSION}:${MISSING} — publishing under 'next', leaving 'latest' untouched. Re-run the failed build job, then promote with: npm dist-tag add project-brain@${VERSION} latest"
+            echo "::warning::Missing platform packages at ${VERSION} after waiting 6 minutes:${MISSING} — publishing under 'next', leaving 'latest' untouched. Re-run the failed build job, then promote with: npm dist-tag add project-brain@${VERSION} latest"
           fi
         env:
           VERSION: ${{ github.ref_name }}
