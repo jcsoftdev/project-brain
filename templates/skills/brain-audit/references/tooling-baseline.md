@@ -7,7 +7,7 @@ This audit otherwise reasons from source alone. Most projects already carry dete
 ## Inventory
 
 - [ ] Locate every tool config in the tree — `search_code` for `.eslintrc`/`eslint.config`, `.prettierrc`, `biome.json`, `.stylelintrc`, `ruff.toml`/`pyproject.toml`'s `[tool.ruff]`, `.flake8`, `mypy.ini`/`pyrightconfig.json`, `tsconfig.json`, `go.mod`/`.golangci.yml`, `.rubocop.yml`, `checkstyle.xml`, a test-runner config (`jest.config`, `vitest.config`, `pytest.ini`), a SAST/dependency-scanner config (`.semgrep.yml`, `.snyk`, `codeql.yml`, `trivy.yaml`, `.bandit`), `.pre-commit-config.yaml`, `.editorconfig`. Record what each declares — existence alone is not the finding, its content is.
-- [ ] Where tooling exists for one category but is conspicuously silent on an adjacent one the project clearly needs — a Python API handling auth with no `bandit`/`semgrep` config beside its `ruff` config — note the asymmetry; a gap in an otherwise-tooled project says more than a gap in an untooled one.
+- [ ] Read the inventory above for a category the project tools while leaving an adjacent one it clearly needs untooled — a Python API handling auth with no `bandit`/`semgrep` beside its `ruff` config — note the asymmetry; a gap in an otherwise-tooled project says more than a gap in an untooled one.
 - [ ] Version-pin the tools themselves — `search_code` the manifest/lockfile for each tool's declared version. An unpinned linter/formatter version means the ruleset it enforces can shift between a CI run and a fresh clone without anyone touching the config.
 
 ## Declared versus enforced
@@ -15,9 +15,9 @@ This audit otherwise reasons from source alone. Most projects already carry dete
 The central check: a rule in a config nothing runs is a rule nobody obeys, and a scan that runs but does not gate the merge is theatre with a green checkmark.
 
 - [ ] For every config found above, confirm a CI step actually invokes it — `search_code` the CI workflow files for the tool's run command (`eslint`, `ruff check`, `mypy`, `go vet`, `semgrep ci`). A config present with no matching CI invocation is enforced only on whichever machine happens to run it locally, if any does.
-- [ ] Where CI does invoke it, confirm the step's failure fails the build. Cross-reference `devops.md`'s Pipeline integrity checks for the mechanics (`continue-on-error`, `|| true`, `--passWithNoTests`) — this module confirms the check exists and is wired in, `devops.md` owns whether it can actually fail; do not re-run that probe here.
-- [ ] Where a pre-commit framework is configured, confirm the same hooks also run in CI, not only pre-commit — diff `.pre-commit-config.yaml`'s hook list against the CI workflow's step list. A hook that only pre-commit runs is bypassable with `--no-verify` or a clone that skipped `pre-commit install`.
-- [ ] A scanner or checker that runs in CI but does not gate the merge — read the job's position in the workflow: a security-scan job with no branch-protection tie or `needs:` dependency feeding the merge check is informational only, and a red result there stops nothing.
+- [ ] `search_code` the CI workflow for the tool's run command and confirm the step is wired into the gating job. Whether that step's failure can actually fail the build (`continue-on-error`, `|| true`, `--passWithNoTests`) is `devops.md`'s Pipeline integrity check; this module confirms only that the tool runs and is wired in.
+- [ ] Where a pre-commit framework is configured, confirm the same hooks also run in CI, not only pre-commit — Read `.pre-commit-config.yaml`'s hook list and diff it against the CI workflow's step list. A hook that only pre-commit runs is bypassable with `--no-verify` or a clone that skipped `pre-commit install`.
+- [ ] A scanner or checker that runs in CI but does not gate the merge — Read the job's position in the workflow: a security-scan job with no branch-protection tie or `needs:` dependency feeding the merge check is informational only, and a red result there stops nothing.
 
 ## Suppression inventory
 
@@ -25,32 +25,32 @@ The gap between what a tool would flag and what it actually flags. This owns the
 
 - [ ] Root-level rule disables across every config found in Inventory — `search_code` each config for a rules-off block (`"off"`/`0` in an eslint config, a bare `ignore =` in ruff/flake8, `disable=` in `.rubocop.yml`) — each is a policy decision covering the whole tree; list what it would otherwise have caught.
 - [ ] Per-file and per-line suppressions, tallied separately from root-level ones — `search_code` for inline disable comments (`eslint-disable-next-line`, `# noqa`, `# pragma: no cover`, `// nolint`) and group by file. A cluster in one file is a different finding than the same count spread thin.
-- [ ] Ignore files and exclude globs wide enough to remove a whole directory — read `.eslintignore`/`ignorePatterns`, `.prettierignore`, and each scanner's `exclude`/`paths-ignore`. A glob matching `**/legacy/**` or a `generated/` directory that is in fact hand-edited silently drops it from every check that config runs, not just one.
-- [ ] Confirm the type checker itself is inventoried and wired in per the checks above, but stop there — `any`/`@ts-ignore`/`# type: ignore` density, reason-carrying, and scope are `type-safety.md`'s probes, not this module's.
+- [ ] Ignore files and exclude globs wide enough to remove a whole directory — Read `.eslintignore`/`ignorePatterns`, `.prettierignore`, and each scanner's `exclude`/`paths-ignore`. A glob matching `**/legacy/**` or a `generated/` directory that is in fact hand-edited silently drops it from every check that config runs, not just one.
+- [ ] Read the Inventory and Declared-versus-enforced checks above to confirm the type checker itself is inventoried and wired in, but stop there — `any`/`@ts-ignore`/`# type: ignore` density, reason-carrying, and scope are `type-safety.md`'s probes, not this module's.
 
 ## Committed tool output
 
 - [ ] `search_code` for a committed SARIF file, coverage report (`coverage/`, `lcov.info`, `.coverage`), scanner baseline, or audit log checked into the repo. Where one exists, read it directly — it is `read`-tier evidence a deterministic tool produced, not evidence this audit reasoned out, and it is the strongest input available to the rest of the audit.
-- [ ] Check its staleness before citing it — compare its embedded timestamp or generation commit against the current state of the files it describes. A report generated before the code it covers last changed is describing a version of the code that no longer exists.
-- [ ] Where a coverage report is committed, read the numbers for the specific modules other findings in this audit touch, and cite them directly rather than estimating — this is measured, not inferred, even though `testing.md` owns the qualitative test-quality checks around it.
-- [ ] A committed report showing zero findings from a scanner not wired into CI (per Declared versus enforced) is not evidence the code is clean — it is evidence of one run, possibly stale, that nothing repeats. State which is true before treating either as clean; a confident zero is exactly the "bug-free" framing that measurably suppresses detection elsewhere in this audit, and this module is where that framing enters.
+- [ ] Check its staleness before citing it — Read its embedded timestamp or generation commit and compare it against the current state of the files it describes. A report generated before the code it covers last changed is describing a version of the code that no longer exists.
+- [ ] Where a coverage report is committed, Read the numbers for the specific modules other findings in this audit touch, and cite them directly rather than estimating — this is measured, not inferred, even though `testing.md` owns the qualitative test-quality checks around it.
+- [ ] Read the committed report's own CI-wiring status (per Declared versus enforced) before citing its zero findings as clean — a committed report showing zero findings from a scanner not wired into CI is not evidence the code is clean, it is evidence of one run, possibly stale, that nothing repeats. State which is true before treating either as clean; a confident zero is exactly the "bug-free" framing that measurably suppresses detection elsewhere in this audit, and this module is where that framing enters.
 
 ## Baseline files
 
 - [ ] Locate a baseline/ignore-existing-violations file for any scanner or linter (`.rubocop_todo.yml`, a generated ESLint baseline, a SonarQube/Semgrep baseline snapshot, mypy's `--baseline` output) — `search_code` for the tool's baseline-generation flag or a file matching its documented baseline naming.
-- [ ] Confirm the baseline only ever shrinks — check whether CI compares against it for new entries, or whether the baseline-regeneration command runs as part of the normal lint step, which re-freezes every current violation as newly accepted on every run. A baseline that regenerates itself is not a baseline, it is a ratchet permanently stuck at zero, and that is a finding, not neutral infrastructure.
-- [ ] A baseline with no visible owner, date, or shrink target is itself the finding — nobody is accountable for burning it down, and the tool it fronts has quietly become decoration for the code frozen inside it.
+- [ ] Confirm the baseline only ever shrinks — `search_code` the CI config for a step comparing against it for new entries, versus the baseline-regeneration command running as part of the normal lint step, which re-freezes every current violation as newly accepted on every run. A baseline that regenerates itself is not a baseline, it is a ratchet permanently stuck at zero, and that is a finding, not neutral infrastructure.
+- [ ] Read the baseline file located above for a visible owner, date, or shrink target — its absence is itself the finding: nobody is accountable for burning it down, and the tool it fronts has quietly become decoration for the code frozen inside it.
 
 ## Coverage of the tree
 
 - [ ] For each config's `include`/`exclude`, confirm which top-level directories it actually reaches — read the scope against `list_modules` or the repo tree. Generated code, vendored dependencies, and test directories excluded on purpose are correct; the same exclusion silently covering a feature directory is not.
-- [ ] Confirm test directories are excluded from *production-only rules*, not from the type checker outright — a config that drops `**/*.test.*` from type-checking entirely, rather than relaxing specific rules, lets test code drift from the types it exercises unnoticed. Cross-reference the test-time erosion check in `type-safety.md`.
+- [ ] `search_code` the type-checker config for test directories excluded from *production-only rules* versus excluded from the type checker outright — a config that drops `**/*.test.*` from type-checking entirely, rather than relaxing specific rules, lets test code drift from the types it exercises unnoticed. Cross-reference the test-time erosion check in `type-safety.md`.
 - [ ] In a monorepo, confirm every package actually inherits the root config rather than shadowing it — `search_code` each package's own config for one that redefines rather than extends the root. A shadowed config is silent scope-narrowing nobody had to justify.
 
 ## What absence means
 
-- [ ] Where Inventory found no linter, no type checker, and no test runner at all for a language capable of having them, state it plainly: every defect this audit reports in that code was invisible to automation before this audit ran, and will be again the moment it ends. That is a scoping instruction for the rest of the module selection, not a caveat — `consistency.md` and `reachability.md` carry more weight here because nothing else is checking.
-- [ ] Where tooling covers one language or surface in a polyglot repo but not another — TypeScript linted, a Python service beside it left bare — name the asymmetry directly; it usually tracks which surface a team actually owns.
+- [ ] Read the Inventory list above for a language capable of having a linter, type checker, or test runner that has none at all, and state it plainly: every defect this audit reports in that code was invisible to automation before this audit ran, and will be again the moment it ends. That is a scoping instruction for the rest of the module selection, not a caveat — `consistency.md` and `reachability.md` carry more weight here because nothing else is checking.
+- [ ] `list_modules` to see every surface in a polyglot tree, then compare tooling coverage across them — TypeScript linted, a Python service beside it left bare — name the asymmetry directly; it usually tracks which surface a team actually owns.
 
 ## Out of static reach
 
@@ -58,7 +58,7 @@ The gap between what a tool would flag and what it actually flags. This owns the
 - Whether required CI checks are enforced by branch protection — a platform setting, not a file; cross-reference `devops.md`, which names this the same way.
 - Real flake or noise rate of a configured scanner — only observable from run history this audit cannot read.
 - Whether a tool absent from this repo runs upstream, in a monorepo sibling, or in an organisation-wide pipeline this audit cannot see.
-- Whether a committed report's zero findings reflect a genuinely clean pass or a scanner misconfigured to match nothing.
+- Whether a committed report's zero findings reflect a genuinely clean pass or a scanner misconfigured to match nothing — closed by `runtime.md` when execution is enabled: it reruns the same scanner and diffs against the committed report.
 
 ## Severity guidance
 

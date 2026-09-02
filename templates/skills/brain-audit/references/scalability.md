@@ -6,7 +6,7 @@ What breaks when there is more of everything? Gate: a queue, worker, or backgrou
 
 ## Horizontal readiness
 
-- [ ] No state lives only in one process's memory: `search_code` for a module-level `Map`/`Set`/object literal used as a cache, counter, or session store, then `find_callers` to confirm it is written on the request path rather than populated once from static config.
+- [ ] No state lives only in one process's memory: `search_code` for a module-level `Map`/`Set`/object literal used as a cache, counter, or session store, then `find_callers` to confirm it is written on the request path rather than populated once from static config. Rule out a cache whose loss on restart or divergence across instances is harmless (a pure memoisation cache, not a session/counter store) — state whether the value is safe to be instance-local before flagging. This probe is shared with `concurrency.md`'s module-level mutable-state check; that module owns the race-condition read, this one owns the multi-instance read — cross-reference rather than double-report.
 - [ ] Nothing depends on being the only instance: `search_code` for in-process locks, singletons holding mutable state, and interval timers — each one runs N times with N instances.
 - [ ] Scheduled work has a leader election or a distributed lock: `search_code` for `setInterval`/a cron import/a scheduler registration, then read the surrounding code for a lock/leader check (`SETNX`, an advisory lock, an "only run on leader" guard). Rule out a genuinely single-replica deployment — read the deploy manifest or Dockerfile replica count — before flagging.
 - [ ] Local filesystem writes are either ephemeral or explicit shared storage: `search_code` for `fs.writeFile`/`createWriteStream` and check the target path against a shared-storage prefix (S3, a mounted volume) versus a local `/tmp`-style path. A file written on one instance and read on another silently fails behind a load balancer.
@@ -18,7 +18,7 @@ What breaks when there is more of everything? Gate: a queue, worker, or backgrou
 - [ ] Failed jobs go somewhere: `search_code` for the queue library's failure hook (`on('failed'`, a dead-letter binding, a `.catch(` around job processing). Silent drop is the default failure mode in most libraries and it is `High`.
 - [ ] The dead-letter destination is actually drained by something: `search_code` for a redrive/replay path (SQS's `StartMessageMoveTask`, a scheduled job reading the DLQ, an alert wired to DLQ depth) versus a DLQ that exists only as a naming convention. Replay tooling varies by platform — SQS supports redrive natively; Kafka Connect's dead-letter topic (sink connectors only — source connectors have no DLQ mechanism at all) is a plain topic with no built-in replay; Azure Service Bus has no built-in redrive either. A DLQ nothing reads is a slower version of silent drop.
 - [ ] Retries are bounded: `search_code` for the retry/backoff config (`attempts:`, `backoff:`, `maxRetries`) on the job/queue definition. Read the library's default when no config is present — several default to infinite.
-- [ ] Job payloads carry identifiers, not whole objects: read a handful of `.enqueue`/`.publish` call sites — a full domain object in the payload instead of an id is the finding. Fat payloads make the queue the database.
+- [ ] Job payloads carry identifiers, not whole objects: Read a handful of `.enqueue`/`.publish` call sites — a full domain object in the payload instead of an id is the finding. Fat payloads make the queue the database.
 - [ ] Concurrency per consumer is bounded and configurable: `search_code` for the consumer's concurrency/prefetch setting; its absence means the library's own default applies, which is worth stating explicitly.
 
 ## Data growth
@@ -40,7 +40,7 @@ What breaks when there is more of everything? Gate: a queue, worker, or backgrou
 
 - [ ] Under load the system degrades rather than collapsing: read the failure path of the top-ranked handler from `repo_map` for a stale-cache fallback or an explicit `503`, versus an unhandled exception that takes the whole request down.
 - [ ] Non-critical work is genuinely non-blocking: `search_code` for an `await` on an analytics/telemetry call inside a request handler with no surrounding try/catch or fire-and-forget wrapper — a failing optional call must not fail the request.
-- [ ] Health checks reflect real capacity, not just process liveness: `find_symbol` the health-check handler and read it — a handler that returns `200` unconditionally is a liveness check wearing a readiness check's name.
+- [ ] Health-check readiness-vs-liveness is owned by `observability.md` (`find_symbol` the liveness/readiness endpoints); reuse its finding, do not re-report. This module keeps only the capacity angle.
 
 ## Out of static reach
 

@@ -62,6 +62,7 @@ import multiTenancy from "../../templates/skills/brain-audit/references/multi-te
 import featureFlags from "../../templates/skills/brain-audit/references/feature-flags.md" with { type: "text" };
 import toolingBaseline from "../../templates/skills/brain-audit/references/tooling-baseline.md" with { type: "text" };
 import runtime from "../../templates/skills/brain-audit/references/runtime.md" with { type: "text" };
+import browser from "../../templates/skills/brain-audit/references/browser.md" with { type: "text" };
 // J. Provenance and reach
 import supplyChain from "../../templates/skills/brain-audit/references/supply-chain.md" with { type: "text" };
 import repoHistory from "../../templates/skills/brain-audit/references/repo-history.md" with { type: "text" };
@@ -124,6 +125,7 @@ export const BRAIN_AUDIT_FILES: Record<string, string> = {
   "references/reachability.md": reachability,
   "references/repo-history.md": repoHistory,
   "references/runtime.md": runtime,
+  "references/browser.md": browser,
   "references/scalability.md": scalability,
   "references/security.md": security,
   "references/state-model.md": stateModel,

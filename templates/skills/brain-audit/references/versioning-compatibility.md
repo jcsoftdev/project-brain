@@ -6,6 +6,8 @@ Every published thing has consumers you cannot see. This module asks whether a c
 
 The gate also fires for a deployed *service* with a release workflow and no package manifest — the discipline transfers with one adjustment. A library's consumers pin a version and choose when to upgrade, so semver's compatibility unit (a versioned public API surface, per [semver.org 2.0.0](https://semver.org/)) applies directly. A service normally has exactly one deployed version running at a time — nobody pins it — so "breaking change" there is really a question of API/endpoint deprecation and sunset discipline (cross-reference `api.md`'s Compatibility section and the Deprecation checks below), not a semver bump on the deployable artefact. Apply the Public-surface and Breaking-change checks below to the service's *API contract* version (`/v1`, a schema version field) rather than to a build number nobody consumes.
 
+Ownership split with two neighbouring modules: `future.md` owns whether the architecture is ready to grow (a duplicated "old way"/"new way" code path, an API kept around with no removal date, as a design-health question); this module owns the same kind of fact framed as a compatibility *promise to a consumer* — is a deprecated symbol still exercised, does a stated timeline have a removal version. The two can point at the same code from different angles; do not double-count. `packaging.md` owns the artefact-shape checks, including whether declared engine/platform support matches what the code actually requires — see Runtime and platform below.
+
 ## Public surface
 
 - [ ] What is public is stated. `search_code` the manifest's `exports` map, its `main`/`module`/`types` fields, Python's `__all__`, or a dedicated barrel file re-exporting a curated subset. If none exists, that absence is the finding itself — everything exported is public by accident, and every internal rename becomes a breaking change nobody planned for.
@@ -17,8 +19,8 @@ The gate also fires for a deployed *service* with a release workflow and no pack
 
 - [ ] Version numbers follow a stated scheme, and breaking changes actually bump the breaking component. Read CONTRIBUTING, README, or the manifest itself for a stated semver policy. Under semver 2.0.0 itself, a `0.x` package has made no compatibility promise at all — say so rather than holding it to a discipline it never adopted. Note that an ecosystem's tooling may still layer its own convention on top of the spec's silence (npm and Cargo's default caret range treats `0.x.y` as compatible with `0.x.z` for `y ≥ z`, patch-like) — check the actual range operator consumers use rather than assuming the spec settles it; this is a genuine, unresolved point of disagreement among practitioners, not a mistake to flag on sight.
 - [ ] For each recent change to public surface, classify it: added (minor), fixed (patch), removed or narrowed (major). The probe is an actual diff, not memory: `find_symbol` the current exported signature against what the previous git tag's source held, or against the CHANGELOG's own prior entries where tags don't exist, and report any commit whose real diff does not match its claimed classification.
-- [ ] These are breaking even when they look small: narrowing an accepted input, adding a required parameter, changing a default, changing an error type, changing a return shape, renaming a config key, tightening validation. Apply this list to every signature the diff above actually touched — a check run with no diff behind it is a guess, not this check.
-- [ ] Behavioural breaks count, not only signature breaks. Same types, different meaning is worse — it compiles and misbehaves. This one is necessarily `read`-tier: there is no structural probe for a behaviour change on an identical signature, so read the changelog and PR descriptions for language implying it — "now returns", "previously", "fixed to actually" — and state the lower confidence explicitly in the finding.
+- [ ] Read the diff found above for the following list — each is breaking even when it looks small: narrowing an accepted input, adding a required parameter, changing a default, changing an error type, changing a return shape, renaming a config key, tightening validation. Apply this list to every signature the diff above actually touched — a check run with no diff behind it is a guess, not this check.
+- [ ] Behavioural breaks count, not only signature breaks. Same types, different meaning is worse — it compiles and misbehaves. This one is necessarily `read`-tier: there is no structural probe for a behaviour change on an identical signature, so Read the changelog and PR descriptions for language implying it — "now returns", "previously", "fixed to actually" — and state the lower confidence explicitly in the finding.
 
 ## Deprecation
 
@@ -36,7 +38,7 @@ The gate also fires for a deployed *service* with a release workflow and no pack
 
 ## Runtime and platform
 
-- [ ] Declared engine and platform support matches what the code and dependencies actually require. Read the manifest's `engines` or `python_requires` field, then `search_code` for syntax that needs a newer runtime than declared — optional chaining, top-level `await`, a stdlib call added in a later minor — and cross-check each dependency's own declared minimum against the project's.
+- [ ] Declared engine/platform support matching what the code actually uses — owned by `packaging.md` (Read the manifest's `engines`/`requires-python` field, then `search_code` for syntax that needs a newer runtime than declared); reuse its finding, do not re-report.
 - [ ] Minimum supported versions are tested, not just declared. `search_code` the CI workflow's matrix definition for the runtime version list — a matrix of one entry supports one version, regardless of what the manifest promises.
 - [ ] Newly used runtime APIs do not silently raise the real minimum below the declared one. `search_code` for recently introduced syntax or stdlib calls and check each against the feature set of the declared minimum version — a single call gated on a newer API narrows support for everyone, whatever the manifest still claims.
 
@@ -44,7 +46,7 @@ The gate also fires for a deployed *service* with a release workflow and no pack
 
 - [ ] Changes are recorded somewhere a consumer will find — changelog, release notes, or migration guide. `search_code` for `CHANGELOG.md`, `HISTORY.md`, or a release-notes directory, then check whether recent merged PRs or tagged commits have a corresponding entry — an untouched changelog next to an active commit log is the finding.
 - [ ] Breaking changes state the migration, not just the fact. Read changelog entries tagged `BREAKING` or attached to a major bump for concrete migration instructions — "X changed" is not the same disclosure as "X changed, do Y instead".
-- [ ] Entries correspond to real commits; a changelog nobody maintains is worse than none because it is trusted. Spot-check a handful of recent entries against the actual git log or diff for the version they claim — a description with no matching commit, or a commit with no matching entry, means the changelog has drifted from the source it claims to summarise.
+- [ ] Entries correspond to real commits; a changelog nobody maintains is worse than none because it is trusted. `Read` the changelog entries and spot-check a handful of recent ones against `repo-history.md`'s commit-log reading for the version they claim — a description with no matching commit, or a commit with no matching entry, means the changelog has drifted from the source it claims to summarise.
 
 ## Out of static reach
 
@@ -65,6 +67,5 @@ The gate also fires for a deployed *service* with a release workflow and no pack
 | Removal with no prior deprecation | Medium |
 | Deprecation with no removal version | Medium |
 | `Sunset` header dated earlier than the `Deprecation` header on the same response | High |
-| Declared engine support wider than what the code requires | Medium |
 | No declared public-surface boundary | Medium |
 | Breaking change documented without a migration path | Low |

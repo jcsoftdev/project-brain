@@ -14,7 +14,7 @@ A caution before starting: much of visual quality is genuinely not decidable fro
 - [ ] Hierarchy survives without colour. Read the primary and secondary action components side by side: if the only declared difference between them is a colour token (`bg-primary` vs `bg-secondary`) with identical size, weight, and border, colour is carrying the whole distinction — readable directly from the class list, no rendering needed. Cross-reference the colour-only check in `accessibility.md`.
 - [ ] One primary action per view. `search_code` the primary-button variant/class and count occurrences within a single page or view component's render tree — two hits in one view is two competing primaries; read the surrounding markup to confirm both are visible at once rather than in alternate states.
 - [ ] Secondary and destructive actions are visually subordinate to the primary one, and destructive actions are distinguishable from merely secondary ones by more than colour. `search_code` the destructive-variant class/component and read whether it also differs in icon, copy, or a confirmation step — a destructive button that is only a red version of the secondary button fails the moment the token gets swapped in a redesign.
-- [ ] Supporting text is de-emphasised by weight or colour role, not by shrinking below the readable floor. `search_code` the muted/secondary text token or class for its resolved `font-size` — below ~12–14px in a content role it has traded legibility for hierarchy instead of using weight or colour role.
+- [ ] Supporting text is de-emphasised by weight or colour role, not by shrinking below the readable floor. `search_code` the muted/secondary text token or class for its resolved `font-size` — below ~12–14px in a content role it has traded legibility for hierarchy instead of using weight or colour role. This floor is design guidance, not a spec requirement — WCAG sets no numeric minimum font size; the closest authoritative figures are Lighthouse's legibility audit (flags ~12px) and a conventional 16px floor.
 
 ## Rhythm and grouping
 
@@ -28,9 +28,9 @@ A caution before starting: much of visual quality is genuinely not decidable fro
 
 `design-system.md` checks the scale exists. This checks it is used well.
 
-- [ ] Line length lands in 45–90 characters, ideally near 66 for body copy. `search_code` for the prose/body-copy container and check for a `max-width` in `ch` units or an equivalent px value (~600–700px at typical body size) — its absence in a fluid-width layout is a readability defect visible in the container's own declaration.
+- [ ] Line length lands in 45–90 characters (Butterick's Practical Typography), tightening toward the narrower end of that range for body copy per the print-typography tradition (Bringhurst, ~45–75). `search_code` for the prose/body-copy container and check for a `max-width` in `ch` units or an equivalent px value (~600–700px at typical body size) — its absence in a fluid-width layout is a readability defect visible in the container's own declaration.
 - [ ] Line height is around 1.5 for body text (1.4–1.6), rising to 1.6–1.7 where the measure runs long, and 1.1–1.25 for headings. `search_code` for `line-height` on the body-text and heading tokens/classes — a single shared value applied to both (common when only one `line-height` token exists) is wrong for one of them by construction.
-- [ ] Body text does not go below the project's readable floor. `search_code` the body-text token/class for its resolved `font-size` — anything under ~14px in a content role (not a caption or label role) needs a stated reason, found in the same declaration or flagged by its absence.
+- [ ] Body text does not go below the project's readable floor. `search_code` the body-text token/class for its resolved `font-size` — anything under ~14px in a content role (not a caption or label role) needs a stated reason, found in the same declaration or flagged by its absence. As above, this is conventional design guidance rather than a numeric spec minimum.
 - [ ] Numeric and tabular data uses tabular figures or a monospaced face where columns must align. `search_code` the table/numeric-cell component for `font-variant-numeric` or a monospace font stack — a table rendering right-aligned numeric columns with neither will visibly misalign digit widths.
 - [ ] Fluid type via `clamp()` or container queries where the layout spans phone to desktop. `search_code` the type-scale source for `clamp(` — its absence alongside a large declared breakpoint set (four or more, per `design-system.md`) means every size is fixed per breakpoint; worth flagging only at that scale.
 
@@ -38,7 +38,7 @@ A caution before starting: much of visual quality is genuinely not decidable fro
 
 The states a browser gives you free are the ones most often left unstyled:
 
-- [ ] `:hover`, `:focus-visible`, `:active` and `:disabled` are all styled for every interactive element. `search_code` the button/input component's style definitions for each of the four selectors (or their `hover:`/`focus-visible:`/`active:`/`disabled:` utility variants) and list which are absent per component — `:disabled` is the one most often skipped, and the one that most confuses a user.
+- [ ] `:hover`, `:active` and `:disabled` are all styled for every interactive element (`:focus-visible` is `accessibility.md`'s compliance angle — do not re-report it here). `search_code` the button/input component's style definitions for each of the three selectors (or their `hover:`/`active:`/`disabled:` utility variants) and list which are absent per component — `:disabled` is the one most often skipped, and the one that most confuses a user.
 - [ ] No affordance exists only on hover. `search_code` for `hover:opacity`/`hover:visible`/`:hover { display` patterns that reveal an action, then check the same rule block for a `:focus-within` or `group-focus` counterpart — a reveal driven only by `:hover` has no touch or keyboard path.
 - [ ] Disabled controls communicate *why*, or the control is not disabled in the first place. `search_code` where the disabled condition is set (`disabled={`) and read the surrounding markup for a tooltip, helper text, or `aria-describedby` explaining it — a bare `disabled` prop with nothing else nearby is a dead end with no stated cause.
 - [ ] The application states — loading, empty, no-results, error, success, offline — each have a designed treatment, not just a wired one. For each state component `flow-integrity.md` confirms is wired, `find_symbol` it and read what it renders: a bare string (`<p>Loading...</p>`) is wired but undesigned; a skeleton, icon, or illustration matching the content shape is designed.
@@ -51,7 +51,7 @@ The states a browser gives you free are the ones most often left unstyled:
 - [ ] Breakpoints sit where the layout actually breaks, not at device names. `design-system.md` already checks the declared breakpoint scale itself; this module's angle is whether one specific layout's column-count change lines up with it — `search_code` the layout component for an inline `@media` query with a value that does not match the declared scale.
 - [ ] Every layout that is multi-column at desktop has a defined single-column behaviour. `search_code` the grid/flex container's declarations across its breakpoint variants — a `grid-template-columns` set with three or more columns and no narrower override (no `sm:`/`md:` variant, no matching `@media` rule) will not collapse; confirm from the declarations, not from the assumption that flexbox always wraps.
 - [ ] Tables, charts and wide fixed-width content have an explicit small-screen strategy (scroll container, card fallback, column priority). `search_code` the table/chart wrapper for `overflow-x: auto`/`scroll`, a conditional card-fallback render, or a column-priority prop — absent all three, the wrapper overflows on narrow screens, provable straight from its own declarations.
-- [ ] Nothing depends on hover or on precise pointer targeting for a core action. Cross-reference the hover-only affordance check above and the target-size check in `accessibility.md` — a core action gated behind either is unreachable to a touch user; report it once, in whichever module surfaced it first.
+- [ ] Nothing depends on hover or on precise pointer targeting for a core action. Read the hover-only affordance check above and the target-size check in `accessibility.md` for a core action gated behind either — unreachable to a touch user; report it once, in whichever module surfaced it first.
 - [ ] Content order in the DOM matches the intended reading order at every breakpoint. `search_code` for the CSS `order` property, `grid-area` placement, or `position: absolute` in layout components, and compare against the JSX/template source order — a CSS-driven reorder that diverges from source order is both a visual and a keyboard-order defect, provable by comparing the two orderings directly.
 
 ## Motion
@@ -71,6 +71,16 @@ The states a browser gives you free are the ones most often left unstyled:
 
 Recommend a browser pass or a visual-regression suite for these rather than asserting them.
 
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| computed styles via evaluate | Pixel-level alignment and spacing as actually rendered, versus declared values | Medium |
+| `trace.json`/`insights.md` | Long tasks during a motion sequence, as a proxy for frame-rate smoothness | Medium |
+| `steps.md` | Surface degradation across breakpoints, confirmed by a screenshot per breakpoint walked | Low |
+
 ## Severity guidance
 
 | Situation | Severity |
@@ -78,7 +88,7 @@ Recommend a browser pass or a visual-regression suite for these rather than asse
 | Core action available only on hover | High |
 | Hierarchy carried by colour alone | High |
 | No small-screen strategy for content that overflows | High |
-| Interactive element with no styled focus or disabled state | High |
+| Interactive element with no styled hover, active, or disabled state | High |
 | Empty or error state that offers no way forward | Medium |
 | Two competing primary actions in one view | Medium |
 | Skeleton whose shape does not match its content | Medium |

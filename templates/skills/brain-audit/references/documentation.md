@@ -25,8 +25,8 @@ Can someone else use and change this? Documentation findings are verifiable: fol
 - [ ] Reference material reads cleanly as an isolated fragment. Read one reference page or section with no surrounding tutorial context and confirm it still makes sense on its own — a reference entry that depends on narrative set up earlier in a different document fails a reader who jumped straight to it mid-task, and fails identically for any retrieval-based system (a search index, or this skill's own project-brain) that surfaces the section as a standalone chunk.
 - [ ] No step assumes knowledge the doc never states. Read each instruction in the install/first-run path and confirm every input it requires — an account, a config value, a secret, a prior step performed elsewhere — is documented as a prerequisite before it is used, not assumed already known to the reader.
 - [ ] Nothing important lives only in a comment, a commit message, or an issue. `search_code` for a comment stating a constraint or contract with no counterpart in any doc file — that constraint is invisible to anyone who doesn't read that exact line.
-- [ ] Docs live near what they describe, so a change is likely to update both. Compare the doc file's path to the code path it documents — a doc for `src/auth/` living only in a top-level `/docs` with no cross-link is more likely to rot.
-- [ ] No duplicated documentation of the same thing in two places. `search_code` a distinctive phrase or heading from one doc file against the rest of the docs tree — a hit in a second file is the duplicate; they will diverge, and the reader cannot tell which is current. This is the single most commonly reported documentation defect in practice, ahead of any individual accuracy gap.
+- [ ] Docs live near what they describe, so a change is likely to update both. `Read` the doc file's path against the code path it documents — a doc for `src/auth/` living only in a top-level `/docs` with no cross-link is more likely to rot.
+- [ ] No duplicated documentation of the same thing in two places. `search_code` a distinctive phrase or heading from one doc file against the rest of the docs tree — a hit in a second file is the duplicate; they will diverge, and the reader cannot tell which is current. Rule out a short warning or prerequisite kept verbatim on purpose across two entry points for reader safety (the same security caveat in both a quickstart and a security doc) — the finding is near-duplicate *prose* likely to diverge, not an intentionally mirrored short notice. This is the single most commonly reported documentation defect in practice, ahead of any individual accuracy gap.
 
 ## In-code documentation
 
@@ -44,7 +44,7 @@ Can someone else use and change this? Documentation findings are verifiable: fol
 
 ## Out of static reach
 
-- Whether a reader actually succeeds following the docs, versus the steps being present and in the right order.
+- Whether a reader actually succeeds following the docs, versus the steps being present and in the right order — closed by `runtime.md`'s install/typecheck/lint/build/test exit codes when execution is enabled and the declared commands match the documented ones; cite the exit code rather than re-deriving.
 - Whether an in-code comment's rationale is still true today, when nothing pins it to the constraint it described.
 - Perceived clarity of an error message or doc passage to someone unfamiliar with the codebase.
 - Whether the docs owner named in a header is still the right person to ask.

@@ -5,12 +5,12 @@ The contract as seen from outside. Gate: a server framework or API routes were d
 ## Surface inventory
 
 - [ ] Enumerate every externally reachable endpoint, tool, or exported entry point. `search_code` the route-registration call (`router.`, `app.get(`, `@Get(`, a tool/handler registry), then `find_callers` on each handler to confirm nothing routes to it a second time through a separate registration.
-- [ ] Each one is documented, or deliberately internal. Cross-check the inventory above against the docs/OpenAPI artefact located by `search_code` for `openapi`, `swagger`, or `.graphql` — an endpoint present in one list and absent from the other is the finding.
-- [ ] No endpoint exists that the docs do not mention and no client calls — that belongs to `Reachability`, cross-reference it rather than re-deriving it here.
+- [ ] Each one is documented, or deliberately internal. Cross-check the inventory above against the docs/OpenAPI artefact located by `search_code` for `openapi`, `swagger`, or `.graphql` — an endpoint present in one list and absent from the other is the finding. Rule out: an endpoint marked by an `internal`/`_private` route prefix or grouped in a separate unexported route registration is deliberately internal, not the finding — confirm the signal before flagging.
+- [ ] No endpoint exists that the docs do not mention and no client calls — `find_callers` on each inventoried endpoint for zero in-repo callers; that belongs to `Reachability`, cross-reference its findings rather than re-deriving them here when that module ran.
 
 ## Contract shape
 
-- [ ] Naming and pluralisation are consistent across the surface. Diff the path list from the inventory above literally — `/users/:id` next to `/getAccount` is two conventions in one surface.
+- [ ] Naming and pluralisation are consistent across the surface. `Read` the path list from the inventory above and diff it literally — `/users/:id` next to `/getAccount` is two conventions in one surface. Rule out: a small, consistent set of RPC-style action endpoints alongside a REST surface is a deliberate choice, not drift — flag only where the same *kind* of operation is named two ways.
 - [ ] Status codes are used for their meaning. `search_code` for a `200`/`res.status(200)` literal returned alongside an error-shaped body, or a `500` returned for what the handler logic shows is a validation failure.
 - [ ] Error responses share one shape, and it includes something machine-readable — a code, not only prose. `search_code` the error-construction call across handlers; more than one shape is the finding — cross-reference `Backend`'s request-lifecycle check, and report the value divergence here.
 - [ ] Pagination exists wherever a collection can grow, and it is the same mechanism everywhere. `search_code` for `limit`/`cursor`/`offset` parameters across list-returning endpoints; a collection endpoint with none of them is the finding. Where the mechanism is offset-based (`page=`/`offset=`) on a collection that also takes concurrent inserts or deletes, note it as a correctness risk, not only a performance one — a row can be skipped or duplicated across pages when the underlying set shifts mid-pagination, independent of how deep the paging goes; cursor/keyset pagination (a `WHERE (sort_col, id) < (last_seen...)` filter) does not have this failure mode because it tracks a data value, not a row position.
@@ -31,7 +31,7 @@ The contract as seen from outside. Gate: a server framework or API routes were d
 
 ## Discoverability
 
-- [ ] A caller can find the full surface without reading the source. Confirm a docs/OpenAPI artefact exists and its endpoint count matches the inventory count above; a mismatch is the finding.
+- [ ] A caller can find the full surface without reading the source. `search_code` for the docs/OpenAPI artefact located above and confirm its endpoint count matches the inventory count; a mismatch is the finding.
 - [ ] Examples in the docs are executable and current. `find_symbol` the referenced handler's real signature and diff it against the documented example's parameters.
 - [ ] Auth requirements are stated per endpoint, not only globally. `search_code` the docs/OpenAPI security annotations per path, then `find_callees` on the handler for an auth middleware in code with no matching stated requirement in docs.
 
@@ -41,6 +41,15 @@ The contract as seen from outside. Gate: a server framework or API routes were d
 - Real client behaviour on an unknown field — whether a consumer silently ignores it or crashes depends on the client's own parser, not this repository.
 - Actual latency or throughput of paginated versus unpaginated responses.
 - Whether external consumers exist at all for an endpoint marked "internal" — that requires visibility outside this repository.
+
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number. Bounded: `network.jsonl` bodies are captured only for 4xx/5xx responses, so a 2xx body's actual shape is never confirmed this way.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| `network.jsonl` | Actual latency and size of paginated versus unpaginated responses, driven through a live session | Low |
+| `network.jsonl` | Real status code, headers, and error-body shape for an endpoint's declared error responses — 2xx bodies are not captured, so the success shape stays unconfirmed | High |
 
 ## Severity guidance
 

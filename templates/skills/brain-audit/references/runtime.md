@@ -25,6 +25,16 @@ The constraint carries no exceptions: **this module runs only commands the proje
 - [ ] A script whose name implies mutation (`deploy`, `publish`, `migrate`, `seed`, `reset`, `clean`) is recorded under Establish what the project declares but never executed on the strength of appearing there — only on the user naming that exact script by name.
 - [ ] State begins clean before every run: a frozen install (`npm ci`, `pnpm install --frozen-lockfile`, or the project's equivalent) against the committed lockfile, not a reused `node_modules`. Note whether a build cache was warm or cold — a result measured against drifted dependencies or a stale cache is evidence about that drift, not about the code.
 
+## Long-running commands
+
+Everything above assumes a command that terminates. A `dev`/`start`/`preview`/`serve` script does not, and starting one is a different contract — this section is that contract, and `browser.md` relies on it rather than restating it. A server is started only when the user enabled execution **and** named the purpose that needs it (browser observation, or a declared smoke test against a live port); it is never started to "see what happens".
+
+- [ ] The port comes from the script itself or its documented config (`PORT=` in the script body, a `--port` flag, `.env.example`, the framework's config file) — record where it was read from. If that port is already bound, stop and report which process holds it (`lsof -i :<port>` or the platform equivalent, quoted). Never pick another port, never kill the occupant.
+- [ ] An already-running server is reused only when the user names its URL. A server answering on a framework's default port is not assumed to be this project's — a stale process from another checkout looks identical from the outside, and every observation against it would be about the wrong code.
+- [ ] Readiness is an HTTP probe against the target URL, repeated until a 2xx/3xx or a stated timeout (default 60 s; record the value used). A server that never answers is this module's finding — record the command, the elapsed time, and the last stderr line — and browser observation reports `not applicable (target never became ready)` rather than walking a dead URL.
+- [ ] The server's stdout/stderr is captured for the whole session and cited by line where a browser-side finding has a server-side counterpart (a 500 in `network.jsonl` with its stack trace in the server log is one finding, `observed` on the browser side and `executed` on this side, not two).
+- [ ] Teardown is unconditional: the process this module started is stopped when the last flow finishes or fails, including on error, and the report records that it was stopped. A server the audit did not start is never stopped.
+
 ## The cheap ladder
 
 - [ ] Typecheck first. Record exit code and, on failure, the error count. A failing typecheck makes every later step's findings suspect — code that does not typecheck may not build or behave the way the suite assumes — so treat this failure as gating, not as one finding among several.
@@ -54,8 +64,8 @@ The constraint carries no exceptions: **this module runs only commands the proje
 - [ ] A green run proves the project's own checks pass and nothing beyond what those checks were written to catch. Restate this in the finding itself, not only here — a green `executed` result inherits every blind spot `tooling-baseline.md` already found in what the tooling actually enforces.
 - [ ] Mutation score, behaviour under real production traffic, environment-dependent flakiness (a different CI runner, timezone, locale), and whether a mocked seam faithfully reproduces its real dependency all stay out of reach — none are observable from a local run, however many times repeated.
 - [ ] An axe-core run, where declared, is bounded at roughly 57% of real-world accessibility issues per Deque's own study of over 2,000 audits — a different and larger figure than the share of WCAG success criteria automatable, which is smaller and commonly conflated with it. The rest still needs `accessibility.md`'s manual checks.
-- [ ] A Lighthouse or Core Web Vitals lab run, where declared, is `executed`-tier for the single run it performed and nothing beyond — usable as a regression check against a prior run, never as proof of a real-world pass. It cannot measure INP at all (INP requires a genuine user interaction) and only partially observes CLS, so it never substitutes for the field data `performance.md` already lists as out of reach.
-- [ ] Rendering correctness, the keyboard walk, and real screen-reader output stay out of reach entirely unless the project separately declares a browser-driving command; this module does not open a browser on its own initiative.
+- [ ] A Lighthouse or Core Web Vitals lab run, where declared, is `executed`-tier for the single run it performed and nothing beyond — usable as a regression check against a prior run, never as proof of a real-world pass. It cannot measure INP at all (INP requires a genuine user interaction) and only partially observes CLS, so it never substitutes for the field data `performance.md` already lists as out of reach — `browser.md`'s driven session closes the INP gap directly via a real interaction in `vitals.md`.
+- [ ] Rendering correctness, the keyboard walk, and real screen-reader output stay out of reach for **this module** unless the project separately declares a browser-driving command — that limitation is specific to running the project's own declared tooling; `browser.md` reaches all three unconditionally via its own separate consent.
 
 ## Out of static reach
 
@@ -65,6 +75,14 @@ The constraint carries no exceptions: **this module runs only commands the proje
 - Whether the commands this module ran are the ones a human contributor actually runs day to day, versus a stale or aspirational script nobody invokes.
 - Anything requiring a live third-party network dependency, a paid API, or a production credential this module is barred from reaching.
 
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| `network.jsonl` | Request/response shape (method, URL, status, size, duration) of a live third-party network dependency actually called during a confirmed flow | Info |
+
 ## Severity guidance
 
 | Situation | Severity |
@@ -73,6 +91,9 @@ The constraint carries no exceptions: **this module runs only commands the proje
 | Declared test suite fails on the current tree | Critical |
 | Committed `.only`/`fit`/`fdescribe` silencing the rest of the suite | High |
 | Declared typecheck fails | High |
+| Declared `dev`/`start`/`preview` server never answered the readiness probe within the recorded timeout | High |
+| Server the audit started could not be confirmed stopped at teardown | High |
+| Port the declared script binds is already held by a process outside the audit (server not started, occupant named) | Medium |
 | Test flaky at 2 or more failures in ten repeats, untracked | High |
 | Order-dependent failure surfaced by a reordered run | High |
 | Declared lint fails against the project's own configured ruleset | Medium |

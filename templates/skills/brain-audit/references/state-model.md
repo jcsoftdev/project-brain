@@ -10,18 +10,18 @@ A formal state model — a statechart, in Harel's original sense, standardised b
 
 - [ ] Find every declaration of the state set: an enum, a union type, a database column's `CHECK` constraint or comment listing valid values, a state-machine library's chart definition (XState, a `transitions` table). `find_symbol` on the type/enum name to get the canonical list.
 - [ ] Find every place that switches on it: `find_callers` on the enum/type, then read each `switch`/`match`/if-chain for completeness against the list above.
-- [ ] Note the state set's shape once, in prose, so every later check has a fixed reference — this is the yardstick, same discipline as establishing the token vocabulary in `design-system.md`.
+- [ ] Read the state set found above and note its shape once, in prose, so every later check has a fixed reference — this is the yardstick, same discipline as establishing the token vocabulary in `design-system.md`.
 
 ## Declared but unreachable
 
 - [ ] A state present in the enum that no code path ever assigns. `search_code` the state's literal value as an assignment target (`status = 'archived'`, `.setState(Status.Archived)`); if nothing assigns it, it is dead data, not dead code — cross-reference `reachability.md` for the mechanics but report the finding here since the enum is the artefact.
-- [ ] A state assigned only in a test fixture or seed script, never by application logic — the same shape, one layer removed.
+- [ ] A state assigned only in a test fixture or seed script, never by application logic — `search_code` the state's literal value as an assignment target restricted to test/fixture/seed paths; the same shape as above, one layer removed.
 
 ## Assigned but unhandled
 
 - [ ] The inverse and more dangerous gap: a state that gets assigned somewhere but that a `switch`/`match` elsewhere doesn't handle. Read each switch site found via `find_callers` above for a **missing `default`/`else` arm** — code that silently falls through and does nothing is worse than a crash, because nothing signals the gap ever fired.
 - [ ] `search_code` for the exhaustiveness marker itself (`: never`, `assertNever(`, `@Exhaustive`, a sealed-class `when` in Kotlin). Its absence at a switch site is exactly what let the current gaps exist, and adding it is the fix that prevents the next one. Cross-reference `type-safety.md` if the exhaustiveness gap is hidden behind an `any`/suppressed cast.
-- [ ] Among the switch sites read above, a `default`/`else` arm that maps every unrecognised state to some fallback value rather than erroring or logging — a milder form of the same gap: it hides a genuinely unhandled state behind output that looks intentional, so nobody notices the switch was incomplete.
+- [ ] Among the switch sites Read above, a `default`/`else` arm that maps every unrecognised state to some fallback value rather than erroring or logging — a milder form of the same gap: it hides a genuinely unhandled state behind output that looks intentional, so nobody notices the switch was incomplete.
 - [ ] Every creation path (constructor, insert, factory function) assigns one of the declared states explicitly. `search_code` the record's construction sites; a field left `null`/undefined at insert time behaves as a phantom extra state that no switch was written to handle.
 
 ## Transitions
@@ -29,16 +29,16 @@ A formal state model — a statechart, in Harel's original sense, standardised b
 - [ ] Every transition path is deliberate: `trace_path` (or a straightforward read of the transition table) from each state to the states it's allowed to reach. A transition with no guard — any state can jump to any other by just setting the field — is not a state machine, it's a label.
 - [ ] Transitions that skip a declared intermediate state. If the model says `draft → review → published`, `search_code` every write site setting `published` directly (`status = 'published'`, `.setState(Status.Published)`) and check its originating state — confirm any direct `draft → published` write is intentional (an admin override) rather than a bypass nobody meant to allow.
 - [ ] Terminal states with a way out that shouldn't exist — `search_code` for a write to the state field inside any code path reachable after a `cancelled`/`refunded`/terminal check, e.g. `if (status === 'cancelled') { ... status = ... }`.
-- [ ] Non-terminal states with no path forward at all: cross-check the transition table built above — any state that appears as a **target** of some transition but never as a **source** of one. Records land there and stay forever. Rule out first: a manual/support-only transition that's real but undocumented in code (an admin panel, a direct DB fix) — state which you checked.
+- [ ] Non-terminal states with no path forward at all: Read the transition table built above — any state that appears as a **target** of some transition but never as a **source** of one. Records land there and stay forever. Rule out first: a manual/support-only transition that's real but undocumented in code (an admin panel, a direct DB fix) — state which you checked.
 
 ## Duplicated state sets
 
-- [ ] The same conceptual state set declared twice — a backend enum and a frontend union, a database `CHECK` constraint and a client-side type — and already out of sync. Diff the literal member lists; a backend value with no frontend counterpart renders as `undefined`/a blank label, not an error. **Cross-reference `cross-surface-parity.md`**, which owns diverged behavioural rules between surfaces; this module reports the divergence, that module tracks the general pattern.
+- [ ] The same conceptual state set declared twice — a backend enum and a frontend union, a database `CHECK` constraint and a client-side type — and already out of sync. `find_symbol` each declaration and Read to diff the literal member lists; a backend value with no frontend counterpart renders as `undefined`/a blank label, not an error. **Cross-reference `cross-surface-parity.md`**, which owns diverged behavioural rules between surfaces; this module reports the divergence, that module tracks the general pattern.
 - [ ] Where a shared type is meant to be the single source, `search_code` the second surface's directory for a local re-declaration of the same enum/union name rather than an import from the shared location — a local copy that happens to match today is the drift waiting to happen.
 
 ## Persisted values the code no longer knows about
 
-- [ ] Values existing in stored data (a `status` column, a serialized state field) that don't appear in the current enum at all — the fingerprint of a state renamed or removed without a data migration. `search_code` for the old name in migration history or a comment; if the current switch has no case for it, every row carrying that value falls through the unhandled-state gap above, silently, in production, for real records.
+- [ ] Values existing in stored data (a `status` column, a serialized state field) that don't appear in the current enum at all — the fingerprint of a state renamed or removed without a data migration. `search_code` for the old name in migration history or a comment; if the current switch has no case for it, every row carrying that value falls through the unhandled-state gap above, silently, in production, for real records. The static evidence is `inferred`, not `read` — the search proves the value is unhandled if present, not that any row carries it — so this caps at `Medium`; cross-reference `runtime.md` for a declared DB-inspection command that would confirm live rows directly, promoting this to `executed`, and `Critical`.
 - [ ] `search_code` migration files for an `ALTER`/`CHECK`-constraint change to the state column with no accompanying `UPDATE` statement backfilling the old values to a valid new one.
 
 ## Concurrency on transitions
@@ -61,7 +61,8 @@ A formal state model — a statechart, in Harel's original sense, standardised b
 
 | Situation | Severity |
 |---|---|
-| Persisted value with no current code path that handles it | Critical |
+| Persisted value confirmed present in live data with no current code path (`runtime.md` DB query) | Critical |
+| Persisted value with no current code path that handles it, presence in live data unconfirmed | Medium |
 | Assigned state with no handling branch (silent no-op) | High |
 | Transition with no guard, reachable from any state | High |
 | Non-terminal state with zero outgoing transitions | High |
@@ -70,4 +71,5 @@ A formal state model — a statechart, in Harel's original sense, standardised b
 | Terminal state with an unintended exit path | Medium |
 | Missing exhaustiveness check on a state switch | Medium |
 | Declared state never assigned by any code path | Medium |
-| Race on a transition with no atomic guard | Medium (High if it double-charges/double-ships) |
+| Race on a transition with no atomic guard, double-charges or double-ships | High |
+| Race on a transition with no atomic guard, otherwise | Medium |

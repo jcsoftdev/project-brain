@@ -11,15 +11,15 @@ Everything below is established by reading test source and config — this modul
 ## Does the suite prove anything
 
 - [ ] For each confirmed finding elsewhere in this audit, identify the missing test — `search_code` the file/function named in the finding against the test suite; no matching test file or describe block is the gap. That list is the most valuable output of this module.
-- [ ] Tests assert behaviour, not implementation — read each test's assertions. A test that breaks on every refactor and passes through every real bug is negative value.
-- [ ] Tests would fail if the feature broke — pick the most important test, read the implementation it covers, and mentally invert one condition. If no assertion in the test would catch the inversion, the test is not proving what it claims to.
+- [ ] Tests assert behaviour, not implementation — `search_code` the suite for the test covering a finding above, and `Read` its assertions. A test that breaks on every refactor and passes through every real bug is negative value.
+- [ ] Tests would fail if the feature broke — `find_symbol` the implementation the most important test covers, `Read` it, and mentally invert one condition. If no assertion in the test would catch the inversion, the test is not proving what it claims to.
 - [ ] No test asserts only that a function was called — `search_code` for `toHaveBeenCalled()`/`toHaveBeenCalledWith()` with no accompanying assertion on a return value or side effect in the same test. Call-count assertions on a mock prove the test's own wiring, not the behaviour.
 - [ ] Assertions are specific — `search_code` for `toBeDefined()`, `toBeTruthy()`, `expect.anything()`, `assert.ok(` used where a specific expected value would fit. These pass on almost anything.
 - [ ] A test with many unlabelled assertions makes its own failure hard to diagnose — `search_code` test bodies for more than two or three bare assertion calls with no message argument and no single clear behaviour under test ("Assertion Roulette," a catalogued test smell). This is a maintainability finding, not a correctness one: the test still catches the bug, it just won't say which assertion caught it.
 
 ## Test doubles
 
-- [ ] Mocks target code the project owns, not a third-party SDK or framework class reached directly — `search_code` the test suite for a mock/stub/spy applied to an imported third-party package. A mock of a dependency you don't own encodes an assumption about that dependency's contract that nothing revalidates; the contract can drift after a version bump while the mock — and the test — keeps passing. ("Don't mock what you don't own" — Freeman & Pryce, *Growing Object-Oriented Software, Guided by Tests*; reinforced in Google's own testing guidance.)
+- [ ] Mocks target code the project owns, not a third-party SDK or framework class reached directly — `search_code` the test suite for a mock/stub/spy applied to an imported third-party package. A mock of a dependency you don't own encodes an assumption about that dependency's contract that nothing revalidates; the contract can drift after a version bump while the mock — and the test — keeps passing. ("Don't mock what you don't own" — Freeman & Pryce, *Growing Object-Oriented Software, Guided by Tests*; reinforced in Google's own testing guidance.) Rule out a mock of a narrow, stable stdlib-equivalent surface where drift risk is negligible.
 - [ ] Where the codebase already wraps a third-party dependency in its own adapter, confirm tests mock the adapter and not the raw import — `search_code` for both the adapter's own test double and a direct mock of the underlying package inside the same test file. A test still reaching past the adapter defeats the reason the adapter exists.
 
 ## What is not covered
@@ -47,7 +47,7 @@ Flaky-test root causes have a stable, well-studied taxonomy (Luo et al., FSE 201
 - [ ] No dependence on unseeded randomness — `search_code` for `Math.random(` (or the language equivalent) in tested logic and confirm the test either seeds it or mocks the call.
 - [ ] No fixed sleeps standing in for synchronisation — `search_code` test files for `sleep(`/`setTimeout(` used to wait for an async operation instead of awaiting it directly. That is a flake with a timer.
 - [ ] No dependence on a fixed port, or ports are allocated dynamically — `search_code` test setup for a literal port number (`.listen(3000)`). Fixed ports collide under parallel runs and in CI.
-- [ ] **Known flaky tests are tracked, not tolerated.** `search_code` for `test.skip`, `.only`, a retry/`flaky` annotation, or a comment naming a test as unreliable. A test that fails one run in ten is a real signal being discarded — report each one with its observed failure rate if the repo records it (a CI badge, a flake-tracking issue).
+- [ ] **Known flaky tests are tracked, not tolerated.** `search_code` for `test.skip`, `.only`, a retry/`flaky` annotation, or a comment naming a test as unreliable. A test that fails one run in ten is a real signal being discarded — report each one with its observed failure rate if the repo records it (a CI badge, a flake-tracking issue). Cross-reference `runtime.md`, which reports a committed `.only`/`fit`/`fdescribe` in its own right, independent of whether the run currently passes.
 
 ## Guard tests
 
@@ -64,6 +64,8 @@ Flaky-test root causes have a stable, well-studied taxonomy (Luo et al., FSE 201
 - Coverage percentage as measured by a coverage tool — this module infers gaps from what it reads, it does not instrument a run.
 - Mutation score — the more strongly-correlated measure of test quality; this module can note the absence of a mutation-testing tool in the project config, but cannot compute or estimate the score itself.
 - Whether a guard test that is structurally capable of failing has ever actually caught a real regression.
+
+Where `Runtime` is enabled, see `runtime.md`'s "What execution closes" for the pass/fail, flake-rate, and order-dependency items above, and its declared-coverage run (`runtime.md`'s run-steps section) for the coverage item, where a coverage script is declared.
 
 ## Severity guidance
 

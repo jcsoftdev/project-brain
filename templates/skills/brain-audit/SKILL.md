@@ -4,7 +4,7 @@ description: "Trigger: audit this project, comprehensive audit, full codebase au
 license: Apache-2.0
 metadata:
   author: jcsoftdev
-  version: "2.3"
+  version: "2.4"
   generator: project-brain
 ---
 
@@ -54,12 +54,14 @@ The single most likely failure of this audit is not missing a defect — it is r
 | Tier | Established by | Severity ceiling |
 |---|---|---|
 | `executed` | A command was run and its output read. Only `runtime.md` reaches this tier, only when the user enabled execution, and only with the command and its exit code recorded. | Critical |
+| `observed` | Established by a browser tool against a named URL. Only `browser.md` and the modules consuming its bundle reach this tier, only when the user enabled browser observation, and only with the URL, the tool that filled each role, and the artefact path with a line or timestamp recorded. A single run is lab data, never evidence about real users. | Critical |
 | `traced` | A structural proof from project-brain: `trace_path`, `find_callers`, `find_callees`, or `impact` showing the path exists, or provably does not. | Critical |
 | `read` | A cited `file:line` whose content was actually read, quoted or paraphrased faithfully. | High |
 | `inferred` | A pattern, a naming smell, or an absence with no probe run against it. | Medium |
 
 - **An `inferred` finding can never exceed `Medium`**, no matter how severe it would be if true. Its severity is a function of what you proved, not of what you fear. If it deserves `Critical`, go and prove it — then it is `traced` and it earns the severity.
 - A finding with no tier is not a finding. Drop it or promote it.
+- **A `Severity guidance` row above the ceiling of the check that feeds it must name the probe that reaches that ceiling.** A row awarding `Critical` to a situation whose only probe is `search_code` plus reading the hit is a contradiction: the check can reach `read`, and `read` stops at `High`. Either the check names the structural probe (`find_callers`, `trace_path`, `impact`) that proves the reach, or the row caps at `High`.
 - Confidence is separate from tier: tier says *what kind* of evidence, confidence says *how strong*. A `read` finding with one ambiguous line is `read` at 40%.
 
 **Falsification is part of the finding.** For every check that can produce a false positive, state what would refute it and confirm you ruled that out. `reachability.md` and `concurrency.md` already do this; the pattern is the standard, not their local quirk.
@@ -72,15 +74,17 @@ This matters more than it looks. Measured precision for frontier models on secur
 
 ## Execution
 
-**This audit reads. It does not run anything unless the user says so, in this session, for this run.**
+**This audit reads. It does not run anything and does not open a browser unless the user says so, in this session, for this run.**
 
-Every other module in this skill is static, and that is a promise the user relies on: pointing an audit at a repository must not be a way to execute its code. The `Runtime` module is the single exception, and it is off unless three conditions all hold.
+Every other module in this skill is static, and that is a promise the user relies on: pointing an audit at a repository must not be a way to execute its code or to drive a browser against it. The `Runtime` and `Browser` modules are the two exceptions, each behind its own consent. `Runtime` is off unless three conditions all hold.
 
 1. **The user enabled it explicitly.** Not a default, not inferred from a project type, not carried over from a previous run, and not implied by confirming the module set. `Runtime` is offered separately from every other module, after the rest are chosen, and the offer states plainly what running it means: the project's code will execute on this machine.
 2. **The project declares the command.** `Runtime` runs what the repository already tells its own contributors to run — a script in the manifest, a step in a CI workflow, a documented command. **It never invents one.** This is the constraint that makes execution defensible: the audit runs what the authors already run, and the audit's own judgement is not what decides that a command is safe.
 3. **The command is not destructive.** A declared script whose name or body deploys, publishes, migrates, seeds, resets, or deletes is never run on inference. If a finding genuinely needs one, name it, say why, and let the user run it themselves.
 
-Refusing execution is always a valid answer and costs the audit only the `executed` tier. Every module already declares what it cannot see from source in its `Out of static reach` section; with execution off, those items are reported as Coverage Gaps exactly as they were before. **The static audit is complete without this module** — `Runtime` closes gaps, it does not fill holes.
+`Browser` is offered after `Runtime`, separately again, and is off unless three conditions of its own hold: a UI or HTML-serving entry point was detected, the user enabled browser observation explicitly for this run, and a target URL exists — supplied by the user, or a declared `dev`/`start`/`preview` script the user has also allowed `Runtime` to start. The offer names the tool filling each role, states whether any role runs inside the user's real signed-in browser (never by default — see `browser.md`), lists the flows it will walk, and prints the total number of passes, so the user consents to a count, not to "a run". Flows are read-only unless the user names a side-effecting one, exactly as `Runtime` treats `deploy`/`migrate`/`seed`.
+
+Refusing execution or observation is always a valid answer and costs the audit only the `executed` or `observed` tier. Every module already declares what it cannot see from source in its `Out of static reach` section; with execution off, those items are reported as Coverage Gaps exactly as they were before. **The static audit is complete without these modules** — `Runtime` and `Browser` close gaps, they do not fill holes.
 
 A finding at `executed` tier records the exact command, its exit code, and the output line that supports it. Without those three it is not `executed`; it is an `inferred` finding wearing a tier that lets it reach Critical, which is worse than an honest `inferred`. And a green run proves only that the project's own checks pass, which is as strong as those checks are — `tooling-baseline.md` is what measures that, and the two modules are read together or neither is worth much.
 
@@ -112,7 +116,7 @@ The refuter is told to destroy the finding, and told that destruction is expensi
 
 A kill requires evidence at the tier the finding claims, or higher. **Failing to find support for a finding is not refuting it** — that is `unrefuted`, and it is a correct and complete answer. Every verdict, kills and survivals alike, lists the probes that were run; a verdict with no probe list is void and the finding survives. This is the clean-module rule from the Evidence Contract applied one level up: not looking and looking-and-finding-nothing produce the same verdict, and only the probe list separates them.
 
-The refuter cannot execute anything. If a claim can only be settled by running the code, the verdict is `undetermined`.
+The refuter cannot execute anything and does not open a browser, for the same reason. If a claim can only be settled by running the code or by re-observing it, the verdict is `undetermined`. An `observed` finding is killed by `MISQUOTE` against the cited artefact line or by `INTENDED`; nothing else reaches it.
 
 ### Context asymmetry
 
@@ -195,6 +199,7 @@ The `Reference` column is the exact filename under `references/` — load that f
 | | Prompt/Spec Gap | `prompt-spec-gap.md` |
 | Linter, formatter, type-checker, test-runner, or scanner config present **or conspicuously absent** | Tooling Baseline | `tooling-baseline.md` |
 | **User enabled execution** — never proposed by detection alone, see `## Execution` | Runtime | `runtime.md` |
+| **User enabled browser observation, a browser tool is present in the session, and a target URL exists** — never proposed by detection alone, see `## Execution` | Browser | `browser.md` |
 | Project is a git repository | Repo History | `repo-history.md` |
 | Statically or gradually typed language | Type Safety | `type-safety.md` |
 | Server framework or API routes present | Backend | `backend.md` |
@@ -260,6 +265,7 @@ The absence gates (`Observability`, `Testing`, `Design System`, `Type Safety`, `
 | Locale files / translation keys | `search_code` for a locales directory or the translation function |
 | OpenAPI / GraphQL / protobuf / shared types | `search_code` for `openapi`, `.graphql`, `.proto`, or a shared-types package |
 | Hot path or measurable workload | `repo_map`'s top-ranked symbols, plus any loop over unbounded input |
+| Browser tool present in the session | probe the session's tool names for `chrome-devtools`, `playwright`, or `claude-in-chrome` tools — nothing is installed; absence renders `Browser` as `not applicable (no browser tool in session)`. This is recorded even when observation stays off, so the offer can name the tool it would use |
 | Runnable commands the project declares | manifest scripts, CI workflow steps, and documented commands in the README. This establishes what `Runtime` *could* run and is worth recording even when execution stays off — a project that declares none cannot be verified by running it, which is itself worth saying |
 | Tooling configuration | `search_code` for the tool config filenames of the detected stack — linter, formatter, type checker, test runner, pre-commit framework, scanner. **Absence fires the gate**: a project whose tooling checks nothing is one where every defect this audit finds was invisible to automation, and that changes which other modules are worth running |
 | Git repository | a `.git` directory — the module reads history, so a shallow clone is `undetermined`, not `not applicable` |
@@ -282,6 +288,7 @@ The absence gates (`Observability`, `Testing`, `Design System`, `Type Safety`, `
 2. Apply gates → proposed module set with per-module rationale.
 3. **Present the proposal and wait for confirmation.** Report the token implication of the chosen set.
 4. **Offer `Runtime` separately, after the module set is settled, and wait.** State that enabling it executes the project's code on this machine, list the declared commands it would run, and name the ones it will not touch. Declining is normal and costs only the `executed` tier. Never fold this into step 3 — a user confirming twenty static modules has not consented to run anything.
+   - **4b. Offer `Browser` separately, after `Runtime`, and wait.** Only when a UI or HTML entry point was detected and a browser tool is present. Name the target URL and where it came from, the tool filling the walker and measurer roles, whether any role runs in the user's real browser session, the candidate flows (up to five, ranked by product centrality), and the total pass count. Wait for the flow list to be confirmed before any browser opens. Declining costs only the `observed` tier.
 5. For each confirmed module, read only its `references/<module>.md`, then verify against real code — project-brain first, `Read` only to confirm lines it points at. **Run the probe each check names.** A check whose probe was not run produces no finding, not an `inferred` one.
 6. Collect findings using the schema above, each with its evidence tier and its ruled-out alternative. Leave `Refutation` empty; step 8 fills it.
 7. **Present the Refutation Manifest and wait** — findings collected, how many are eligible at Medium or above, how many are left raw below threshold, how many refuters that means, and the resolved mode with model ids where they are known. Answers are `all`, `critical+high only`, or `none`. A user who replied `refute all` at step 3 has pre-authorised it; print the manifest as a notice and continue. `none` stamps every finding `declined by user` — it does not silently skip the stage.
@@ -291,11 +298,13 @@ The absence gates (`Observability`, `Testing`, `Design System`, `Type Safety`, `
 
 ## Output Contract
 
-In this order: Executive Summary, Project Discovery, Architecture Summary, Feature Map, Modules Run (and why each was skipped), Findings by Severity, Wiring & Reachability Report, Design System Health (only when `Design System` ran), Coverage Gaps, Refutation Ledger, Technical Debt, Security Risks, Missing Features, Architectural Risks, Recommendations, Quick Wins, Long-term Improvements.
+In this order: Executive Summary, Project Discovery, Architecture Summary, Feature Map, Modules Run (and why each was skipped), Findings by Severity, Wiring & Reachability Report, Browser Observation Report (only when `Browser` ran), Design System Health (only when `Design System` ran), Coverage Gaps, Refutation Ledger, Technical Debt, Security Risks, Missing Features, Architectural Risks, Recommendations, Quick Wins, Long-term Improvements.
 
-Findings are grouped by severity, and within a severity, ordered by evidence tier — `traced` before `read` before `inferred`, with `undetermined` last inside each tier. A reader who stops after the first three findings should have stopped at the three best-proven ones, and the three that survived the hardest attempt to destroy them.
+Findings are grouped by severity, and within a severity, ordered by evidence tier — `executed`, `observed`, and `traced` first, then `read`, then `inferred`, with `undetermined` last inside each tier. A reader who stops after the first three findings should have stopped at the three best-proven ones, and the three that survived the hardest attempt to destroy them.
 
 The Executive Summary carries one line naming the refutation mode, both model ids where they are known, how many findings were refuted, and how many were left raw below threshold. It qualifies every number underneath it, so it goes at the top and not in a footnote. In `self-review` mode it says plainly that no adversarial stage ran.
+
+**Browser Observation Report** is one table per flow: the steps walked, the artefacts produced with their paths, the vitals with median and range and the `cold, n=3` or degraded label, the tool that filled each role with its version where exposed, and the steps the measurer could not replay. It says which flows ran in an isolated context and which, if any, ran in the user's real session.
 
 **Refutation Ledger** is the findings that were killed — one line each, and the header states they are not findings. It exists so the user can audit the refuter: a ledger of thin grounds means the kill stage is over-killing, and they can override it. Coverage Gaps is what the audit could not reach; the Ledger is what it reached and dismissed. Adjacent for a reason.
 

@@ -12,7 +12,7 @@ Does the code still serve the goal it was written for? Codebases drift: the goal
 
 - [ ] The architecture serves the stated goal. `get_architecture` for the dependency list: a local-first tool with a hard cloud SDK dependency, a "simple" tool with a plugin system, a "fast" tool with a synchronous network call on the hot path — `find_callers` the hot-path function to confirm it is actually on a called-often path before flagging it. Each confirmed mismatch is a goal/structure defect.
 - [ ] The highest-PageRank symbols from `repo_map` sit on the goal's critical path. If the centre of the call graph is infrastructure rather than the core job, the project may have drifted into building a framework.
-- [ ] Constraints implied by the goal are actually enforced. "Offline-capable" ⇒ `search_code` the network-client import and check each call site has a degraded/cached path. "Zero-config" ⇒ `search_code` required config reads and count the keys with no default.
+- [ ] Constraints implied by the goal are actually enforced. "Offline-capable" — owned by `failure.md` (`search_code` for a fallback branch on an optional dependency's failure: cached data, a degraded path); reuse its finding when it ran, and add a goal-specific finding here only where the goal claims something that check didn't cover. "Zero-config" ⇒ `search_code` required config reads and count the keys with no default.
 
 ## Goal vs. scope
 

@@ -9,7 +9,7 @@ Model IDs, token limits, and pricing drift faster than this file can be kept cur
 ## Prompt construction
 
 - [ ] Prompts live in one place, not scattered as inline string literals across call sites. `search_code` a distinctive prompt phrase to find the duplicates; more than one call site building the same prompt shape is the finding.
-- [ ] User input is clearly delimited from instructions. `find_callees` on the prompt-construction function for a raw string concatenation of a user-supplied variable directly into the instruction text, with no delimiter — a tag, a separate message role, a fenced block. Concatenation with no delimiter is prompt injection — cross-reference `Abuse`.
+- [ ] User input is clearly delimited from instructions. `find_callees` on the prompt-construction function for a raw string concatenation of a user-supplied variable directly into the instruction text, with no delimiter — a tag, a separate message role, a fenced block. Concatenation with no delimiter is prompt injection — cross-reference `Abuse`. Rule out: input drawn from a closed, validated set (an enum, a whitelist, a dropdown selection) is not the finding even when concatenated raw — confirm the input is free text before flagging.
 - [ ] Input length is bounded before it reaches the model. `find_callees` on the prompt-construction function for a truncation/chunking call between the raw input and the model call; its absence is both an injection surface and an unbounded bill.
 - [ ] Prompts are versioned or at least dated. `search_code` for a version/date marker near the prompt constant or file; its absence means a behaviour change can never be correlated with which prompt produced it.
 
@@ -29,7 +29,7 @@ Model IDs, token limits, and pricing drift faster than this file can be kept cur
 
 ## Failure and degradation
 
-- [ ] Every model call has a timeout and a bounded retry with backoff. `find_symbol` the client construction/call site for a timeout option and a retry wrapper; either missing is `High`.
+- [ ] Every model call has a timeout and a bounded, backed-off retry — owned by `failure.md` (`Read` the client construction/call site for a `timeout` option or `AbortSignal.timeout`, and a retry wrapper's backoff config); reuse its finding, do not re-report. A model call is an external call like any other for this angle.
 - [ ] Rate limits and quota errors are distinguished from real failures and handled differently. `find_callees` on the error handler for a status-code or error-type branch specific to rate-limit/quota, versus a single generic catch-all.
 - [ ] There is a degraded path when the provider is unavailable — a cheaper model, a cached answer, or an honest error. `find_callees` on the call site's catch block for a fallback path; a bare rethrow with nothing downstream to handle it is silent failure, the worst option.
 - [ ] Streaming responses handle mid-stream disconnection without leaving partial state committed. `find_callees` on the stream consumer for a cleanup/rollback path on stream error, not only on stream completion.
@@ -44,7 +44,7 @@ Model IDs, token limits, and pricing drift faster than this file can be kept cur
 - Actual model behaviour on adversarial input — whether a delimiter or guard genuinely resists injection can only be shown by running attacks against the live model.
 - Real token counts and cost per call — these depend on the provider's tokenizer and current pricing, neither visible from source.
 - Whether the declared timeout/retry values are well-tuned for the provider's real latency distribution.
-- Actual output quality or hallucination rate — this requires running the eval suite, not reading it.
+- Actual output quality or hallucination rate — this requires running the eval suite, not reading it — closed by `runtime.md` when execution is enabled and the project's declared test command includes the golden/eval suite named under Evaluation above.
 - Provider-side rate limits and quota — these live in the provider account, not the repository.
 
 ## Severity guidance
@@ -53,7 +53,6 @@ Model IDs, token limits, and pricing drift faster than this file can be kept cur
 |---|---|
 | Model output reaching `eval`, a shell, a query, or a path | Critical |
 | User input concatenated into an instruction block unbounded | High |
-| No timeout on a model call | High |
 | No validation of structured output before use | High |
 | No degraded path when the provider is down | Medium |
 | Model identifier hardcoded at multiple call sites | Medium |

@@ -9,7 +9,7 @@ Is every data access scoped to the right tenant? Gate: tenant, organisation, or 
 - [ ] Which isolation model this system uses — silo (each tenant gets its own database/schema), pool (tenants share tables, scoped by a `tenant_id`-shaped column), or bridge (a mix by tier, e.g. pooled web tier over siloed storage). `get_architecture` plus a schema read: one database/schema per tenant is silo; shared tables with a tenant column are pool. This isn't a finding by itself, but it sets what the rest of this module should weight most: a pool-model system has zero isolation beyond correct scoping code, so every check below matters more there than in a silo-model system where a scoping bug is contained to one tenant's own database.
 - [ ] Every table's tenant-scoping status — `search_code` the schema/migrations for a `tenant_id`/`org_id`/`workspace_id`-shaped column, and list which tables have one and which do not. For tables without one, confirm they are genuinely global (reference/lookup data, system config) rather than tenant data that was never scoped — a tenant-owned table with no tenant column cannot be scoped by any mechanism below, no matter how careful the query layer is.
 - [ ] The parameter's shape is consistent — `search_code` for `tenant_id`, `org_id`, `organizationId`, `workspace_id`, and similar across modules; one identifier type and name used everywhere, not `tenant_id` in one module and `organizationId` in another with a translation layer that could drop it.
-- [ ] Unique constraints scoped correctly — `find_symbol` each unique index on a tenant-owned table and check whether the tenant column is part of the key. A global unique constraint on `email` (rather than `(tenant_id, email)`) either blocks a legitimate second tenant from using an address already in use elsewhere, or — if enforced only in application code — is exactly the kind of check the constraint should be enforcing instead.
+- [ ] Unique constraints scoped correctly — `find_symbol` each unique index on a tenant-owned table and check whether the tenant column is part of the key. A global unique constraint on `email` (rather than `(tenant_id, email)`) either blocks a legitimate second tenant from using an address already in use elsewhere, or — if enforced only in application code — is exactly the kind of check the constraint should be enforcing instead. Rule out a deliberately tenant-agnostic identity table (a user account that can belong to more than one tenant) before flagging.
 
 ## Query-level scoping
 
@@ -25,11 +25,11 @@ Is every data access scoped to the right tenant? Gate: tenant, organisation, or 
 - [ ] Background jobs and scheduled work — `search_code` the job/worker entry points and check whether each one receives an explicit tenant identifier or iterates tenants explicitly, versus relying on the same request-scoped context used by the web layer, which does not exist in a job runner. This is where tenant scoping is most often silently absent, because the code was written and tested only against the request path.
 - [ ] Admin endpoints and internal tooling — `find_symbol` the admin route handlers and read whether tenant selection is an explicit parameter the operator supplies, or inherited from the same scoping code path used for a limited tenant-user, which may not generalise the way an admin tool needs it to.
 - [ ] Data exports, report generation, and migrations — `find_callees` from each to confirm tenant filtering happens explicitly rather than being assumed from context that will not be present when the script runs standalone.
-- [ ] Webhook and queue-consumer handlers that carry a tenant identifier in the payload — `find_symbol` the handler and confirm it re-derives the tenant from an authenticated/signed source (the subscription record, the API key that registered the webhook) rather than trusting a tenant ID the payload itself supplies, which a forged or misrouted event could set to any value.
+- [ ] Webhook and queue-consumer handlers that carry a tenant identifier in the payload — `find_symbol` the handler and confirm it re-derives the tenant from an authenticated/signed source (the subscription record, the API key that registered the webhook) rather than trusting a tenant ID the payload itself supplies, which a forged or misrouted event could set to any value. This is `High` at `read`; `trace_path` from the webhook/queue handler to the query function that consumes the tenant value, then `Read` the handler to confirm the payload's tenant field is what the traced path carries, promotes it to `traced`, and `Critical`.
 
 ## Identifiers
 
-- [ ] Sequential or otherwise guessable IDs (auto-increment integers) used as externally-exposed resource identifiers — combined with any authorisation gap, this permits enumeration across tenants even where scoping is otherwise correct, because the ID itself leaks the existence and ordering of other tenants' records. Cross-reference `abuse.md` for the enumeration/rate-limiting angle; report the identifier choice here.
+- [ ] Sequential or otherwise guessable IDs (auto-increment integers) used as externally-exposed resource identifiers — `search_code` the API response shapes and URL path parameters for a numeric, sequential ID field. Combined with any authorisation gap, this permits enumeration across tenants even where scoping is otherwise correct, because the ID itself leaks the existence and ordering of other tenants' records. Cross-reference `abuse.md` for the enumeration/rate-limiting angle; report the identifier choice here.
 
 ## Caches
 
@@ -48,19 +48,28 @@ Is every data access scoped to the right tenant? Gate: tenant, organisation, or 
 
 ## Out of static reach
 
-- Whether a row-level security policy actually evaluates as expected against live data at runtime — the migration declaring `ENABLE`/`FORCE ROW LEVEL SECURITY` and the connection role's privileges are readable from source (see Query-level scoping above); whether the policy predicate itself is logically correct against real rows is not.
+- Whether a row-level security policy actually evaluates as expected against live data at runtime — the migration declaring `ENABLE`/`FORCE ROW LEVEL SECURITY` and the connection role's privileges are readable from source (see Query-level scoping above); whether the policy predicate itself is logically correct against real rows is not — closed by `runtime.md` when execution is enabled (running this module's own declared cross-tenant-isolation test).
 - Real cache collision behaviour under production key distributions.
 - Whether a background job's tenant loop actually covers every active tenant in practice.
 - Storage bucket/IAM policy configuration outside the repository.
+
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number. Both rows need two authenticated tenant sessions the user provided credentials for, walked against the same endpoints; `network.jsonl` captures response bodies only on 4xx/5xx, so a 200 carrying the wrong tenant's data is **not** visible here — only status, size, headers and timing are diffed.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| `network.jsonl` | Whether a tenant-scoped endpoint answers a second tenant's session with the first tenant's status, size or cache headers — a 200 with identical size where a 403/404 or a different payload size was expected, or a shared `ETag`/`Cache-Control` across tenants | High |
+| `network.jsonl` | Whether a cached response actually crosses tenants on the flows walked — same `ETag`, same `Age`/`X-Cache` hit, same size for two tenant sessions requesting tenant-scoped data | High |
 
 ## Severity guidance
 
 | Situation | Severity |
 |---|---|
-| Cache key for tenant data with no tenant component | Critical |
 | Raw SQL or bypassed repository layer with no tenant filter on a tenant-scoped table | Critical |
-| Webhook/queue payload's self-declared tenant ID trusted without re-derivation | Critical |
-| RLS enabled but not `FORCE`d, or app connects via a role with `BYPASSRLS`/superuser | Critical |
+| Webhook/queue payload's self-declared tenant ID trusted without re-derivation (traced) | Critical |
+| Cache key for tenant data with no tenant component | High |
+| RLS enabled but not `FORCE`d, or app connects via a role with `BYPASSRLS`/superuser | High |
 | Background job or scheduled work with no tenant scoping at all | High |
 | Tenant identifier sourced from a client-supplied value instead of the authenticated session | High |
 | Tenant-scoped table with no tenant column at all | High |

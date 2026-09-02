@@ -16,10 +16,10 @@ Trace each flow end to end with `trace_path` from the entry point (button, comma
 
 For every flow the user can start, confirm it can end:
 
-- [ ] **Submit into the void** — `trace_path` from the request-firing call to any consumer of its response or promise. No path found is the finding.
+- [ ] **Submit into the void** — `trace_path` from the request-firing call to any consumer of its response or promise. No path found is the finding. Rule out a request whose own documentation or naming marks it as intentionally fire-and-forget (an analytics beacon, a best-effort "mark as read" ping) before flagging.
 - [ ] **Success with no feedback** — `find_callees` on the success branch (`.then`, `onSuccess`); no call to a toast, notification, or state-update function after the write means success is silent. The user retries; now you have a duplicate-write bug.
 - [ ] **Unhandled error path** — `search_code` for `catch {}`, `.catch(() => {})`, and a `catch` block that only logs — an error state the UI cannot render.
-- [ ] **No cancel / no back** — read the multi-step flow's component tree for a cancel or back handler; its absence alongside a wizard/stepper component is the finding.
+- [ ] **No cancel / no back** — `Read` the multi-step flow's component tree for a cancel or back handler; its absence alongside a wizard/stepper component is the finding.
 - [ ] **No timeout** — `search_code` the request call (`fetch(`, the HTTP client instance) and confirm a timeout or abort-controller is attached. None found means the UI can hang in loading indefinitely.
 - [ ] **Missing confirmation on destructive actions** — `search_code` the delete/reset/overwrite handler, then `find_callees` to confirm a confirmation-dialog component is invoked *before* the mutating call, not merely rendered somewhere else in the tree.
 
@@ -32,7 +32,7 @@ Each of these is a pair where only one half exists. Prove the counterpart with t
 | Backend endpoint | No UI or client calls it | `search_code` the route path in client code; `find_callers` on the handler | Medium |
 | UI component | No backend to serve it | `find_callees` on the component's submit/fetch call; `search_code` the target path server-side | High |
 | Migration creates a column | No code ever reads or writes it | `search_code` the column name across query and model code | Low → Medium |
-| Code reads a column | No migration creates it | `search_code` the column name across every migration file | Critical |
+| Code reads a column | No migration creates it | `search_code` the column name across every migration file; `find_callers` on the reading code to confirm it sits on a live, reachable path | High → Critical (traced) |
 | Event emitted | No listener subscribed | `find_callers` on the emit call; `search_code` the event name in subscription code | Medium |
 | Listener subscribed | No emitter | `search_code` the event name for any `.emit(`/`dispatch(` call site | Low |
 | Job enqueued | No worker consumes that queue | `search_code` the queue name in worker registration | High |
@@ -47,7 +47,7 @@ Every view that fetches data needs three states beyond the happy path. Missing a
 - [ ] **Loading** — `search_code` the fetch/query hook usage (`useQuery`, `isLoading`) in the view and read the render for a loading branch; its absence means the screen sits blank while the request is in flight.
 - [ ] **Empty** — `search_code` the render of the list/collection and confirm a zero-length branch exists before the item map; a bare `.map()` with no guard renders a broken-looking blank list or crashes on `data[0]`.
 - [ ] **Error** — `search_code` the same hook's error state (`isError`, `error`) and confirm it renders an actionable message with a retry where retrying is meaningful, not just a console log.
-- [ ] The three states are mutually exclusive and reachable — read the conditional rendering order; overlapping conditions (an `isLoading` check that doesn't exclude `isEmpty`) let two states render at once.
+- [ ] The three states are mutually exclusive and reachable — `Read` the conditional rendering order; overlapping conditions (an `isLoading` check that doesn't exclude `isEmpty`) let two states render at once.
 
 ## Cross-cutting
 
@@ -64,6 +64,16 @@ Every view that fetches data needs three states beyond the happy path. Missing a
 - Session-expiry handling that depends on server-side token lifetimes not visible from source.
 - Whether an event with no in-repo listener is consumed by a downstream service, browser extension, or webhook subscriber outside this repo.
 
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| `steps.md` | Whether the loading/error UI actually renders correctly at runtime, versus merely proving the branch exists in source | High |
+| `network.jsonl` | Timing-dependent race between an optimistic update and the server's real response — bounded to the single observed timing, not eliminated as a possibility | Medium |
+| `steps.md` | Orphan control confirmed: a control clicked during a walked flow produced no request and no DOM/state change | High |
+
 ## Reporting
 
 Report each broken flow as a path, not a symptom: `entry point (file:line) → … → dead end (file:line)`. State which step is missing and what the user experiences when they hit it. That is the difference between "this looks unfinished" and a finding someone can fix.
@@ -72,7 +82,9 @@ Report each broken flow as a path, not a symptom: `entry point (file:line) → �
 
 | Situation | Severity |
 |---|---|
-| Client calls an endpoint that does not exist, or code reads a column no migration creates | Critical |
+| Client calls an endpoint that does not exist, established by `search_code` for the route path server-side | High |
+| Code reads a column no migration creates, `find_callers`-traced to a live, reachable call site | Critical |
+| Code reads a column no migration creates, established only by the migration-file `search_code` | High |
 | UI component with no backend to serve it | High |
 | Webhook receiver never registered with the provider | High |
 | Job enqueued with no worker consuming the queue | High |

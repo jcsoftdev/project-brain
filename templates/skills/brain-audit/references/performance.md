@@ -20,7 +20,7 @@ A performance finding with no measurement behind it is `inferred` — a hypothes
 
 ## I/O
 
-- [ ] Sequential awaits over independent operations: read the function body for consecutive `await` calls not wrapped in `Promise.all`/`allSettled`. Rule out a genuine data dependency — the second call needs the first's result — before flagging; if it does, this is correct code, not a defect.
+- [ ] Sequential awaits over independent operations: `Read` the function body for consecutive `await` calls not wrapped in `Promise.all`/`allSettled`. Rule out a genuine data dependency — the second call needs the first's result — before flagging; if it does, this is correct code, not a defect.
 - [ ] A query, file read, or network call inside a loop: `find_callees` on the loop body for a query/fetch/`readFile` call. Cross-reference `Database`'s N+1 check.
 - [ ] Whole files or whole tables loaded to use part of them: `search_code` for `SELECT *` with no `LIMIT`/`WHERE` narrowing the row count, or a full-file read immediately followed by an in-memory filter.
 - [ ] Missing pagination, streaming, or batching wherever the input can grow: `search_code` a route handler's query call for the absence of `LIMIT`/`OFFSET`/a cursor parameter.
@@ -35,9 +35,9 @@ A performance finding with no measurement behind it is `inferred` — a hypothes
 
 ## Caching
 
-- [ ] Every cache has a stated key, a stated lifetime, and an invalidation path: `search_code` the cache import (`lru-cache`, `node-cache`, a hand-rolled `Map`), then read the set/get sites for a TTL and an explicit invalidation call. A cache with no invalidation is a correctness bug wearing a performance costume.
+- [ ] Every cache has a stated key, a stated lifetime, and an invalidation path: `search_code` the cache import (`lru-cache`, `node-cache`, a hand-rolled `Map`), then read the set/get sites for a TTL and an explicit invalidation call. A cache with no invalidation is a correctness bug wearing a performance costume. Rule out a content-addressed key (a hash of the cached value or an immutable source) — invalidation is meaningless when the key already changes whenever the value would.
 - [ ] Cache keys include everything the value depends on: `find_symbol` the cached function's signature, then read the key expression — a parameter missing from the key means two distinct inputs collide on one cache entry and one of them gets served the wrong answer.
-- [ ] Cached values that are cheap to compute: read the wrapped function — a single arithmetic expression or constant lookup means the cache costs more in complexity than it saves.
+- [ ] Cached values that are cheap to compute: `Read` the wrapped function — a single arithmetic expression or constant lookup means the cache costs more in complexity than it saves.
 - [ ] Nothing caches a mutable object by reference and lets a caller mutate it: `find_callers` on the cache getter, then check whether any caller mutates the returned object in place.
 
 ## Startup
@@ -47,12 +47,12 @@ A performance finding with no measurement behind it is `inferred` — a hypothes
 
 ## Frontend rendering (Core Web Vitals)
 
-Applies only when the project serves HTML to a browser — cross-reference the `Web Metadata` gate. Skip this section entirely, and say so, for a pure API/backend/CLI project. The current Core Web Vitals (Google, stable since March 2024) are LCP, INP, and CLS, each scored at the 75th percentile of real-user field data: LCP good ≤2.5s/poor >4.0s, INP good ≤200ms/poor >500ms, CLS good ≤0.1/poor >0.25. None of these are measurable statically — every check below is code shape, not a score.
+Applies only when the project serves HTML to a browser — cross-reference the `Web Metadata` gate. Skip this section entirely, and say so, for a pure API/backend/CLI project. The current Core Web Vitals (Google, stable since March 2024) are LCP, INP, and CLS, each scored at the 75th percentile of real-user field data: LCP good ≤2.5s/poor >4.0s, INP good ≤200ms/poor >500ms, CLS good ≤0.1/poor >0.25. None of these are measurable statically — every check below is code shape, not a score. With `browser.md` enabled, `vitals.md` supplies a lab score per flow; see What browser observation closes.
 
 - [ ] The LCP candidate is not blocked behind avoidable work: `search_code` for the hero image, video poster, or headline text that only renders after a client-side data fetch, with no SSR/prerender/static fallback ahead of it.
 - [ ] The LCP candidate is sized and prioritised: `search_code` for that same element missing explicit `width`/`height` (or `aspect-ratio`), carrying `loading="lazy"` (which deprioritises exactly the element that must not be lazy), or lacking `fetchpriority="high"`/a preload hint.
 - [ ] CLS-causing elements reserve their space: `search_code` for `<img>`/`<iframe>`/ad or embed slots with no `width`/`height`/`aspect-ratio`, and for content injected above existing content (a banner, a cookie notice, an async-loaded block) with no reserved slot.
-- [ ] Web fonts do not cause layout shift on load: read the `@font-face`/font-loading config for `font-display` — its absence, or `font-display: block`, causes an invisible-text or swap-triggered reflow; `swap`/`optional` paired with a size-matched fallback is the fix already in place if present.
+- [ ] Web fonts do not cause layout shift on load: `Read` the `@font-face`/font-loading config for `font-display` — its absence, or `font-display: block`, causes an invisible-text or swap-triggered reflow; `swap`/`optional` paired with a size-matched fallback is the fix already in place if present.
 - [ ] INP-risking work runs inside interaction handlers: reuse this module's own hot-path technique — `search_code` a click/input/keydown/submit handler for synchronous work that belongs off the main thread (a large synchronous loop, parsing a large payload, unbatched layout reads/writes).
 - [ ] The project actually measures these in the field, not only assumes them from code shape: `search_code` for the `web-vitals` library import (or an equivalent RUM SDK reporting `LCP`/`INP`/`CLS`) wired to somewhere the numbers leave the browser (an analytics event, a beacon endpoint). Its absence means every check above is `inferred` against code shape only, with no field measurement anywhere — say so under Coverage Gaps rather than treating the absence itself as a performance defect.
 - [ ] The codebase is not still optimising for a retired metric: `search_code` for `FID`/`first-input` tracked or referenced with no accompanying `INP`. FID (First Input Delay) was retired as a Core Web Vital on 12 March 2024, replaced by INP — code or a dashboard still keyed on FID alone is measuring a metric Google no longer scores.
@@ -64,7 +64,17 @@ Applies only when the project serves HTML to a browser — cross-reference the `
 - The crossover input size at which an O(n²) block becomes user-visible, on the actual hardware and dataset.
 - GC pause behaviour and allocator churn under sustained load.
 - Whether a cache actually reduces latency in production, versus merely existing in the code.
-- Cold-start time for serverless or lambda-style deployments.
+- Cold-start time for serverless or lambda-style deployments — `browser.md`'s `vitals.md` TTFB on the first of its three cold-context runs *may* include a serverless cold start, but the reported median does not isolate it from ordinary first-request variance. The gap stays open; only that single-sample hint is available, and it is cited at `inferred`, not `traced`.
+
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number. Every vitals-based row below is lab data, one machine; never a claim about real-user p75.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| `vitals.md` | Lab LCP/CLS/INP score per flow against Google's thresholds — lab data, one machine; never a claim about real-user p75 | High |
+| `trace.json`/`insights.md` | Long tasks and render-blocking requests actually present in a captured trace | High |
+| `network.jsonl` | Real request waterfall (method, URL, status, size, duration) for the flow | Medium |
 
 ## Severity guidance
 

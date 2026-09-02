@@ -27,15 +27,15 @@ Runtime environment and its definition. Gate: CI/CD, a Dockerfile, or IaC was de
 
 ## Network and access
 
-- [ ] Nothing is publicly reachable that does not need to be. `search_code` IaC or compose files for datastore ports (`5432:5432`, `6379:6379`, `27017:27017`) bound to a public interface rather than `127.0.0.1:` or a private subnet — a datastore port with no interface prefix in a compose file defaults to all interfaces.
+- [ ] Nothing is publicly reachable that does not need to be. `search_code` IaC or compose files for datastore ports (`5432:5432`, `6379:6379`, `27017:27017`) bound to a public interface rather than `127.0.0.1:` or a private subnet — a datastore port with no interface prefix in a compose file defaults to all interfaces. Rule out a compose file scoped to local development only (no corresponding production deploy target in the same file) before treating an open port binding as a production exposure.
 - [ ] Ingress rules are specific rather than open ranges. `search_code` the IaC for `0.0.0.0/0`.
 - [ ] Service-to-service access is least-privilege. Read the IAM role or policy document attached to each service in IaC — a wildcard `*` action or `*` resource on a role that only needs to read one bucket is the finding.
 - [ ] Credentials are workload identities where available, rather than long-lived static keys. `search_code` the deployment definition for static key literals or key references (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) versus an instance-profile or workload-identity binding — presence of the former where the platform offers the latter is the finding.
 
 ## Durability
 
-- [ ] Backups exist for every stateful resource the inventory names. `search_code` IaC or the managed-service config for a backup/snapshot-schedule attribute on each one — a resource with no such attribute has no backup, full stop.
-- [ ] Restore time and acceptable data loss are stated somewhere findable — a runbook, a README, an ADR. **Whether a restore has actually been performed and succeeded is not establishable from source**; report the runbook's existence (or absence) as the static half of this check and push the "actually tested" half to Out of static reach.
+- [ ] Backups exist for every stateful resource the inventory names. `search_code` IaC or the managed-service config for a backup/snapshot-schedule attribute on each one — a resource with no such attribute has no backup, full stop. Rule out a managed offering whose provider enables automated backups by default outside any IaC-declared attribute; where the resource is a managed service with no attribute either way, report `undetermined` rather than a confirmed gap.
+- [ ] Restore time and acceptable data loss are stated somewhere findable — a runbook, a README, an ADR. `search_code` the repo for a runbook, README, or ADR naming a restore-time objective or acceptable data loss. **Whether a restore has actually been performed and succeeded is not establishable from source**; report the runbook's existence (or absence) as the static half of this check and push the "actually tested" half to Out of static reach.
 - [ ] Deletion protection on resources whose loss would be unrecoverable. `search_code` IaC for `deletion_protection` / `prevent_destroy` on the datastore and storage resources the inventory lists.
 - [ ] Stateful data is not on ephemeral storage. Read the container or pod spec for the path the application writes state to — mounted on `emptyDir` or no volume at all is the finding; a persistent volume claim or managed volume is the pass.
 
@@ -58,10 +58,10 @@ Runtime environment and its definition. Gate: CI/CD, a Dockerfile, or IaC was de
 
 | Situation | Severity |
 |---|---|
-| Datastore or admin port publicly reachable | Critical |
-| Long-lived static credentials in the definition | Critical |
+| Datastore or admin port publicly reachable | High |
+| Long-lived static credentials in the definition | High |
 | No backup for a stateful resource | High |
-| Backup exists but restore never tested | High |
+| No runbook or stated restore procedure found | Medium |
 | Stateful data on ephemeral storage | High |
 | Ingress open to `0.0.0.0/0` beyond a public entry point | High |
 | Application env var not declared in the deployment | High |

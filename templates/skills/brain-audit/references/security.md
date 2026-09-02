@@ -24,10 +24,10 @@ Enumerate the sinks, then check what reaches each one. For every hit, the rule-o
 ASVS 5.0 §V6 (Authentication) and §V7 (Session Management) cover this section.
 
 - [ ] Credential comparison is constant-time. `search_code` for `===`, `==`, or `.equals(` comparing a token, secret, or hash — read the call site; a comparison against a non-secret value (a public id, a CSRF token already bound to session) does not qualify.
-- [ ] Passwords are hashed with a slow, salted algorithm. `find_symbol`/`search_code` the registration or password-set handler and read what it calls before persisting — `bcrypt`/`argon2`/`scrypt` is correct, `md5`/`sha256`/plain storage is the finding.
+- [ ] Passwords are hashed with a slow, salted algorithm. `find_symbol`/`search_code` the registration or password-set handler and read what it calls before persisting — `bcrypt`/`argon2`/`scrypt` is correct, `md5`/`sha256`/plain storage is the finding. This is `High` at `read`; `find_callees` on the handler between receiving the password and the persist call, confirming no hash/bcrypt/argon2/scrypt call intervenes, promotes it to `traced`, and `Critical`.
 - [ ] Sessions and tokens expire, and expiry is checked with the correct comparison. `find_symbol` the verify function and read the comparison operator literally — an off-by-one on `<` vs `<=` at the expiry boundary is a real defect, not a style nit.
 - [ ] Tokens are validated for signature, issuer, audience, and expiry. Read the verify call's options argument directly — a call that only decodes (`jwt.decode` with verification disabled, or no `verify()` at all) is the finding regardless of what happens after.
-- [ ] Logout invalidates server-side. `find_symbol` the logout handler, then `find_callees` — a handler that only clears a client-side cookie or local storage entry, with no server-side session/token revocation call, is the finding.
+- [ ] Logout invalidates server-side. `find_symbol` the logout handler, then `find_callees` — a handler that only clears a client-side cookie or local storage entry, with no server-side session/token revocation call, is the finding. Rule out a stateless-token design with no server-side session store at all and a short token TTL — confirm which applies before flagging.
 
 ## AuthZ
 
@@ -35,17 +35,17 @@ ASVS 5.0 §V8 (Authorization) covers this section. The specific defect below —
 
 - [ ] Every protected operation checks authorisation, and the check is on the server. `find_callers` on the authorisation helper, then compare against the full list of protected handlers from `get_architecture`/route discovery — the gap between the two lists is the finding. CWE-862 Missing Authorization, #4 in the 2025 CWE Top 25.
 - [ ] Authorisation is checked against the *resource*, not only the *route*. `trace_path` from the handler to the query that loads the record and confirm the caller's identity is compared against an ownership or ACL field before the read/write executes — a handler that only checks "is authenticated" and then loads by the id in the URL is the finding (BOLA, see above).
-- [ ] No object reference from the client is trusted as ownership proof — same trace as above; the id in the request is data, not a credential.
+- [ ] No object reference from the client is trusted as ownership proof — `trace_path` the same handler-to-query path as above; the id in the request is data, not a credential.
 - [ ] A caught exception or an unmatched branch in an authorisation check does not fail open. Read the authorisation helper's error handling directly — a `try/catch` around the permission check that falls through to "allow" on any exception, or a `switch`/`if` chain with no explicit deny in the default branch, is the finding. This is OWASP Top 10:2025 A10 (Mishandling of Exceptional Conditions), new for the 2025 edition.
 - [ ] Mass assignment: `search_code` for `...req.body` spread into an update call, or an ORM `.update(req.body)`/`.save(req.body)` with no field allowlist. A hit with an explicit `pick`/DTO/schema validation between the request and the update is not the finding. OWASP API Security Top 10:2023 API3 (Broken Object Property Level Authorization / BOPLA).
-- [ ] Default is deny. Check the router/framework's default for an unmatched or newly added route — a default-allow framework configuration is itself a finding even with no missing check found yet.
+- [ ] Default is deny. `search_code` the router/framework's default-route configuration for an unmatched or newly added route — a default-allow framework configuration is itself a finding even with no missing check found yet.
 
 ## Secrets
 
-- [ ] `search_code` for `secret`, `password`, `token`, `api_key`, `private_key`, `Bearer` as literal string assignments. This is the highest false-positive check in the whole skill — read every hit before reporting. A hit assigning a hardcoded literal (`"sk-...")`, `"changeme"` used as a real default, a real-looking key in a fixture reused outside tests) is the finding; a hit reading from `process.env`, a config object backed by env, or a secret-manager client call is not.
-- [ ] No secret in an error message, stack trace, or debug output — read the logging/error-serialisation call sites found under Information disclosure below for a secret-bearing field, don't infer it.
+- [ ] `search_code` for `secret`, `password`, `token`, `api_key`, `private_key`, `Bearer` as literal string assignments. This is the highest false-positive check in the whole skill — read every hit before reporting. A hit assigning a hardcoded literal (`"sk-...")`, `"changeme"` used as a real default, a real-looking key in a fixture reused outside tests) is the finding; a hit reading from `process.env`, a config object backed by env, or a secret-manager client call is not. This is `High` at `read`; `find_callers` on the constant the literal is assigned to (or `trace_path` from its module to the client constructor) showing it reaches a live client/service constructor promotes it to `traced`, and `Critical`.
+- [ ] No secret in an error message, stack trace, or debug output — Read the logging/error-serialisation call sites found under Information disclosure below for a secret-bearing field, don't infer it.
 - [ ] Secrets come from the environment or a secret manager, and absence fails loudly at startup. `search_code` the config-loading module for a fallback default on a secret-shaped key — a silent fallback (`|| 'default-secret'`) is the finding, not the absence of one. Application/service secrets should also carry an expiry or rotation mechanism, not just a source — read the secret-manager client call for a TTL/rotation parameter; its total absence on a long-lived service credential is `read`-tier evidence for a finding (this does not apply to user passwords, where mandatory periodic rotation is now considered outdated guidance per current NIST practice — do not flag its absence).
-- [ ] If a secret is found in the working tree, check git history — removal from `HEAD` does not remove it from history. **Rotation is required regardless of whether the check-in was reverted or the history was later rewritten** — per OWASP's Secrets Management Cheat Sheet, squashing/rewriting history addresses the commit trail, not the exposure: the secret was retrievable, so it is compromised, full stop. Proactive, exhaustive history scanning is owned by `repo-history.md`; this line stays reactive — do not expand history work here.
+- [ ] If a secret is found in the working tree, `search_code` the same value across the tree to bound how far it spread, then hand the history question to `repo-history.md`'s pickaxe search (`git log -p -S'<pattern>'` is that module's probe, not this one's) — removal from `HEAD` does not remove it from history. **Rotation is required regardless of whether the check-in was reverted or the history was later rewritten** — per OWASP's Secrets Management Cheat Sheet, squashing/rewriting history addresses the commit trail, not the exposure: the secret was retrievable, so it is compromised, full stop. Proactive, exhaustive history scanning is owned by `repo-history.md`; this line stays reactive — do not expand history work here.
 
 ## Transport and headers
 
@@ -63,17 +63,27 @@ ASVS 5.0 §V8 (Authorization) covers this section. The specific defect below —
 
 ## Dependencies
 
-- [ ] Known-vulnerable dependencies: cross-reference `dependencies-licensing.md` rather than duplicating that inventory here. Do not maintain a CVE list in this module — it goes stale the day it's written; live vulnerability status is unverifiable from source and belongs in Out of static reach.
-- [ ] Lockfile present and committed, so builds are reproducible — `get_architecture` reports the package manager and manifest directly.
+- [ ] Known-vulnerable dependencies: cross-reference `dependencies-licensing.md` (`search_code` the CI pipeline for an `npm audit`/`pip-audit`/`osv-scanner` step) rather than duplicating that inventory here. Do not maintain a CVE list in this module — it goes stale the day it's written; live vulnerability status is unverifiable from source and belongs in Out of static reach.
+- [ ] Lockfile present and committed — owned by `supply-chain.md` (`get_architecture` packageManager, then confirm the lockfile is tracked); reuse its finding, do not re-report.
 
 ## Out of static reach
 
 - Whether a flagged dependency vulnerability is actually exploitable in this codebase's usage of it — that needs the vulnerable code path exercised, not just present.
-- Live CVE/advisory status for any dependency — the manifest is a point-in-time read; advisories are published continuously.
+- Live CVE/advisory status for any dependency — the manifest is a point-in-time read; advisories are published continuously. Closeable via `runtime.md` if the project declares an audit/scan command that CI already runs.
 - Whether network-layer controls (WAF rules, firewall policy, a reverse proxy's own header stripping) already mitigate a code-level finding.
-- Actual production TLS/certificate configuration, as opposed to what the code declares — the deployed reality can diverge from the repo.
+- Actual production TLS/certificate configuration, as opposed to what the code declares — the deployed reality can diverge from the repo; the certificate itself and the handshake that negotiated it stay out of reach regardless.
 - Whether a secret found in git history has actually been rotated — this module can only prove exposure, not remediation; the reactive line above stays here, proactive scanning is `repo-history.md`'s job.
 - Whether a rate limit, lockout policy, or auth control holds up under real concurrent traffic — cross-reference `abuse.md` and `concurrency.md` for the structural checks; effectiveness under load is not something source can show.
+
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number. Never claim TLS handshake data or certificate validity from this bundle — `network.jsonl` shows only the request's scheme and response headers.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| `network.jsonl` | Missing HSTS or CSP response headers, with a measurer present | High |
+| `network.jsonl` | Cookie flags (`HttpOnly`/`Secure`/`SameSite`) on a real `Set-Cookie` response header | High |
+| `network.jsonl` | Mixed content — an `http://` request made from an `https://` page | High |
 
 ## Severity guidance
 
@@ -81,8 +91,10 @@ ASVS 5.0 §V8 (Authorization) covers this section. The specific defect below —
 |---|---|
 | Injection sink reachable from unvalidated external input | Critical |
 | Missing authorisation on a protected operation | Critical |
-| Secret committed to the repository (regardless of later history rewrite) | Critical |
-| Password stored unhashed or reversibly | Critical |
+| Secret literal traced (`find_callers`) to a live client/service constructor, still committed | Critical |
+| Secret committed to the repository (regardless of later history rewrite), reach not traced | High |
+| Password unhashed, traced (`find_callees`) with no hash call between input and persistence | Critical |
+| Password stored unhashed or reversibly, reach not traced | High |
 | Authorisation check fails open on an unhandled exception | High |
 | Certificate verification disabled | High |
 | Authorisation checked on route but not on resource (BOLA) | High |

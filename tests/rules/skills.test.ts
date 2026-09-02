@@ -199,7 +199,7 @@ describe("installSkill", () => {
  * reaches [] the guard is fully closed and every gate has real bytes behind it.
  */
 /**
- * EMPTY as of Work Unit 2 — every one of the 50 gated modules now has real
+ * EMPTY as of Work Unit 2 — every one of the 51 gated modules now has real
  * bytes behind it. The guard is fully closed: adding a gate row without a
  * reference file, or a reference file without a gate row, now fails.
  *
@@ -228,9 +228,9 @@ function extractGateReferences(skill: string): string[] {
 describe("gate table parity (guards v1 Defect 1)", () => {
   const gateRefs = extractGateReferences(BRAIN_AUDIT_FILES["SKILL.md"]);
 
-  it("names all 50 modules, with no duplicates", () => {
-    expect(gateRefs.length).toBe(50);
-    expect(new Set(gateRefs).size).toBe(50);
+  it("names all 51 modules, with no duplicates", () => {
+    expect(gateRefs.length).toBe(51);
+    expect(new Set(gateRefs).size).toBe(51);
   });
 
   it("every gate reference either ships or is explicitly deferred", () => {
@@ -625,5 +625,174 @@ describe("orphan pruning", () => {
 
     expect(await readFile(outside, "utf8")).toBe("untouched");
     expect(result.removed).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reference module lint — self-review layer 1 (design 2026-09-01, Part A).
+// Deterministic rules over every references/*.md in the brain-audit manifest.
+// A check with no probe is dead (SKILL.md step 5); a severity outside the
+// contract or a cross-reference to a missing file is a wrong finding waiting
+// to happen. These run on every `bun test` so a future module cannot
+// reintroduce what the self-review removed.
+// ---------------------------------------------------------------------------
+
+const AUDIT_PROBES = [
+  "search_context",
+  "search_code",
+  "expand_context",
+  "find_symbol",
+  "find_callers",
+  "find_callees",
+  "impact",
+  "trace_path",
+  "repo_map",
+  "list_modules",
+  "get_module",
+  "get_architecture",
+  "check_health",
+  "sync_project",
+  "Read",
+];
+// Real project-brain tools that are not audit probes but may be named in prose.
+const OTHER_TOOLS = ["add_knowledge", "delete_knowledge", "manage_adr", "list_projects", "delete_project"];
+const SEVERITIES = new Set(["Critical", "High", "Medium", "Low", "Info"]);
+// Modules the references cite before they ship. Empty since Part B of the
+// 2026-09-01 design landed browser.md; the honesty test below fails the moment
+// a listed file ships, so it cannot go stale.
+const PENDING_PART_B: string[] = [];
+// Observation-bundle artefacts browser.md produces; cited by consumer modules,
+// never modules themselves.
+const BROWSER_ARTEFACTS = ["steps.md", "insights.md", "vitals.md", "a11y-snapshot.md", "final-state.md"];
+
+function referenceModules(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(BRAIN_AUDIT_FILES)
+      .filter(([k]) => k.startsWith("references/"))
+      .map(([k, v]) => [k.slice("references/".length), v])
+  );
+}
+
+function section(md: string, heading: string): string | null {
+  const start = md.indexOf(`\n## ${heading}`);
+  if (start === -1) return null;
+  const rest = md.slice(start + 1);
+  const end = rest.indexOf("\n## ", 1);
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+/** Decision Gates rows: module file → gate signal (empty cell inherits the row above). */
+function gateSignals(skill: string): Map<string, string> {
+  const gates = section(skill, "Decision Gates") ?? "";
+  const out = new Map<string, string>();
+  let carried = "";
+  for (const line of gates.split("\n")) {
+    if (!line.startsWith("|")) continue;
+    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    if (cells.length < 3 || cells[0] === "Gate signal" || cells[0].startsWith("---")) continue;
+    if (cells[0] !== "") carried = cells[0];
+    const ref = cells[2].match(/`([a-z0-9-]+\.md)`/)?.[1];
+    if (ref) out.set(ref, carried);
+  }
+  return out;
+}
+
+describe("reference module lint (self-review layer 1)", () => {
+  const modules = referenceModules();
+  const names = new Set(Object.keys(modules));
+  const lines = (md: string) => md.split("\n").map((text, i) => ({ n: i + 1, text }));
+  const checks = (md: string) => lines(md).filter((l) => /^\s*- \[ \]/.test(l.text));
+
+  it("has the 51 modules the gate table names", () => {
+    expect(names.size).toBe(51);
+  });
+
+  it("every check names at least one probe from the catalogue", () => {
+    const probeRe = new RegExp("`(" + AUDIT_PROBES.join("|") + ")(\\([^`]*\\))?`|\\bRead\\b");
+    // repo-history.md is the one module allowed to run git; its probe is the git command.
+    const gitRe = /`git [a-z]/;
+    const dead: string[] = [];
+    for (const [name, md] of Object.entries(modules)) {
+      if (name === "runtime.md") continue; // executes declared commands; the command is its probe
+      if (name === "browser.md") continue; // drives a browser tool; the tool call is its probe
+      const ok = (t: string) => probeRe.test(t) || (name === "repo-history.md" && gitRe.test(t));
+      for (const l of checks(md)) if (!ok(l.text)) dead.push(`${name}:${l.n}`);
+    }
+    expect(dead, `checks naming no probe (dead per SKILL.md step 5):\n${dead.join("\n")}`).toEqual([]);
+  });
+
+  it("every probe-shaped identifier is a real project-brain tool", () => {
+    const known = new Set([...AUDIT_PROBES, ...OTHER_TOOLS]);
+    const shaped = /`((?:search|find|get|list|expand|trace|check|sync|repo|manage|add|delete)_[a-z_]+)(?:\([^`]*\))?`/g;
+    const unknown: string[] = [];
+    for (const [name, md] of Object.entries(modules)) {
+      if (name === "browser.md") continue; // names browser-tool calls (list_network_requests, …), not project-brain probes
+      for (const l of lines(md)) {
+        for (const m of l.text.matchAll(shaped)) if (!known.has(m[1]) && !m[1].endsWith("_id")) unknown.push(`${name}:${l.n} \`${m[1]}\``);
+      }
+    }
+    expect(unknown, `probe-shaped names not in the tool catalogue:\n${unknown.join("\n")}`).toEqual([]);
+  });
+
+  it("every Severity guidance row uses a contract severity", () => {
+    const bad: string[] = [];
+    for (const [name, md] of Object.entries(modules)) {
+      const sev = section(md, "Severity guidance");
+      if (sev === null) continue; // reported by the required-sections rule
+      const offset = md.slice(0, md.indexOf(sev)).split("\n").length;
+      sev.split("\n").forEach((text, i) => {
+        if (!text.startsWith("|")) return;
+        const cells = text.split("|").slice(1, -1).map((c) => c.trim());
+        if (cells.length < 2 || cells[0] === "Situation" || cells[0].startsWith("---")) return;
+        const last = cells[cells.length - 1];
+        if (!SEVERITIES.has(last)) bad.push(`${name}:${offset + i} "${last}"`);
+      });
+    }
+    expect(bad, `severity cells outside Critical|High|Medium|Low|Info:\n${bad.join("\n")}`).toEqual([]);
+  });
+
+  it("every cross-reference to a `<name>.md` points at a shipped module", () => {
+    const broken: string[] = [];
+    for (const [name, md] of Object.entries(modules)) {
+      for (const l of lines(md)) {
+        for (const m of l.text.matchAll(/`([a-z0-9-]+\.md)`/g)) {
+          if (m[1] !== "SKILL.md" && !names.has(m[1]) && !PENDING_PART_B.includes(m[1]) && !BROWSER_ARTEFACTS.includes(m[1])) broken.push(`${name}:${l.n} \`${m[1]}\``);
+        }
+      }
+    }
+    expect(broken, `cross-references to files that do not ship:\n${broken.join("\n")}`).toEqual([]);
+  });
+
+  it("pending Part B list stays honest — nothing in it is already shipped", () => {
+    expect(PENDING_PART_B.filter((f) => names.has(f))).toEqual([]);
+  });
+
+  it("every module has a title, checks, Out of static reach, and Severity guidance", () => {
+    const missing: string[] = [];
+    for (const [name, md] of Object.entries(modules)) {
+      if (!/^# \S/.test(md)) missing.push(`${name}: title`);
+      if (checks(md).length === 0) missing.push(`${name}: no \`- [ ]\` checks`);
+      if (section(md, "Out of static reach") === null) missing.push(`${name}: ## Out of static reach`);
+      if (section(md, "Severity guidance") === null) missing.push(`${name}: ## Severity guidance`);
+    }
+    expect(missing, `required sections missing:\n${missing.join("\n")}`).toEqual([]);
+  });
+
+  it("every gated module states its gate, and the gate table names every module", () => {
+    const signals = gateSignals(BRAIN_AUDIT_FILES["SKILL.md"]);
+    const problems: string[] = [];
+    for (const [name, md] of Object.entries(modules)) {
+      const signal = signals.get(name);
+      if (signal === undefined) {
+        problems.push(`${name}: no Decision Gates row`);
+        continue;
+      }
+      const preamble = md.slice(0, md.indexOf("\n## ") === -1 ? md.length : md.indexOf("\n## "));
+      const hasGate = /\bGate:/.test(preamble);
+      const always = /^Always proposed/.test(signal);
+      if (!always && !hasGate) problems.push(`${name}: gated by "${signal}" but no "Gate:" sentence in the preamble`);
+      if (always && hasGate) problems.push(`${name}: always proposed in SKILL.md but states a Gate: sentence`);
+    }
+    expect(problems, `gate parity:\n${problems.join("\n")}`).toEqual([]);
   });
 });

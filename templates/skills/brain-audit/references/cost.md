@@ -15,10 +15,10 @@ The FinOps Foundation's Framework (2026 refresh, now scoped beyond cloud to AI/M
 
 ## Bounds
 
-- [ ] Metered calls inside loops: `find_callees` on the loop body — a per-item model call over an unbounded list is the classic runaway.
-- [ ] Input size bounded before a token-billed call, not after: read the call site's input construction for a truncation or size check before the payload is sent. Cross-reference `ai.md`.
+- [ ] Metered calls inside loops: `find_callees` on the loop body — a per-item model call over an unbounded list is the classic runaway. Rule out a loop whose input is already provably bounded (a small fixed-size array, an earlier `.slice(0, N)`) before flagging it as the runaway pattern.
+- [ ] Input size bounded before a token-billed call, not after: Read the call site's input construction for a truncation or size check before the payload is sent. Cross-reference `ai.md`.
 - [ ] Output length capped: `search_code` for `max_tokens`/`maxOutputTokens` (or the SDK's equivalent) at each LLM call site. Missing, or set far above what the feature needs, bills for whatever the model decides to say.
-- [ ] Retries bounded and backed off: `search_code` for a retry wrapper near each paid client call; read its config for max attempts and backoff. An unbounded retry against a failing paid endpoint bills for every attempt — this is both a cost and a reliability defect.
+- [ ] Retries bounded and backed off — owned by `failure.md` (`search_code` for a retry wrapper near each call site; read its config for max attempts and backoff); reuse its finding, do not re-report. An unbounded retry against a paid endpoint bills for every attempt, which is this module's angle on the same defect.
 - [ ] Fan-out bounded: `find_callers` on each metered call to check whether it sits behind a loop over user-supplied input or a per-webhook handler — one user action must not trigger an unbounded number of paid calls.
 - [ ] A hard ceiling exists somewhere, not only a notification: `search_code` for a rate limiter, spend cap, or circuit breaker that actually stops calls once a threshold is crossed, versus a budget alert that only notifies a human. A notify-only alert with nothing enforcing a stop is a weaker control than it looks — call that out distinctly from having neither, which is the stronger finding.
 
@@ -26,16 +26,16 @@ The FinOps Foundation's Framework (2026 refresh, now scoped beyond cloud to AI/M
 
 - [ ] Repeated identical paid calls with no cache: `search_code` near each metered call site for a cache check preceding it, the same technique as the caching checks in `performance.md`. Here the missing cache costs money rather than latency.
 - [ ] Cache in place but the key omits a dimension: `find_symbol` the cached call's signature, then read the key expression against every parameter that affects cost or output — a missing parameter means it never hits for varying inputs.
-- [ ] The most expensive tier used for work a cheaper one handles: read the model/instance parameter at each call site (a literal model name, an instance size) and compare it against the task — a large model doing pure classification, a premium instance running a cron job.
+- [ ] The most expensive tier used for work a cheaper one handles: Read the model/instance parameter at each call site (a literal model name, an instance size) and compare it against the task — a large model doing pure classification, a premium instance running a cron job.
 - [ ] Paid calls whose results are discarded, made speculatively, or duplicated across code paths: `find_callers` on each metered call for a count greater than one with no shared cache between the call sites, or a returned value that is never assigned or used.
-- [ ] Provisioned capacity far above observed use: read the IaC/deploy config for instance size or plan tier alongside any usage figure surfaced in code, config, or comments. This is usually `inferred` without a real usage number — say so. Cross-reference `infrastructure.md`.
+- [ ] Provisioned capacity far above observed use: Read the IaC/deploy config for instance size or plan tier alongside any usage figure surfaced in code, config, or comments. This is usually `inferred` without a real usage number — say so. Cross-reference `infrastructure.md`.
 - [ ] Storage with no retention policy: `search_code` for a TTL/retention/cleanup job on the bucket or table backing metered storage — it only grows, and it bills monthly forever. Cross-reference `privacy.md`, where retention is also a compliance question.
 - [ ] Egress from chatty cross-region or cross-zone traffic: `search_code` for multi-region client construction or replication config paired with per-request (rather than batched) calls across that boundary.
 
 ## Development and test cost
 
-- [ ] Tests do not hit paid endpoints: `search_code` test setup/fixtures for a mock or stub of each paid SDK (`jest.mock(`, a fake client); then check whether any `*.test.*` file still constructs the real client. A test suite that bills per run is a cost defect and a flake source.
-- [ ] Development and staging have their own, smaller budgets: read the per-environment config (`.env.staging`, an environment-scoped IaC file) for instance size or quota values distinct from production.
+- [ ] Tests hitting paid endpoints — owned by `testing.md` (`search_code` for a live API base URL, an unmocked SDK client, or a real API key referenced in `*.test.*`); reuse its finding, do not re-report. A test suite that bills per run is the cost angle of that same finding, alongside the flakiness angle `testing.md` reports.
+- [ ] Development and staging have their own, smaller budgets: Read the per-environment config (`.env.staging`, an environment-scoped IaC file) for instance size or quota values distinct from production.
 - [ ] Nothing left running by default in non-production: `search_code` the deploy/IaC config for an auto-shutdown or scale-to-zero setting on non-production environments — its absence means idle instances bill exactly like busy ones.
 
 ## Attribution
@@ -57,10 +57,8 @@ The FinOps Foundation's Framework (2026 refresh, now scoped beyond cloud to AI/M
 | Situation | Severity |
 |---|---|
 | Unauthenticated caller can trigger a metered operation | Critical |
-| Unbounded retry against a paid endpoint | High |
 | Metered call inside an unbounded loop | High |
 | No ceiling, quota, or budget alert anywhere | High |
-| Tests hitting paid endpoints | High |
 | Unbounded input or output size on a per-token call | High |
 | Repeated identical paid calls with no cache | Medium |
 | Cache key missing a dimension, so it never hits | Medium |

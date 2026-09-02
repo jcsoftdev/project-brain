@@ -13,7 +13,7 @@ Everything here is verifiable from source. Design-system audits are usually desc
 Nothing below means anything until you know what the project declared. Find it before you judge anything.
 
 - [ ] Locate the token source. `search_code` for `tailwind.config`, `@theme`, `:root {`, `--color-`, `theme.ts`, `tokens.json`, `styled-components` theme, `ThemeData`, `MaterialTheme`, or the platform equivalent.
-- [ ] Record the declared scales — spacing steps, type sizes, radii, shadow levels, breakpoints, colour roles — by reading the token source located above and enumerating its declared values verbatim. This list is the yardstick for every later check.
+- [ ] `Read` the token source located above and record the declared scales — spacing steps, type sizes, radii, shadow levels, breakpoints, colour roles — enumerating its declared values verbatim. This list is the yardstick for every later check.
 - [ ] **If no token source exists at all, that is the finding — `High` — and the rest of the module becomes "every value is ad hoc", not thirty separate deviations.** Report it once, with the count of distinct raw values `search_code` turns up for a single representative category (colour is usually the fastest to count) as evidence of the scale that never existed.
 
 ## Token adoption
@@ -24,7 +24,7 @@ Score it; do not eyeball it. Per category — colour, spacing, radius, typograph
 adoption = token_references / (token_references + hardcoded_literals)
 ```
 
-- [ ] Report the number **per category with raw counts**, using the probes below for each category. A project can sit at 95% on colour and 20% on spacing, and a single average hides exactly the category that needs work.
+- [ ] Report the number **per category with raw counts**, tallying the `search_code` hits from each category probe below against the token count recorded above. A project can sit at 95% on colour and 20% on spacing, and a single average hides exactly the category that needs work.
 - [ ] Hardcoded colour outside the token file: `search_code` for `#[0-9a-fA-F]{3,8}`, `rgba?(`, `hsla?(`. Each hit outside the declared source is a missing token.
 - [ ] Hardcoded dimension: `search_code` for a raw `[0-9]+px` inside `margin`, `padding`, `gap`, `width`, `height`, or `font-size` declarations. Each hit outside the token scale is a missing token.
 - [ ] Escape-hatch syntax in utility-class stacks: `search_code` for the pattern `-[` inside class strings (`w-[137px]`, `text-[#3b82f6]`, `mt-[13px]`) and count hits against total class-string occurrences project-wide. A handful is pragmatism. A third of the class strings means there is no system left, only a colour-coordinated accident.
@@ -32,7 +32,7 @@ adoption = token_references / (token_references + hardcoded_literals)
 
 ## Scale discipline
 
-- [ ] Spacing values come from a constrained scale (4 / 8 / 12 / 16 / 24 / 32 / 48 / 64 …). Cross-reference the raw `px` hits from Token adoption above and list every value that is not on the declared scale, or — absent a declared scale — not a multiple of a consistent base unit, and where each occurs.
+- [ ] Spacing values come from a constrained scale (4 / 8 / 12 / 16 / 24 / 32 / 48 / 64 …). `search_code` for the raw `px` hits already found under Token adoption above and list every value that is not on the declared scale, or — absent a declared scale — not a multiple of a consistent base unit, and where each occurs.
 - [ ] Type sizes come from one scale — a modular ratio or an explicit named ramp. `search_code` for `font-size` declarations outside the token file and list each resolved value; a size that appears exactly once across the codebase is drift, not a considered addition.
 - [ ] Radii, border widths, shadow levels and z-index each have a bounded set. `search_code` for `z-index:`/`z-` utility classes and list every distinct raw value found outside the token file — more than a handful means there is no stacking policy and overlays will fight. Repeat the sweep for `border-radius` and `box-shadow`.
 - [ ] Breakpoints are declared once and referenced, not retyped per component. `search_code` for `@media` queries or breakpoint utility prefixes (`sm:`, `md:`, `lg:`) carrying a raw pixel value instead of the declared token — each is a breakpoint retyped locally. Device-named breakpoints (iPhone, iPad widths) are a further smell — breakpoints belong where the layout breaks.
@@ -65,7 +65,7 @@ The most expensive defect in this module, and the easiest to miss by reading one
 
 - [ ] Every colour role has a counterpart in every declared theme. `search_code` for `dark:` / `[data-theme]` / `prefers-color-scheme` and check the coverage is total, not partial — a half-themed surface is worse than an unthemed one, because it only breaks on some screens.
 - [ ] Theme switching goes through tokens, not through per-component conditionals. `search_code` for `theme ===`/`isDarkMode ?` branching inline in component style logic, as opposed to a CSS variable or token swap driven by a theme class/attribute — a per-component conditional is a theme implemented N times instead of once.
-- [ ] Contrast holds **in every theme**, not just the default one. Extract the colour pairs from each theme found via the token source above and compute the ratio per pair — do not eyeball it. Cross-reference `accessibility.md`.
+- [ ] Contrast is reported under `accessibility.md` (`Read` each theme's token file and compute the ratio per pair); this module's job is only to supply the colour pairs it needs — `search_code` the token source located above for each theme's foreground/background role pairs and hand the list to that check, rather than computing and reporting the ratio here too.
 
 ## Enforcement
 
@@ -80,6 +80,15 @@ The most expensive defect in this module, and the easiest to miss by reading one
 - Perceived hierarchy and visual balance.
 - Whether the dominant pattern is the *intended* one, when no token source exists to declare it.
 - Whether a value flagged as off-scale is a deliberate, argued exception or an unnoticed accident — source shows the deviation, not the intent behind it.
+
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number. Contrast findings are reported under `accessibility.md`, at that module's severity, per the ownership split above.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| computed styles via evaluate | Rendered contrast where colours composite — overlays, opacity, gradients — read from the applied colour, not a screenshot pixel | Medium |
+| `steps.md` | Reflow at 320px and at 200% zoom, screenshotted per viewport | Medium |
 
 ## Severity guidance
 

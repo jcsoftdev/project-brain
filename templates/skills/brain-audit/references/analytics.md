@@ -7,15 +7,15 @@ Can this team tell whether the product works for the people using it? Gate: a us
 ## Inventory
 
 - [ ] `search_code` the analytics SDK import (Segment, Amplitude, Mixpanel, PostHog, GA4, RudderStack, or a custom `track()` wrapper) and enumerate every call site. This list is the yardstick every later check works against — nothing below means anything until this exists.
-- [ ] For each `track(` call site found above, record where it fires (component, route, server handler) and what triggers it. An event fired from three different call sites for what is conceptually one user action is a red flag in its own right, addressed below.
+- [ ] `search_code` each `track(` call site found above and record where it fires (component, route, server handler) and what triggers it. An event fired from three different call sites for what is conceptually one user action is a red flag in its own right, addressed below.
 - [ ] Server-side tracking calls, not only client SDK calls — `search_code` for a server-side analytics client or a webhook forwarding events. Distinguish these from the client inventory; they answer different reliability questions later in this module.
 
 ## Naming and shape
 
-- [ ] Event naming convention — read a sample of event-name strings and determine which pattern the majority already follows (`snake_case` vs `Title Case`, object-action order such as `Product Viewed`/`plan_selected` vs a verb-first order), then flag the minority that breaks it. Do not import an external naming standard the project never adopted — Segment's and Amplitude's own object-action convention is the industry majority, not a rule to enforce over a project's existing, internally consistent choice.
-- [ ] Action verbs are past tense, consistently — read the sample above for a mix of imperative (`Track Signup`) and past-tense (`Signup Completed`) forms within the same event set. An event fires after the action already happened; a present-tense minority alongside a past-tense majority is the same class of drift as inconsistent casing.
+- [ ] Event naming convention — `Read` a sample of event-name strings and determine which pattern the majority already follows (`snake_case` vs `Title Case`, object-action order such as `Product Viewed`/`plan_selected` vs a verb-first order), then flag the minority that breaks it. Do not import an external naming standard the project never adopted — Segment's and Amplitude's own object-action convention is the industry majority, not a rule to enforce over a project's existing, internally consistent choice.
+- [ ] Action verbs are past tense, consistently — `Read` the sample above for a mix of imperative (`Track Signup`) and past-tense (`Signup Completed`) forms within the same event set. An event fires after the action already happened; a present-tense minority alongside a past-tense majority is the same class of drift as inconsistent casing.
 - [ ] The same conceptual event fired under two different names — `search_code` for near-duplicate strings (`signup_completed` and `user_registered` describing the same moment) and cross-reference the feature map from discovery to confirm they really are the same event before flagging.
-- [ ] Events fired without the properties needed to answer the question they exist to answer — read the call site's property object against what the event's own name implies someone will ask (a `plan_selected` event with no plan identifier cannot answer "which plan"). **Falsify before flagging**: some SDKs auto-enrich events with context set at `identify()` or a wrapper — confirm the property is genuinely missing from the full payload, not just from this one call site.
+- [ ] Events fired without the properties needed to answer the question they exist to answer — `Read` the call site's property object against what the event's own name implies someone will ask (a `plan_selected` event with no plan identifier cannot answer "which plan"). **Falsify before flagging**: some SDKs auto-enrich events with context set at `identify()` or a wrapper — confirm the property is genuinely missing from the full payload, not just from this one call site.
 - [ ] The same user action tracked twice from two independent call sites (a page-level listener and a component-level one both firing on one click) — `search_code` for the event name appearing at more than one site with overlapping trigger conditions, and confirm they are not deliberately distinct events sharing a name for different states.
 
 ## Tracking plan discipline
@@ -37,14 +37,14 @@ Can this team tell whether the product works for the people using it? Gate: a us
 
 ## Consent and identity
 
-- [ ] Consent gating — `search_code` for a consent-check utility wired before SDK initialisation or before the first `track()` call, in any jurisdiction where consent is required. The common real-world violation is ordering, not absence: a consent utility exists somewhere in the codebase, but the SDK init or script tag is reachable before it resolves — read the actual load order (script tag position, import order, a buffering config such as `wait_for_update`), not merely whether a consent utility exists anywhere in the repo. **Falsify before flagging**: some SDKs support a native consent-mode that buffers events until consent is granted rather than firing immediately — confirm the library's actual behaviour before reporting a violation.
+- [ ] Consent gating — `search_code` for a consent-check utility wired before SDK initialisation or before the first `track()` call, in any jurisdiction where consent is required; establish jurisdictional applicability from a stated target market, a locale/currency signal, or an existing legal disclaimer in the repo rather than assuming it — with none of those signals present the applicability is `inferred`, and the finding caps at `Medium`. The common real-world violation is ordering, not absence: a consent utility exists somewhere in the codebase, but the SDK init or script tag is reachable before it resolves — `Read` the actual load order (script tag position, import order, a buffering config such as `wait_for_update`), not merely whether a consent utility exists anywhere in the repo. **Falsify before flagging**: some SDKs support a native consent-mode that buffers events until consent is granted rather than firing immediately — confirm the library's actual behaviour before reporting a violation.
 - [ ] Anonymous-to-identified transition — `search_code` for an `identify()`/`alias()` call fired on login or signup, and confirm the anonymous ID collected pre-login is passed so sessions stitch together. Without this, every pre-signup event is permanently orphaned from the user it belonged to.
 
 ## Delivery and ownership
 
 - [ ] Commercially significant events (purchase, checkout, subscription) tracked only via a client-side SDK call, with no server-side mirror — `search_code` for a corresponding server-side or webhook-driven event. Ad blockers and tracking-protection browsers drop client-side analytics calls silently; a revenue event with no server counterpart under-reports with no error anywhere in the stack.
 - [ ] Development or staging traffic posting to the same analytics project as production — `search_code` for an environment-gated SDK key or write key, and confirm dev/staging events cannot land in the production dataset and skew it.
-- [ ] Instrumentation still firing for a feature the codebase no longer serves — cross-reference `reachability.md`'s dead-code findings against the event inventory; a dead component still calling `track()` pollutes every dashboard reading that event with noise from a code path nobody can reach.
+- [ ] Instrumentation still firing for a feature the codebase no longer serves — `find_callers` on each `track()` call site's enclosing component or handler; zero in-repo callers matches `reachability.md`'s dead-code sweep, and a dead component still calling `track()` pollutes every dashboard reading that event with noise from a code path nobody can reach. Cross-reference `reachability.md`'s findings rather than re-deriving them, when that module ran.
 - [ ] A stated owner or dashboard for the event set — `search_code`/read `README`, a `CONTRIBUTING` doc, or an analytics-specific doc for a named owner or a linked dashboard. Instrumentation nobody is assigned to read decays the moment it is shipped, whether or not it is technically correct.
 
 ## Out of static reach
@@ -54,6 +54,14 @@ Can this team tell whether the product works for the people using it? Gate: a us
 - Sampling or rate-limiting applied by the SDK or platform that silently drops a fraction of events under load.
 - Whether the team actually reads the dashboard a stated owner is attached to — an assigned owner is evidence of intent, not proof of use.
 
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| `network.jsonl` | Whether the beacon call for an instrumented event actually leaves the browser during a walked flow, and its response status — not whether the platform receives, deduplicates, or processes it | High |
+
 ## Severity guidance
 
 | Situation | Severity |
@@ -62,7 +70,8 @@ Can this team tell whether the product works for the people using it? Gate: a us
 | Commercially significant event tracked client-side only, no server mirror | High |
 | PII or a token-bearing URL captured in event properties | High |
 | Funnel with no failure or error event, only success | High |
-| Consent-required jurisdiction with no consent gate before tracking | High |
+| Consent-required jurisdiction — established by a stated target market, locale/currency signal, or existing legal disclaimer — with no consent gate before tracking | High |
+| Consent gating assumed rather than established from a repo signal | Medium |
 | Same conceptual event fired under two different names | Medium |
 | Event or property name built dynamically at runtime, not a fixed literal | Medium |
 | Event fired without the properties its own purpose requires | Medium |
@@ -70,4 +79,5 @@ Can this team tell whether the product works for the people using it? Gate: a us
 | Dev/staging traffic landing in the production dataset | Medium |
 | Dead code still firing tracking events | Low |
 | No stated owner or dashboard for the event set | Low |
-| Minor naming-convention drift on a small minority of events | Info / Low |
+| A single event or two breaking the naming convention, otherwise consistent | Info |
+| Naming-convention drift recurring across several events | Low |

@@ -6,14 +6,14 @@ Does what ships match what was built? Gate: a published package manifest or a re
 
 ## What is in the artefact
 
-- [ ] Enumerate the include list (`files` in `package.json`, `include`/`MANIFEST.in`, build output config) and compare it against what the code loads at runtime. `search_code` for `readFile`/`require(`/`import(` targeting a relative path, then confirm each target sits inside the include list. **Anything read at runtime but absent from the include list ships to nobody.**
+- [ ] Enumerate the include list (`files` in `package.json`, `include`/`MANIFEST.in`, build output config) and compare it against what the code loads at runtime. `search_code` for `readFile`/`require(`/`import(` targeting a relative path, then confirm each target sits inside the include list. **Anything read at runtime but absent from the include list ships to nobody.** Rule out a call site reached only from a build/dev script, not from the shipped entry point — confirm with `find_callers` back to a declared entry point. This is `High` at `read`; `trace_path`/`find_callers` from the declared entry point to the load call, confirming the load path is actually reachable at runtime, promotes this to `traced`, and `Critical`.
 - [ ] The inverse: files shipped that need not be — tests, fixtures, source maps in production, `.env` samples with real values, internal docs. Read the include list and `search_code` for `*.test.*`, `fixtures/`, `.map`, `.env.example` patterns it matches — each hit is bloat, and a `.env` sample with a real-looking value is a leak.
 - [ ] Entry points declared in the manifest (`main`, `module`, `exports`, `bin`) exist in the built artefact at those exact paths. Read the manifest's entry fields, then confirm the build output config (`tsconfig`'s `outDir`, the bundler config) actually writes a file to each declared path.
 - [ ] Binaries and executables declared are present and executable. Read the manifest's `bin` field, then confirm the target file exists and the build step does not skip generating it.
 
 ## Path assumptions
 
-- [ ] No runtime code resolves a path relative to the source tree. `search_code` for `__dirname`, `import.meta.url`, or a relative `../` path adjacent to a `readFile`/asset-load call, then confirm the target stays inside the include list above rather than reaching into `src/` structure that packaging flattens or excludes.
+- [ ] No runtime code resolves a path relative to the source tree. `search_code` for `__dirname`, `import.meta.url`, or a relative `../` path adjacent to a `readFile`/asset-load call, then confirm the target stays inside the include list above rather than reaching into `src/` structure that packaging flattens or excludes. This is `High` at `read`; `trace_path`/`find_callers` from the declared entry point to this call site, confirming it is actually reachable at runtime, promotes this to `traced`, and `Critical`.
 - [ ] Assets needed at runtime are embedded at build time or explicitly shipped and located by a mechanism that survives packaging. `search_code` for a template/schema/WASM file loaded at runtime, then confirm the build config copies or embeds it — absence from both the include list and an embed step means it is missing the moment the source tree is gone.
 - [ ] Where the project ships a compiled/bundled binary, verify the embedding actually happened rather than trusting it. Read the build script/bundler config for the embed step, then confirm the built output actually contains the asset — its declared size, or a reference to it in the bundle — rather than trusting the config exists. **This is the single highest-value check in the module.**
 
@@ -27,7 +27,7 @@ Does what ships match what was built? Gate: a published package manifest or a re
 
 - [ ] Version, license, repository, and description are present and accurate. Read the manifest's `version`, `license`, `repository`, `description` fields and confirm the license field matches the actual `LICENSE` file in the repository root.
 - [ ] Declared runtime/engine requirements match what the code actually uses. Read the manifest's `engines`/`requires-python` field, then `search_code` for a language feature (optional chaining, a specific stdlib call) whose minimum version exceeds the declared floor.
-- [ ] Dependencies are in the right section — nothing needed at runtime sits in dev dependencies. Read `dependencies` vs `devDependencies` in the manifest, then `search_code` each `devDependencies` entry's import inside runtime (non-test, non-build-script) source files. A hit there fails only for consumers, never in the repository, which is exactly why CI misses it.
+- [ ] Dependencies are in the right section — nothing needed at runtime sits in dev dependencies. Read `dependencies` vs `devDependencies` in the manifest, then `search_code` each `devDependencies` entry's import inside runtime (non-test, non-build-script) source files. A hit there fails only for consumers, never in the repository, which is exactly why CI misses it. Rule out a type-only import that compiles away — read whether the import is `import type`/erased, not just whether the specifier appears. This is `packaging.md`'s manifest-shape angle; `dependencies-licensing.md` owns the general dependency-hygiene sweep — run once, cite in whichever module ran first.
 - [ ] Peer dependencies and optional dependencies are declared deliberately. Read the manifest's `peerDependencies`/`optionalDependencies`, then `search_code` confirming each is imported conditionally rather than assumed always-present.
 
 ## Release process
@@ -39,7 +39,7 @@ Does what ships match what was built? Gate: a published package manifest or a re
 
 ## Out of static reach
 
-- Whether the packed tarball actually installs cleanly on every supported platform and language/runtime version — this module confirms CI runs the check, not that it passes on hardware nobody tested.
+- Whether the packed tarball actually installs cleanly on every supported platform and language/runtime version — this module confirms CI runs the check, not that it passes on hardware nobody tested — closed by `runtime.md` running the declared pack-and-install step when execution is enabled, for the current platform only; cross-platform coverage stays open.
 - Real download/install size as experienced by a consumer, versus the include list's apparent scope.
 - Registry-side behaviour (npm, PyPI) — deprecation warnings, dist-tag correctness, unpublish windows.
 - Whether a credential used for publishing is scoped correctly — that lives in the registry/CI secret store, not in source.
@@ -49,8 +49,8 @@ Does what ships match what was built? Gate: a published package manifest or a re
 
 | Situation | Severity |
 |---|---|
-| Runtime-loaded file absent from the include list | Critical |
-| Runtime path resolved relative to the source tree | Critical |
+| Runtime-loaded file absent from the include list (traced) | Critical |
+| Runtime path resolved relative to the source tree (traced) | Critical |
 | Runtime dependency declared as a dev dependency | High |
 | Secret or real credential shipped in the artefact | High |
 | No verification of the artefact as a consumer would use it | High |

@@ -17,10 +17,12 @@ What will hurt six months from now? This module is forward-looking, which makes 
 ## Lock-in
 
 - [ ] Dependencies on a specific vendor, model, API version, or file format, with no adapter layer. `search_code` the vendor SDK import, then `find_callers` it to check whether call sites route through one seam or are scattered directly through the codebase. Note the switching cost either way.
-- [ ] Data formats written to disk with no version field. `find_symbol` the serialisation function and read the written shape for a `version`/`schema` key. Migrating them later means guessing.
+- [ ] Data formats written to disk with no version field — owned by `versioning-compatibility.md` (`search_code`/`find_symbol` the schema or serialisation definition for a `version`/`schemaVersion`/`_v` field); reuse its finding, do not re-report. This module's own angle is the migration-cost consequence, covered by the next check.
 - [ ] Persisted state whose schema has no migration path. `search_code` a migrations directory or schema-versioning table; its absence next to a persisted, evolving shape is the finding.
 
 ## Deprecation debt
+
+Ownership split with `versioning-compatibility.md`: this module asks whether the architecture is ready to grow (a duplicated "old way"/"new way" code path, an API kept around with no removal date, as a design-health question); `versioning-compatibility.md` asks the same kind of fact framed as a compatibility promise to a consumer — is a deprecated symbol still exercised, does a stated timeline have a removal version. The two checks can point at the same code from different angles; do not double-count.
 
 - [ ] APIs, flags, or config keys kept for backwards compatibility with no removal date and no deprecation warning. `search_code` for `deprecated` in comments/docstrings and check each for a stated removal version or date. Absence means it will be kept forever by default.
 - [ ] Duplicated code paths where one is "the old way" — `find_callers` the old path. If it still has callers, the migration is unfinished; if not, it is dead and belongs to `Reachability`, not here.
@@ -44,8 +46,8 @@ Speculative refactors, "this could be more generic", and architecture preference
 | Extension requires a shotgun edit across many files with no registry | Medium |
 | Unbounded loop or full-memory load with no stated bound | Medium |
 | Vendor/format lock-in with no adapter seam | Medium |
-| Persisted format with no version field or migration path | Medium |
+| Persisted state with no migration path | Medium |
 | Deprecated API/flag with no removal date | Low |
-| Duplicated "old way" path confirmed dead | Low (report under Reachability) |
+| Duplicated "old way" path confirmed dead (report under `Reachability`) | Low |
 | Hardcoded list with no parity guard | Low |
 | Pinned dependency workaround unverified as still needed | Low |

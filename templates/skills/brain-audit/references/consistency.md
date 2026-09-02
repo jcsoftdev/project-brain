@@ -25,7 +25,7 @@ The method here is comparison, not judgement. Find the dominant pattern with `se
 - [ ] Async style is uniform — `search_code` for `.then(`, `async function`/`await`, and callback-style signatures (`(err, data) =>`) doing comparable work. Mixed styles for the same kind of operation forces the reader to context-switch.
 - [ ] Error handling shape is uniform — `search_code` for `throw new` versus a return-result shape (`{ ok: false`, `Result<`, `[error, data]`). A codebase using both for the same kind of failure has two error-handling mental models live at once.
 - [ ] Data validation happens at consistent boundaries — `search_code` the validation library's call sites (`.parse(`, `.validate(`) and note whether they cluster at the route/entry layer or are scattered three layers deep in some services and not others.
-- [ ] Immutability conventions are consistent — `search_code` for mutating methods (`.push(`, `.splice(`, `+=` on a declared `const` object) against the dominant style found elsewhere. If most code avoids mutation, the places that mutate need a reason.
+- [ ] Immutability conventions are consistent — `search_code` for mutating methods (`.push(`, `.splice(`, `+=` on a declared `const` object) against the dominant style found elsewhere. If most code avoids mutation, the places that mutate need a reason: check for an adjacent comment or rationale (a perf-critical hot path note, an explicit justification) at the mutating site before flagging it as an unexplained deviation.
 
 ## Interfaces
 
@@ -38,13 +38,13 @@ The method here is comparison, not judgement. Find the dominant pattern with `se
 
 - [ ] Comment style and density are uniform — `search_code` the doc-comment marker (`/**`, `///`) and compare its count against the number of exported symbols from `find_symbol`. Partial coverage across an otherwise-documented module reads as intentional gaps, which is worse than no documentation at all.
 - [ ] The documentation format is one format — `search_code` for competing doc styles (JSDoc blocks vs. plain `//` prose vs. a separate doc generator's syntax) and confirm one wins.
-- [ ] Comments are current — for any comment making a factual claim about behaviour ("closes the connection", "always returns non-null"), read the code directly beneath it and confirm the claim still holds. A comment contradicting its code is `Medium` — readers trust comments, and this one lies. This is exactly how the "Close without binding" comment in this repo's own HTTP test came to mislead.
+- [ ] Comments are current — for any comment making a factual claim about behaviour ("closes the connection", "always returns non-null"), Read the code directly beneath it and confirm the claim still holds. A comment contradicting its code is `Medium` — readers trust comments, and this one lies. This is exactly how the "Close without binding" comment in this repo's own HTTP test came to mislead.
 
 ## Tooling agreement
 
 - [ ] Formatter and linter config exist and the codebase actually conforms — read the lint config's enabled rules, then `search_code` for a pattern one of those rules should have caught (`console.log` if `no-console` is on, say). A hit means the config is decoration. (As of 2026 the common combinations are Ruff for Python — largely displacing the older flake8/pylint/isort stack — and ESLint+Prettier or the newer single-tool Biome for JS/TS; the check here is that one combination was picked and enforced, not which.)
-- [ ] Committed config does not contradict itself — read `.editorconfig`, the formatter config, and the linter config side by side for the same setting (indent size, quote style, line length) and diff the values.
-- [ ] Pre-commit or CI enforces what the config declares — `search_code` for a pre-commit hook (`.husky/`, `.pre-commit-config.yaml`) and a lint/format step in the CI workflow files. Treat the two differently: a pre-commit hook with no matching CI step is enforced only for a developer who has the hook installed and hasn't bypassed it (`--no-verify`, or a fresh clone before the install step ran) — nothing stops a violation from merging. CI absent is the real gap; pre-commit absent with a CI lint step present is slower feedback, not a missing gate. Neither present means the standard is optional, and optional standards decay.
+- [ ] Committed config does not contradict itself — Read `.editorconfig`, the formatter config, and the linter config side by side for the same setting (indent size, quote style, line length) and diff the values.
+- [ ] Pre-commit or CI enforcement of what the config declares — owned by `tooling-baseline.md` (`search_code` for a pre-commit hook and a matching lint/format step in the CI workflow, and confirm the CI step actually gates the merge rather than running only pre-commit); reuse its finding, do not re-report.
 
 ## Out of static reach
 

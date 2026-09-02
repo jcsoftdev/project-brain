@@ -8,11 +8,11 @@ Every check below has the same shape: find the rule on surface A, find its count
 
 ## Validation rules stated twice
 
-- [ ] Max/min length constraints: `search_code` for the field name near a length check on both client and server (`maxLength`, `.max(`, `LENGTH(`, a schema `maxLength`). Diff the numbers literally — a client capping a bio at 500 characters while the server truncates or rejects at 280 is a rule that only ever fires on one side.
+- [ ] Max/min length constraints: `search_code` for the field name near a length check on both client and server (`maxLength`, `.max(`, `LENGTH(`, a schema `maxLength`). Diff the numbers literally — a client capping a bio at 500 characters while the server truncates or rejects at 280 is a rule that only ever fires on one side. Rule out a documented reason for the gap (a comment, a note about a second consumer) before flagging a client-stricter-than-server divergence as unintentional.
 - [ ] Regex/format validation — email, phone, postal code, username character set — implemented independently on both sides. `search_code` for `RegExp(`, a bare `/.../ ` pattern literal, or the field name near `.test(`/`.match(` on each side; two regex literals for "valid email" are almost never identical, so diff them character by character, not by eye.
 - [ ] Required-field sets: `search_code` the field name near `required`/`.notNull()`/a schema's `required: true` on the server, and near a form library's `required` prop or resolver rule on the client. A field optional client-side while the server 400s without it is bad UX, not a bug; the server accepting it as optional while the client always sends it masks a real gap — nothing ever exercises the server's optional path.
 - [ ] Allowed value ranges — quantity minimums/maximums, rating scales, percentage bounds — `search_code` the field name near `min`/`max`/`.gte(`/`.lte(` on both sides and diff the literal numbers; duplicated magic numbers with no shared source are the finding even before they diverge.
-- [ ] File upload limits: size cap and accepted MIME/extension list, checked independently client-side (for UX) and server-side (for safety). The server-side check is the one that matters for security — cross-reference `security.md` if the client is the *only* place a limit is enforced.
+- [ ] File upload limits: `search_code` the size cap and accepted MIME/extension list near the upload handler on both client (for UX) and server (for safety), and diff them. The server-side check is the one that matters for security — cross-reference `security.md` if the client is the *only* place a limit is enforced.
 
 ## Enum and constant sets
 
@@ -32,13 +32,13 @@ Every check below has the same shape: find the rule on surface A, find its count
 
 ## Query parameter contracts
 
-- [ ] Pagination: page-size defaults and maximums, cursor vs. offset — what the client sends versus what the server actually reads and clamps to. A client requesting `pageSize=200` against a server capping at 50 works, silently, until someone assumes the requested size was honoured.
+- [ ] Pagination: `search_code` the page-size default/maximum and cursor-vs-offset parameter on both client and server, and diff what the client sends against what the server actually reads and clamps to. A client requesting `pageSize=200` against a server capping at 50 works, silently, until someone assumes the requested size was honoured.
 - [ ] Sorting and filtering parameter names and accepted values: `search_code` the query-param name the client builds (`sort=`, `filter[`) versus the param name the server's route handler actually reads — a client sending `sort=createdAt` against a server that only recognises `sortBy` fails silently to a default sort, not an error.
 
 ## Authorisation decided twice
 
 - [ ] A permission or role check performed client-side to hide a UI element: `search_code` the role/permission constant on the client, then `find_callers`/`trace_path` from the corresponding write endpoint on the server to confirm the same check exists there too. An unenforced server-side check means the client-side check is the *only* thing stopping the action, which anyone can bypass by calling the API directly. **Escalates to `security.md`**; report the finding there with a pointer back here for the parity evidence.
-- [ ] The inverse, less common but real: server-side authorisation stricter than what the client believes, so the client renders an action it cannot actually complete, and the user hits an opaque 403 mid-flow.
+- [ ] The inverse, less common but real: server-side authorisation stricter than what the client believes — `find_symbol` the server-side authorisation check and `Read` its condition, then `search_code` the client's render guard for the same role/permission constant and diff the two; a client renders an action it cannot actually complete, and the user hits an opaque 403 mid-flow.
 - [ ] Session/token expiry duration: `search_code` the client's refresh-timer literal (a hardcoded interval, "refresh every 55 minutes") against the server's actual configured TTL (a JWT expiry constant, a session config value) — a client refreshing too late gets a surprise 401 mid-action instead of a seamless renewal.
 
 ## Formatting rules
@@ -54,11 +54,19 @@ Every check below has the same shape: find the rule on surface A, find its count
 - Behaviour of third-party SDKs embedded in either surface that apply their own undocumented validation.
 - Locale-dependent formatting differences that only manifest for locales not exercised by any test or by the auditor's reading.
 
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| `network.jsonl` | Runtime-only defaults supplied by infrastructure (a load balancer, an API gateway), visible in response headers during a walked flow, that never appear in either codebase | Medium |
+
 ## Severity guidance
 
 | Situation | Severity |
 |---|---|
-| Client-only authorisation check with no server-side enforcement | Critical (defer to `security.md`) |
+| Client-only authorisation check with no server-side enforcement (defer to `security.md`) | Critical |
 | Error code the client branches on that the server never emits | High |
 | Validation rule enforced client-side only, unenforced server-side | High |
 | File upload limit enforced only on the client | High |

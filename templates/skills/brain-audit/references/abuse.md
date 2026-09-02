@@ -10,8 +10,8 @@ Gate: auth, external input, or a network boundary was detected.
 - [ ] Rate limits are keyed on something the user cannot trivially rotate. Read the limiter's key function: per-IP alone is weak (rotates behind CGNAT or a VPN); per-account or per-API-key is better.
 - [ ] Request and payload size are bounded before parsing, not after. `search_code` the body-parser configuration (`bodyParser.json({limit:`, `express.json({limit:`, `client_max_body_size`, framework equivalent) and confirm the limit is wired into the middleware chain ahead of the route, not merely declared and unused.
 - [ ] Uploads are bounded in size, count, and total per account, and the type is verified from file content rather than filename or declared MIME type. `find_symbol` the upload handler and read the validator: an extension or `Content-Type` header check alone is the finding; a check against magic bytes (file-type sniffing) rules it out — read which one is actually implemented before flagging. CWE-434 Unrestricted Upload of File with Dangerous Type, #12 in the 2025 CWE Top 25.
-- [ ] Anything that fans out — a single request causing N downstream calls — has a bound on N. `find_callees` or `trace_path` from the handler: a loop over a user-supplied array (batch IDs, recipient lists, webhook targets) calling a downstream service once per item, with no cap on array length, is the finding.
-- [ ] Expensive queries reachable by an unauthenticated caller. Cross-list unauthenticated routes (from the route table) against `repo_map`'s top-ranked symbols or any join-heavy/aggregate query `find_symbol` turns up on those routes.
+- [ ] Anything that fans out — a single request causing N downstream calls — has a bound on N. `find_callees` or `trace_path` from the handler: a loop over a user-supplied array (batch IDs, recipient lists, webhook targets) calling a downstream service once per item, with no cap on array length, is the finding. Rule out: a cap enforced by the request schema before the handler runs — confirm the schema, not just the loop, before flagging.
+- [ ] Expensive queries reachable by an unauthenticated caller — expensive means a join count, an unindexed/full-table scan, or an unbounded aggregate `find_symbol` shows in the query. Cross-list unauthenticated routes (from the route table) against `repo_map`'s top-ranked symbols or any such query `find_symbol` turns up on those routes. Rule out: a query that is already paginated, cached, or covered by a rate limit elsewhere in the pipeline is not the finding — confirm none of the three apply before flagging.
 
 ## Input as a weapon
 
@@ -38,7 +38,7 @@ Gate: auth, external input, or a network boundary was detected.
 
 ## Content abuse
 
-- [ ] User-generated content is escaped at render, and stored content cannot break out at any consumer — including emails, exports, and logs. `search_code` the template engine's autoescape setting and any explicit bypass (`{% autoescape false %}`, `dangerouslySetInnerHTML`, `| safe`) applied to a field that stores user input.
+- [ ] Stored user-generated content cannot break out at any consumer beyond the render path — including emails, exports, and logs. `search_code` for the content reaching an email template, export generator, or log formatter with no escaping/sanitisation applied there specifically. Render-path escaping itself (autoescape setting, `dangerouslySetInnerHTML`, `| safe`) is owned by `security.md` (`search_code` for `innerHTML`/`dangerouslySetInnerHTML`/`v-html`) — reuse its finding for that sink, do not re-report it here.
 - [ ] CSV/spreadsheet exports neutralise formula-leading characters. `find_symbol` the export function and read whether it prefixes cells starting with `=`, `+`, `-`, or `@` before writing them.
 - [ ] Filenames from users are sanitised before being used on disk or in a header. `find_symbol` the upload handler and read whether the stored filename is the raw client-supplied string or a sanitised/generated one (hash, UUID, stripped path).
 - [ ] User-supplied URLs fetched by the server are validated against internal and private addresses before the request is made. `search_code` for outbound HTTP calls (`fetch(`, `axios.get(`, `requests.get(`, `http.request(`) where the URL argument traces back to user input via `find_callers`, and check for an allowlist (preferred) or private-IP/link-local/loopback-range rejection ahead of the call — its absence on a server-side fetch of a user-supplied URL is the SSRF finding and is `Critical`. CWE-918, #22 in the 2025 CWE Top 25; SSRF is no longer its own OWASP Top 10 category — it was folded into A01:2025 Broken Access Control — cite CWE-918 or OWASP API Security Top 10:2023 API7 (SSRF) instead of "OWASP A10".
@@ -51,6 +51,14 @@ Gate: auth, external input, or a network boundary was detected.
 - Whether a third-party payment or coupon provider enforces idempotency independently of this codebase's own guard.
 - Real-world timing differences for enumeration — network jitter can mask a gap that is clearly visible when reading the two code paths side by side, and can also expose one too small to see in source.
 - Whether the business rules encoded here match the product's actual legal or ToS constraints (refund windows, promotional limits) — that is a policy document this module cannot read.
+
+## What browser observation closes
+
+Applies only when `browser.md` ran; findings here are `observed` and cite the bundle path with a line or step number.
+
+| Artefact | Gap it closes | Observed instance earns |
+|---|---|---|
+| `network.jsonl` | Real-world timing difference between the "not found" and "not permitted" paths, driven through a live session | High |
 
 ## Severity guidance
 

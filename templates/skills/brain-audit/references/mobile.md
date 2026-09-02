@@ -6,15 +6,15 @@ Mobile amplifies every defect the other modules find: the network is unreliable,
 
 ## Lifecycle
 
-- [ ] State survives backgrounding. `search_code` for the lifecycle hook (`onPause`, `applicationDidEnterBackground`, an `AppState` listener) and confirm in-memory state it should persist is written to a durable store (disk, `SharedPreferences`/`UserDefaults`, a persisted store) inside that hook, not only held in a view model.
+- [ ] State survives backgrounding. `search_code` for the lifecycle hook (`onPause`, `applicationDidEnterBackground`, an `AppState` listener) and confirm state bound to a form field or a multi-step flow's progress — specifically, not any other in-memory value such as scroll position or an open toast — is written to a durable store (disk, `SharedPreferences`/`UserDefaults`, a persisted store) inside that hook, not only held in a view model.
 - [ ] In-flight work is paused or cancelled on background, and resumed or abandoned deliberately on foreground. `find_callees` on the background/foreground lifecycle hooks for a cancellation or resume call on the in-flight request or task object.
 - [ ] Deep links and cold starts reach the same state as in-app navigation. `trace_path` from the deep-link handler to the target screen's initialisation — a screen reachable only through a parent route that sets state the deep link skips is the finding.
-- [ ] Rotation and configuration changes do not lose user input. `search_code` for the rotation/configuration-change callback and confirm form or input state is restored from a saved-instance-state mechanism rather than reset to defaults.
+- [ ] Rotation and configuration changes do not lose user input. `search_code` for the rotation/configuration-change callback and confirm form or input state is restored from a saved-instance-state mechanism rather than reset to defaults. Exclude screens locked to a single orientation (`android:screenOrientation="portrait"` or equivalent), where rotation cannot occur at all.
 
 ## Network reality
 
 - [ ] Every request assumes it can fail, be slow, or arrive twice. `find_callees` on each network call site for a catch/error branch — a call with no error handling treats failure as impossible.
-- [ ] Retries are bounded and backed off. `search_code` the retry wrapper around a network call and confirm a max-attempt count and backoff exist. An unbounded retry on a metered connection is a cost defect too — cross-reference `Cost`.
+- [ ] Retries are bounded and backed off — owned by `failure.md` (`search_code` the retry wrapper around a network call and confirm a max-attempt count and backoff exist); reuse its finding, do not re-report. This module's own angle is the metered-connection cost consequence: an unbounded retry on a metered connection is a cost defect too — cross-reference `Cost`.
 - [ ] Large payloads are paginated or streamed. `search_code` for a list-fetching call with no page/cursor parameter, against an endpoint the `API` module's inventory shows supports one.
 - [ ] Uploads survive interruption, or explicitly restart. `find_callees` on the upload call site for a resume/checkpoint mechanism; its absence means any interruption restarts from zero with no stated fallback.
 
@@ -26,7 +26,7 @@ Mobile amplifies every defect the other modules find: the network is unreliable,
 
 ## Storage and secrets
 
-- [ ] Tokens and credentials use the platform keystore, never plain preferences or a local file. `search_code` for a token/credential-shaped variable name adjacent to a `SharedPreferences`/`UserDefaults`/plain-file write call, instead of `Keychain`/`Keystore`/`EncryptedSharedPreferences`.
+- [ ] Tokens and credentials use the platform keystore, never plain preferences or a local file. `search_code` for a token/credential-shaped variable name adjacent to a `SharedPreferences`/`UserDefaults`/plain-file write call, instead of `Keychain`/`Keystore`/`EncryptedSharedPreferences`; that is `High` at `read`. `trace_path` from the auth client/handler that produces the token to the plain-storage write call promotes the finding to `traced`, and `Critical`, by proving the value is genuinely a live credential rather than a similarly-named field.
 - [ ] Cached user data is clearable, and logout actually clears it. `find_callees` on the logout handler for a call that clears the local cache/database; its absence means logged-out state still holds the previous user's data.
 - [ ] Local database migrations exist and are tested against the previous version's schema. `search_code` the local-DB migration directory and confirm a version-bump path exists — cross-reference `database.md`'s migration checks for the fuller review.
 
@@ -57,10 +57,10 @@ Mobile amplifies every defect the other modules find: the network is unreliable,
 
 | Situation | Severity |
 |---|---|
-| Credential in plain local storage | Critical |
+| Credential in plain local storage, confirmed via `trace_path` from the auth response (traced) | Critical |
+| Credential-shaped value in plain local storage, established only by reading the storage call | High |
 | Crash on deep link or cold start | High |
-| State lost on backgrounding | High |
-| Unbounded retry loop | High |
+| Form or multi-step-flow state lost on backgrounding | High |
 | Permission requested but never used | Medium |
 | Permanent-denial path dead-ends | Medium |
 | Blocking work on the UI thread | Medium |
