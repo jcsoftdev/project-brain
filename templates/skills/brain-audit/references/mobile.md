@@ -14,7 +14,6 @@ Mobile amplifies every defect the other modules find: the network is unreliable,
 ## Network reality
 
 - [ ] Every request assumes it can fail, be slow, or arrive twice. `find_callees` on each network call site for a catch/error branch — a call with no error handling treats failure as impossible.
-- [ ] `search_code` for a certificate/TLS-pinning mechanism (`NSPinnedDomains`/App Transport Security exceptions, Android `network_security_config.xml` `pin-set`, TrustKit, an OkHttp `CertificatePinner`) guarding the client(s) used for auth or payment endpoints; its absence on a client that carries credentials is a gap, not a proven vulnerability — this check establishes the mechanism exists, not that the pinned certificates are current. Refuted when the endpoint runs over a certificate-transparency-monitored, short-lived-cert infrastructure where pinning is deliberately not used (a documented tradeoff, not an oversight) — check for that rationale in code comments or ADRs before flagging (OWASP MAS project, OWASP MASVS, current, https://mas.owasp.org/MASVS/ — names MASVS-NETWORK as a control category; the specific pinning control's normative text was not independently fetchable in this research pass, so this check is explicitly weaker-grounded than the module's other `read`-tier checks).
 - [ ] Retries are bounded and backed off — owned by `failure.md` (`search_code` the retry wrapper around a network call and confirm a max-attempt count and backoff exist); reuse its finding, do not re-report. This module's own angle is the metered-connection cost consequence: an unbounded retry on a metered connection is a cost defect too — cross-reference `Cost`.
 - [ ] Large payloads are paginated or streamed. `search_code` for a list-fetching call with no page/cursor parameter, against an endpoint the `API` module's inventory shows supports one.
 - [ ] Uploads survive interruption, or explicitly restart. `find_callees` on the upload call site for a resume/checkpoint mechanism; its absence means any interruption restarts from zero with no stated fallback.
@@ -60,6 +59,7 @@ Mobile amplifies every defect the other modules find: the network is unreliable,
 - Whether flagged main-thread or bridge work actually drops frames or triggers an ANR on a real device — this module confirms a code path capable of blocking, not measured frame timing.
 - Whether a bad OTA update is caught and rolled back before reaching most users — this module confirms a runtime-version pin exists, not that a rollout/rollback policy operates.
 - Whether a pinned certificate is current and rotates before expiry — this module can find a pinning library import, not validate the pinned certificate data itself.
+- Whether certificate/TLS pinning is required or expected on the auth/payment client(s): OWASP MASVS names MASVS-NETWORK as a control category (OWASP MAS project, OWASP MASVS, current, https://mas.owasp.org/MASVS/), but its normative pinning-control text was not independently fetchable in this research pass — a coverage gap, not a scored check, until that control text is cited directly.
 
 ## What browser observation closes
 
@@ -67,7 +67,7 @@ Applies only when `browser.md` ran; findings here are `observed` and cite the bu
 
 | Artefact | Gap it closes | Observed instance earns |
 |---|---|---|
-| `screenshots/` at a mobile emulation preset + computed `getBoundingClientRect()`/computed-style dimensions on the interactive element (the same evaluate-call pattern `browser.md` uses for contrast) | Touch targets meet the platform minimum (44×44pt iOS / 48×48dp Android), for a PWA or responsive web build only. A decorative or non-interactive element measured undersized is not a touch-target defect; only elements with a click/tap handler or link role count | Low |
+| `screenshots/` at a mobile emulation preset + `a11y-snapshot.md` bounding boxes on the interactive element, where the tool exposes them (`playwright`'s `browser_snapshot`; not producible from `claude-in-chrome`'s `read_page`) | Touch targets meet the platform minimum (44×44pt iOS / 48×48dp Android), for a PWA or responsive web build only. A decorative or non-interactive element measured undersized is not a touch-target defect; only elements with a click/tap handler or link role count. Not producible when the bundle carries no bounding boxes for the tool that filled the walker role — report under Coverage Gaps instead. | Low |
 | `screenshots/` + `scrollWidth`/`clientWidth` evaluate result, reusing `browser.md`'s own reflow candidate verbatim | Reflow / horizontal overflow at a 320px-wide emulated viewport, for a PWA or responsive web build only. Refuted if the overflowing region is one of WCAG 1.4.10's exempted two-dimensional cases | Medium |
 
 ## Severity guidance
@@ -84,7 +84,6 @@ Applies only when `browser.md` ran; findings here are `observed` and cite the bu
 | Platform branch with an unhandled side | Medium |
 | Boilerplate usage-description string, store-rejection risk | Medium |
 | OTA channel with no runtime-version pin against the native binary | High |
-| Auth/payment client with no certificate-pinning mechanism | Medium |
 | Keystore-backed key for a high-value operation usable with no fresh re-authentication | Medium |
 | JS-thread blocking work crossing the legacy React Native bridge | Medium |
 | Virtualising list present but misconfigured for its dataset size | Low |

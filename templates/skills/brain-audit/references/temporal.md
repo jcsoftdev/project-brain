@@ -51,8 +51,8 @@ Applies only when `browser.md` ran; findings here are `observed` and cite the bu
 
 | Artefact | Gap it closes | Observed instance earns |
 |---|---|---|
-| `steps.md` (emulated timezone) + `screenshots/` (rendered timestamp) + `network.jsonl` (raw API timestamp for cross-reference) | User-facing timestamp rendered in the server's zone rather than the browser's emulated/local zone. Refuted if the displayed time is explicitly and correctly labelled as the shared/business zone (e.g. a shared-calendar "9:00 AM EST") rather than presented as the viewer's own local time. | Medium |
-| `network.jsonl` (server-reported expiry value) + `screenshots/`/`final-state.md` (UI state) | A displayed expiry/countdown already elapsed relative to the API-reported expiry, still shown as valid/active in the UI. Refuted if the UI only re-checks expiry on the next user action and the walk never triggered that action. | Medium |
+| `steps.md` (header: URL, revision, viewport) + `screenshots/` (rendered timestamp) + `network.jsonl` (raw API timestamp for cross-reference) | User-facing timestamp rendered in the server's zone rather than the local zone of the machine running the walker. Refuted if the displayed time is explicitly and correctly labelled as the shared/business zone (e.g. a shared-calendar "9:00 AM EST") rather than presented as the viewer's own local time. | Medium |
+| `screenshots/`/`final-state.md` (rendered countdown/expiry state) cross-referenced against `steps.md`'s per-step monotonic elapsed timestamp | A displayed expiry/countdown still shown as valid/active well past the interval it originally announced, judged from the flow's own elapsed time rather than a captured server-reported expiry value (`network.jsonl` records a response body only on 4xx/5xx, so a 200 API response's expiry field is not in the bundle). Refuted if the UI only re-checks expiry on the next user action and the walk never triggered that action. | Medium |
 | `steps.md` (per-step monotonic elapsed timestamp) + `screenshots/` at two points in one flow | A "time ago"/countdown display that never advances, or jumps discontinuously, across the flow's real elapsed time. Refuted if the flow's real elapsed time was too short for the display to be expected to change at its stated granularity. | Low |
 
 ## Out of static reach
@@ -64,6 +64,7 @@ Applies only when `browser.md` ran; findings here are `observed` and cite the bu
 - Whether a future leap second will actually be announced and inserted — this module reads today's tz rules, not the Earth's rotation forecast.
 - Whether the production clock source smears or steps a leap second — that is a runtime clock-source property no static probe reads.
 - Whether users in timezones the browser walk never emulated see a correctly zoned timestamp — this module observes one emulated profile, not the real population.
+- A rendered timestamp against an actually-emulated non-local timezone — no tool in `browser.md`'s catalogue emulates a timezone (`chrome-devtools`'s `emulate` covers device and network conditions only); the browser-zone comparison this module can run is limited to the walker machine's own local zone against the server's zone.
 
 ## Severity guidance
 

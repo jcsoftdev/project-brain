@@ -42,7 +42,7 @@ Concurrency defects are the ones that pass every test and fail in production, be
 ## Signals and shutdown
 
 - [ ] In-flight work completes or is safely abandoned on shutdown: `search_code` for `process.on('SIGTERM'`/`'SIGINT'`, then read whether the handler awaits outstanding work before exiting — a pod's termination grace period defaults to 30 seconds before SIGKILL follows SIGTERM (Kubernetes project, official documentation, current, https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/).
-- [ ] Shutdown is bounded: Read the shutdown handler for a forced-exit timeout wrapping the drain. Its absence means a hang on drain never resolves — worse than a forced exit, since nothing else will send SIGKILL once the orchestrator's own grace period has already elapsed (Kubernetes project, official documentation, current, https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/).
+- [ ] Shutdown is bounded: Read the shutdown handler for a forced-exit timeout wrapping the drain. Its absence means a hang on drain never resolves cleanly on its own terms — the orchestrator's grace period elapses and SIGKILL follows, killing the process mid-work instead of letting it exit on a bounded timeout of its own (Kubernetes project, official documentation, current, https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle/).
 - [ ] Persistent handles are closed on every exit path: for each resource opened elsewhere (`find_symbol` the db pool, WAL, or file-lock construction), `search_code` the shutdown handler for a matching `.close()`/`.end()`/`.disconnect()` call.
 
 ## Reporting
@@ -55,7 +55,7 @@ Applies only when `browser.md` ran; findings here are `observed` and cite the bu
 
 | Artefact | Gap it closes | Observed instance earns |
 |---|---|---|
-| `network.jsonl` (two requests from one action), `screenshots/` + `final-state.md` | A rapid double-click/double-submit on the same control fires two requests and produces a duplicated side effect. Refuted if the control was disabled after the first click before the second could register — check the disabled-state timestamp in `a11y-snapshot.md`/`steps.md` against the second click's timestamp. | Medium |
+| `network.jsonl` (two requests from one action), `screenshots/` + `final-state.md` | A rapid double-click/double-submit on the same control fires two requests and produces a duplicated side effect. Refuted if the screenshot taken immediately after the first click already shows the control in a disabled/pending visual state before the second click was issued — `steps.md` records one timestamp per step, not per click, so ordering is read from the step sequence and the screenshot, not from a per-click timestamp. | Medium |
 | `network.jsonl` (request/response timestamps out of order), `steps.md`/`final-state.md` | A fast repeated interaction (retype in a search/filter box) renders a stale result after a fresher one. Refuted if the rendered content matches the latest input despite out-of-order network arrival — a sequence guard is working even though the bundle alone can't see it in source. | Medium |
 
 ## Out of static reach

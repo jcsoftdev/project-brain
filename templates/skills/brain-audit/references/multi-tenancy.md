@@ -75,7 +75,7 @@ Applies only when `browser.md` ran; findings here are `observed` and cite the bu
 |---|---|---|
 | `network.jsonl` | Whether a tenant-scoped endpoint answers a second tenant's session with the first tenant's status, size or cache headers — a 200 with identical size where a 403/404 or a different payload size was expected, or a shared `ETag`/`Cache-Control` across tenants | High |
 | `network.jsonl` | Whether a cached response actually crosses tenants on the flows walked — same `ETag`, same `Age`/`X-Cache` hit, same size for two tenant sessions requesting tenant-scoped data | High |
-| `network.jsonl` (status **and** body, captured on 4xx/5xx) | Cross-tenant existence via a distinguishable error response — two authenticated tenant sessions, one requesting the other's real resource ID, compared against that same session requesting a genuinely absent ID | Medium (capped below the static `read`-tier finding — this only confirms the response is distinguishable, not that data was returned) |
+| `network.jsonl` (status **and** body, captured on 4xx/5xx) | Cross-tenant existence via a distinguishable error response — two authenticated tenant sessions, one requesting the other's real resource ID, compared against that same session requesting a genuinely absent ID, capped at or below the static `read`-tier finding since this only confirms the response is distinguishable, not that data was returned | Low |
 
 ## Severity guidance
 

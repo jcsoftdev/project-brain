@@ -92,7 +92,7 @@ Applies only when `browser.md` ran; findings here are `observed` and cite the bu
 | `network.jsonl` | Mixed content — an `http://` request made from an `https://` page | High |
 | `network.jsonl` | Anti-clickjacking headers (`X-Frame-Options`, CSP `frame-ancestors`) on the primary HTML document response | High |
 | `network.jsonl` | CORS preflight response exposes a wildcard origin with credentials allowed — `OPTIONS` response header pair on the same endpoint | High |
-| `console.jsonl` | CSP violation reported by the browser itself | Info to Medium, scaled to what the violated directive protects |
+| `console.jsonl` | CSP violation reported by the browser itself, scaled to what the violated directive protects | Medium |
 
 ## Severity guidance
 
