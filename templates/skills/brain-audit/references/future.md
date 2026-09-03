@@ -55,7 +55,7 @@ Applies only when `browser.md` ran; findings here are `observed` and cite the bu
 | Artefact | Gap it closes | Observed instance earns |
 |---|---|---|
 | `console.jsonl` | A framework or browser deprecation warning fires during a walked flow (e.g. a React/Vue/Angular console notice that an API "is deprecated and will be removed", a browser `Deprecation` console category entry) — refuted if the stack trace/source points at a third-party script the project does not control | Low |
-| `console.jsonl` / `steps.md` | A statically-flagged "deprecated, no removal date" API or flag (from this module's own Deprecation debt check) is confirmed still exercised, by observing it fire during a walked flow — refuted if the warning is a dev-mode-only artifact (e.g. React StrictMode's double-invoke warnings) that would not fire in a production build; raises the existing static finding's tier from `read` toward `observed` rather than opening a separate one | No new row — promotes the existing finding's tier |
+| `console.jsonl` / `steps.md` | A statically-flagged "deprecated, no removal date" API or flag (from this module's own Deprecation debt check) is confirmed still exercised, by observing it fire during a walked flow — refuted if the warning is a dev-mode-only artifact (e.g. React StrictMode's double-invoke warnings) that would not fire in a production build; raises the existing static finding's tier from `read` toward `observed` rather than opening a separate one | Low |
 
 ## Severity guidance
 
