@@ -217,6 +217,7 @@ The `Reference` column is the exact filename under `references/` — load that f
 | | Design System | `design-system.md` |
 | | Visual Design | `visual-design.md` |
 | | Accessibility | `accessibility.md` |
+| **Browser observation ran** and a UI framework or HTML entry point was detected — never proposed by detection alone, see `## Execution` | Usability | `usability.md` |
 | Native mobile project | Mobile | `mobile.md` |
 | Schema, migrations, or ORM present | Database | `database.md` |
 | LLM / AI SDK calls present | AI | `ai.md` |

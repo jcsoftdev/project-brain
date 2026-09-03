@@ -63,6 +63,7 @@ import featureFlags from "../../templates/skills/brain-audit/references/feature-
 import toolingBaseline from "../../templates/skills/brain-audit/references/tooling-baseline.md" with { type: "text" };
 import runtime from "../../templates/skills/brain-audit/references/runtime.md" with { type: "text" };
 import browser from "../../templates/skills/brain-audit/references/browser.md" with { type: "text" };
+import usability from "../../templates/skills/brain-audit/references/usability.md" with { type: "text" };
 // J. Provenance and reach
 import supplyChain from "../../templates/skills/brain-audit/references/supply-chain.md" with { type: "text" };
 import repoHistory from "../../templates/skills/brain-audit/references/repo-history.md" with { type: "text" };
@@ -126,6 +127,7 @@ export const BRAIN_AUDIT_FILES: Record<string, string> = {
   "references/repo-history.md": repoHistory,
   "references/runtime.md": runtime,
   "references/browser.md": browser,
+  "references/usability.md": usability,
   "references/scalability.md": scalability,
   "references/security.md": security,
   "references/state-model.md": stateModel,

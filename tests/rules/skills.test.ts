@@ -228,9 +228,9 @@ function extractGateReferences(skill: string): string[] {
 describe("gate table parity (guards v1 Defect 1)", () => {
   const gateRefs = extractGateReferences(BRAIN_AUDIT_FILES["SKILL.md"]);
 
-  it("names all 51 modules, with no duplicates", () => {
-    expect(gateRefs.length).toBe(51);
-    expect(new Set(gateRefs).size).toBe(51);
+  it("names all 52 modules, with no duplicates", () => {
+    expect(gateRefs.length).toBe(52);
+    expect(new Set(gateRefs).size).toBe(52);
   });
 
   it("every gate reference either ships or is explicitly deferred", () => {
@@ -703,8 +703,8 @@ describe("reference module lint (self-review layer 1)", () => {
   const lines = (md: string) => md.split("\n").map((text, i) => ({ n: i + 1, text }));
   const checks = (md: string) => lines(md).filter((l) => /^\s*- \[ \]/.test(l.text));
 
-  it("has the 51 modules the gate table names", () => {
-    expect(names.size).toBe(51);
+  it("has the 52 modules the gate table names", () => {
+    expect(names.size).toBe(52);
   });
 
   it("every check names at least one probe from the catalogue", () => {
