@@ -72,6 +72,17 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
+    # `id-token: write` lets `npm publish` authenticate to the registry over
+    # OIDC (npm trusted publishing) instead of a long-lived publish token. npm
+    # is retiring granular tokens that bypass 2FA: they lost account management
+    # in Aug 2026 and lose direct publishing around Jan 2027, and the
+    # bypass-2FA checkbox can no longer be enabled on a new token — so a
+    # 2FA-required account has no working token path left. The trusted
+    # publisher is configured per package on npmjs.com and names this file.
+    # https://github.blog/changelog/2026-07-08-npm-install-time-security-and-gat-bypass2fa-deprecation/
+    permissions:
+      contents: write
+      id-token: write
     needs: create-release
     runs-on: ${{ matrix.os }}
     # Without this the GitHub default applies — 360 minutes. The smoke test runs
@@ -131,6 +142,21 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      # OIDC trusted publishing needs npm >= 11.5.1. Node 24 normally ships a
+      # new enough npm, but the runner image decides that, not us — assert it
+      # rather than discover it as a publish failure.
+      - name: Ensure npm supports OIDC trusted publishing
+        shell: bash
+        run: |
+          have="$(npm --version)"
+          if node -e 'const a=process.argv[1].split(".").map(Number),b=[11,5,1];process.exit((a[0]>b[0]||(a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>=b[2]))))?0:1)' "$have"; then
+            echo "npm $have is new enough for OIDC trusted publishing"
+          else
+            echo "npm $have is older than 11.5.1 - upgrading"
+            npm install -g npm@11
+          fi
+          npm --version
 
       - name: Install dependencies
         run: bun install
@@ -279,7 +305,6 @@ jobs:
             npm publish --access public
           fi
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ github.ref_name }}
 
   package-managers:
@@ -358,6 +383,9 @@ jobs:
 
   publish-npm:
     name: Publish to npm
+    permissions:
+      contents: read
+      id-token: write
     needs: build
     # `always()` so a single failed or hung platform build does not withhold the
     # release from every platform that DID build. The safety property is kept by
@@ -379,6 +407,21 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      # OIDC trusted publishing needs npm >= 11.5.1. Node 24 normally ships a
+      # new enough npm, but the runner image decides that, not us — assert it
+      # rather than discover it as a publish failure.
+      - name: Ensure npm supports OIDC trusted publishing
+        shell: bash
+        run: |
+          have="$(npm --version)"
+          if node -e 'const a=process.argv[1].split(".").map(Number),b=[11,5,1];process.exit((a[0]>b[0]||(a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>=b[2]))))?0:1)' "$have"; then
+            echo "npm $have is new enough for OIDC trusted publishing"
+          else
+            echo "npm $have is older than 11.5.1 - upgrading"
+            npm install -g npm@11
+          fi
+          npm --version
 
       - name: Sync optionalDependencies version
         shell: bash
@@ -462,5 +505,4 @@ jobs:
             npm publish --access public --tag "${TAG}"
           fi
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ github.ref_name }}
