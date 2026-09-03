@@ -663,7 +663,7 @@ const SEVERITIES = new Set(["Critical", "High", "Medium", "Low", "Info"]);
 const PENDING_PART_B: string[] = [];
 // Observation-bundle artefacts browser.md produces; cited by consumer modules,
 // never modules themselves.
-const BROWSER_ARTEFACTS = ["steps.md", "insights.md", "vitals.md", "a11y-snapshot.md", "final-state.md"];
+const BROWSER_ARTEFACTS = ["steps.md", "insights.md", "vitals.md", "a11y-snapshot.md", "final-state.md", "routes.md", "resource-perf.md"];
 
 function referenceModules(): Record<string, string> {
   return Object.fromEntries(
