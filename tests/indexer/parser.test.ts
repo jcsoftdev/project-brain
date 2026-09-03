@@ -3,6 +3,15 @@ import { chunkContent } from "../../src/indexer/parser.js";
 import type { Boundary } from "../../src/parser/extract.js";
 
 describe("parser / chunker", () => {
+  // `updated_at` is `Date.now()` at chunk-construction time, so two calls that
+  // straddle a millisecond boundary differ by 1 and a whole-object `toEqual`
+  // fails for a reason that has nothing to do with chunking. Compare shape,
+  // not the clock. (CI run 33782640572 failed exactly this way: expected
+  // 1788455258831, received 1788455258830.)
+  const sameChunking = (a: ReturnType<typeof chunkContent>, b: ReturnType<typeof chunkContent>) => {
+    const strip = (cs: ReturnType<typeof chunkContent>) => cs.map(({ updated_at: _ignored, ...rest }) => rest);
+    expect(strip(a)).toEqual(strip(b));
+  };
   describe("markdown splitting", () => {
     it("splits markdown by headings", () => {
       const content = `# Introduction
@@ -146,7 +155,7 @@ export class MyClass {
       const content = `function foo() {\n  return 1;\n}\n`;
       const withoutBoundaries = chunkContent(content, "src/main.ts", "src");
       const withEmptyBoundaries = chunkContent(content, "src/main.ts", "src", []);
-      expect(withoutBoundaries).toEqual(withEmptyBoundaries);
+      sameChunking(withoutBoundaries, withEmptyBoundaries);
     });
 
     it("markdown files ignore boundaries entirely (markdown path is unchanged)", () => {
@@ -156,7 +165,7 @@ export class MyClass {
       ];
       const withBoundaries = chunkContent(content, "docs/x.md", "docs", boundaries);
       const withoutBoundaries = chunkContent(content, "docs/x.md", "docs");
-      expect(withBoundaries).toEqual(withoutBoundaries);
+      sameChunking(withBoundaries, withoutBoundaries);
     });
 
     it("does not re-slice a cAST section via splitBySize even when raw length exceeds 1600 (non-whitespace budget already respects cAST's 2000 limit)", () => {
