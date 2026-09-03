@@ -9,14 +9,19 @@ sources:
     title: The BROWSER_ARTEFACTS allow-list the cross-reference lint consults
 status: stable
 generated: { by: "human:jcsoftdev", at: 2026-09-02T00:00:00Z }
+verified:
+  - by: "human:jcsoftdev"
+    at: 2026-09-03T00:00:00Z
+    note: "Two artefacts, routes.md and resource-perf.md, were added to browser.md's bundle table and to BROWSER_ARTEFACTS in the same commit; constraint held."
 ---
 
 # Constraint
 
-The observation bundle `browser.md` produces is named in five `.md` files —
-`steps.md`, `vitals.md`, `insights.md`, `a11y-snapshot.md`, `final-state.md` —
-and those names are cited, in backticks, from the `## What browser observation
-closes` section of twenty-three other modules. They are **not** modules, but the
+The observation bundle `browser.md` produces is named in seven `.md` files —
+`steps.md`, `vitals.md`, `insights.md`, `a11y-snapshot.md`, `final-state.md`,
+`routes.md`, `resource-perf.md` — and those names are cited, in backticks, from
+the `## What browser observation closes` section of twenty-three other
+modules. They are **not** modules, but the
 reference lint cannot tell: its cross-reference rule treats every backticked
 `<name>.md` under `references/` as a module that must ship.
 

@@ -6,6 +6,10 @@ tags: [okf, sync, indexing, staleness]
 resource: ../src/commands/sync.ts#L478-L499
 status: stable
 generated: { by: "human:jcsoftdev", at: 2026-07-29T21:40:00-05:00 }
+verified:
+  - by: "human:jcsoftdev"
+    at: 2026-09-03T09:00:00-05:00
+    note: "Re-checked sync.ts's okf skip branch — deleteBySource still runs before the manifest write (now L545-559), so the fix this gotcha documents is still in place."
 ---
 
 # Gotcha

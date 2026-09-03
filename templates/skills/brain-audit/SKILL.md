@@ -4,7 +4,7 @@ description: "Trigger: audit this project, comprehensive audit, full codebase au
 license: Apache-2.0
 metadata:
   author: jcsoftdev
-  version: "2.4"
+  version: "2.5"
   generator: project-brain
 ---
 
