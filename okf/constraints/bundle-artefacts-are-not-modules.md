@@ -11,7 +11,7 @@ status: stable
 generated: { by: "human:jcsoftdev", at: 2026-09-02T00:00:00Z }
 verified:
   - by: "human:jcsoftdev"
-    at: 2026-09-03T00:00:00Z
+    at: 2026-09-03T07:44:26Z
     note: "Two artefacts, routes.md and resource-perf.md, were added to browser.md's bundle table and to BROWSER_ARTEFACTS in the same commit; constraint held."
 ---
 
