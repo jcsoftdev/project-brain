@@ -632,9 +632,10 @@ describe("orphan pruning", () => {
 // Reference module lint — self-review layer 1 (design 2026-09-01, Part A).
 // Deterministic rules over every references/*.md in the brain-audit manifest.
 // A check with no probe is dead (SKILL.md step 5); a severity outside the
-// contract or a cross-reference to a missing file is a wrong finding waiting
-// to happen. These run on every `bun test` so a future module cannot
-// reintroduce what the self-review removed.
+// contract — in the Severity guidance table or in an observation table's
+// "Observed instance earns" column — or a cross-reference to a missing file
+// is a wrong finding waiting to happen. These run on every `bun test` so a
+// future module cannot reintroduce what the self-review removed.
 // ---------------------------------------------------------------------------
 
 const AUDIT_PROBES = [
@@ -749,6 +750,23 @@ describe("reference module lint (self-review layer 1)", () => {
       });
     }
     expect(bad, `severity cells outside Critical|High|Medium|Low|Info:\n${bad.join("\n")}`).toEqual([]);
+  });
+
+  it("every observation-table severity cell is a single contract severity", () => {
+    const bad: string[] = [];
+    for (const [name, md] of Object.entries(modules)) {
+      const obs = section(md, "What browser observation closes");
+      if (obs === null) continue; // browser.md is not required to close its own observations
+      const offset = md.slice(0, md.indexOf(obs)).split("\n").length;
+      obs.split("\n").forEach((text, i) => {
+        if (!text.startsWith("|")) return;
+        const cells = text.split("|").slice(1, -1).map((c) => c.trim());
+        if (cells.length < 2 || cells[0] === "Artefact" || cells[0].startsWith("---")) return;
+        const last = cells[cells.length - 1];
+        if (!SEVERITIES.has(last)) bad.push(`${name}:${offset + i} "${last}"`);
+      });
+    }
+    expect(bad, `observation-table severity cells outside Critical|High|Medium|Low|Info:\n${bad.join("\n")}`).toEqual([]);
   });
 
   it("every cross-reference to a `<name>.md` points at a shipped module", () => {
