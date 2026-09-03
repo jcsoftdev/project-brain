@@ -87,7 +87,7 @@ Applies only when `browser.md` ran; findings here are `observed` and cite the bu
 | Flag read with no matching declaration (typo'd key, silent default) | High |
 | Same, `find_callers`/`trace_path`-traced to an authorisation, paywall, rate-limit, or billing decision (traced) | Critical |
 | Kill switch that doesn't stop the work it claims to | Critical |
-| Kill switch verified in only one of several deployment targets running the same logic | Critical |
+| Kill switch verified in only one of several deployment targets running the same logic, traced (`find_callers`/`trace_path`) | Critical |
 | Repurposed flag's old code path left reachable independent of the flag, traced (`find_callers`/`trace_path`) | Critical |
 | Repurposed flag's old code path left reachable independent of the flag, reachability unconfirmed | High |
 | Client-only or server-only half of a security/billing flag | High |

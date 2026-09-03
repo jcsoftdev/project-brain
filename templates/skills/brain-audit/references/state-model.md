@@ -85,7 +85,7 @@ Applies only when `browser.md` ran; findings here are `observed` and cite the bu
 |---|---|
 | Persisted value confirmed present in live data with no current code path (`runtime.md` DB query) | Critical |
 | Transition precondition checked and applied against different data sources across a request boundary, traced via `trace_path` | Critical |
-| Race on an identity- or privilege-granting transition (email verification, role/plan upgrade, session auth flag) | Critical |
+| Race on an identity- or privilege-granting transition (email verification, role/plan upgrade, session auth flag), traced via `trace_path` | Critical |
 | Persisted value with no current code path that handles it, presence in live data unconfirmed | Medium |
 | Assigned state with no handling branch (silent no-op) | High |
 | Transition with no guard, reachable from any state | High |
