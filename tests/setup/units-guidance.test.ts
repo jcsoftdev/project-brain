@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { SetupContext } from "../../src/setup/units.js";
+import type { AIToolRegistrar } from "../../src/registrars/types.js";
 
 async function context(): Promise<SetupContext> {
   const dir = await mkdtemp(join(tmpdir(), "pb-guidance-"));
@@ -17,6 +18,7 @@ async function context(): Promise<SetupContext> {
     recordConnection: { mode: "fresh", cdpPort: 9222 },
     hookStrict: { routing: false, worktree: false },
     skipOllama: true,
+    routingConfigPath: join(dir, "model-routing.json"),
   };
 }
 
@@ -74,6 +76,52 @@ describe("hook units", () => {
     const settings = JSON.parse(await Bun.file(ctx.claudeSettingsPath).text());
 
     expect(JSON.stringify(settings)).toContain("project-brain worktree-guard");
+
+    await rm(ctx.claudeSettingsPath, { force: true });
+  });
+});
+
+describe("guidance:model-routing apply", () => {
+  it("reads routingConfigPath instead of the real homedir config", async () => {
+    const { guidanceUnits } = await import("../../src/setup/units.js");
+    const ctx = await context();
+
+    // A value no built-in default could produce, so a hit proves the temp
+    // file was actually consulted rather than the homedir default.
+    await Bun.write(
+      ctx.routingConfigPath!,
+      JSON.stringify({ models: { claude: { fast: "test-distinguishable-model-12345" } } })
+    );
+
+    let written: string | null = null;
+    const fakeRegistrar: AIToolRegistrar = {
+      name: "FakeHost",
+      routing: {
+        hostKey: "claude",
+        mechanism: "per-spawn",
+        howToApply: "pass `model`",
+        labelField: null,
+        models: { fast: null, balanced: null, deep: null },
+      },
+      async isInstalled() {
+        return true;
+      },
+      async register() {},
+      async writeRules() {},
+      async writeModelRouting(content: string) {
+        written = content;
+      },
+      async writtenRoutingVersion() {
+        return null;
+      },
+    };
+    ctx.installed = [fakeRegistrar];
+
+    const unit = guidanceUnits().find((u) => u.id === "guidance:model-routing")!;
+    await unit.apply(ctx);
+
+    expect(written).not.toBeNull();
+    expect(written!).toContain("test-distinguishable-model-12345");
 
     await rm(ctx.claudeSettingsPath, { force: true });
   });

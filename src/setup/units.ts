@@ -25,6 +25,13 @@ export interface SetupContext {
   recordConnection: { mode: "fresh" | "live"; cdpPort: number };
   hookStrict: { routing: boolean; worktree: boolean };
   skipOllama: boolean;
+  /**
+   * Overrides `ROUTING_CONFIG_PATH` (which is homedir-derived) so a test can
+   * redirect it — `os.homedir()` cannot be redirected under `bun test`, unlike
+   * a real process's `HOME`. Optional so `undefined` keeps meaning "use the
+   * real default" in production.
+   */
+  routingConfigPath?: string;
 }
 
 /**
@@ -331,7 +338,7 @@ export function guidanceUnits(): SetupUnit[] {
         if (eligible.length === 0) return;
 
         const { loadRoutingConfig } = await import("../rules/model-routing-config.js");
-        const resolved = await loadRoutingConfig();
+        const resolved = await loadRoutingConfig(ctx.routingConfigPath);
         for (const warning of resolved.warnings) console.warn(`Warning: ${warning}`);
 
         const { getModelRoutingSection } = await import("../rules/model-routing.js");
