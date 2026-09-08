@@ -374,6 +374,11 @@ async function readStamp(skillDir: string): Promise<Stamp> {
   }
 }
 
+/** Public read of an installed skill's stamp, for the setup units. */
+export async function readSkillStamp(skillDir: string): Promise<Stamp> {
+  return readStamp(skillDir);
+}
+
 /**
  * Delete files a previous stamp claims we wrote and this manifest no longer
  * ships. Never touches a path we did not record — a hand-written
@@ -428,31 +433,57 @@ export async function inspectOwnership(skillDir: string): Promise<Ownership> {
  * foreign directory is never partially clobbered. A skipped target is not an
  * error: the remaining targets still install and setup continues.
  */
-export async function installSkill(targetDirs: string[]): Promise<InstallResult> {
+/**
+ * Install ONE skill into every target root.
+ *
+ * Extracted from `installSkill` so a unit can install exactly its own skill.
+ * `installSkill` is now this in a loop, which is what keeps the two paths from
+ * disagreeing about ownership, stamping or pruning.
+ */
+export async function installOneSkill(
+  targetDirs: string[],
+  name: string
+): Promise<InstallResult> {
+  const manifest = SKILL_MANIFESTS[name];
+  if (!manifest) throw new Error(`Unknown skill: ${name}`);
+
   const written: string[] = [];
   const skipped: SkippedTarget[] = [];
   const removed: string[] = [];
 
   for (const dir of targetDirs) {
-    for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
-      const skillDir = join(dir, name);
-      const ownership = await inspectOwnership(skillDir);
-      if (ownership !== "absent" && ownership !== "ours") {
-        skipped.push({ dir: skillDir, reason: ownership });
-        continue;
-      }
-
-      const previous = ownership === "ours" ? await readStamp(skillDir) : { hash: "", files: [] };
-
-      for (const [rel, content] of Object.entries(manifest)) {
-        const dest = join(skillDir, rel);
-        await mkdir(dirname(dest), { recursive: true });
-        await writeFile(dest, content, "utf8");
-      }
-      removed.push(...(await pruneOrphans(skillDir, previous.files, manifest)));
-      await writeFile(join(skillDir, STAMP_FILE), renderStamp(manifest), "utf8");
-      written.push(skillDir);
+    const skillDir = join(dir, name);
+    const ownership = await inspectOwnership(skillDir);
+    if (ownership !== "absent" && ownership !== "ours") {
+      skipped.push({ dir: skillDir, reason: ownership });
+      continue;
     }
+
+    const previous = ownership === "ours" ? await readStamp(skillDir) : { hash: "", files: [] };
+
+    for (const [rel, content] of Object.entries(manifest)) {
+      const dest = join(skillDir, rel);
+      await mkdir(dirname(dest), { recursive: true });
+      await writeFile(dest, content, "utf8");
+    }
+    removed.push(...(await pruneOrphans(skillDir, previous.files, manifest)));
+    await writeFile(join(skillDir, STAMP_FILE), renderStamp(manifest), "utf8");
+    written.push(skillDir);
+  }
+
+  return { written, skipped, removed };
+}
+
+export async function installSkill(targetDirs: string[]): Promise<InstallResult> {
+  const written: string[] = [];
+  const skipped: SkippedTarget[] = [];
+  const removed: string[] = [];
+
+  for (const name of Object.keys(SKILL_MANIFESTS)) {
+    const outcome = await installOneSkill(targetDirs, name);
+    written.push(...outcome.written);
+    skipped.push(...outcome.skipped);
+    removed.push(...outcome.removed);
   }
 
   return { written, skipped, removed };
