@@ -69,4 +69,16 @@ describe("computePlan", () => {
     const plan = computePlan([row({ id: "f", state: "foreign", chosen: false })]);
     expect(plan[0]!.action).toBe("blocked");
   });
+
+  it("declining a unit that cannot be applied here must not plan a removal", async () => {
+    const { computePlan } = await import("../../src/setup/plan.js");
+    const plan = computePlan([row({ id: "u", state: "unavailable", chosen: false })]);
+    expect(plan[0]!.action).toBe("unchanged");
+  });
+
+  it("deselecting a stale unit must plan a removal", async () => {
+    const { computePlan } = await import("../../src/setup/plan.js");
+    const plan = computePlan([row({ id: "s", state: "stale", chosen: false })]);
+    expect(plan[0]!.action).toBe("remove");
+  });
 });
