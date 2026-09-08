@@ -427,14 +427,12 @@ export async function inspectOwnership(skillDir: string): Promise<Ownership> {
 }
 
 /**
- * Write every embedded file into `<dir>/brain-audit/`, creating subdirectories.
+ * Write one skill's embedded files into `<dir>/<name>/` for every target,
+ * creating subdirectories as needed.
  *
  * Ownership is checked once per target BEFORE any write to that target, so a
  * foreign directory is never partially clobbered. A skipped target is not an
  * error: the remaining targets still install and setup continues.
- */
-/**
- * Install ONE skill into every target root.
  *
  * Extracted from `installSkill` so a unit can install exactly its own skill.
  * `installSkill` is now this in a loop, which is what keeps the two paths from
@@ -474,6 +472,10 @@ export async function installOneSkill(
   return { written, skipped, removed };
 }
 
+/**
+ * Install every skill in the registry into every target root: `installOneSkill`
+ * run once per skill name, with the three results merged.
+ */
 export async function installSkill(targetDirs: string[]): Promise<InstallResult> {
   const written: string[] = [];
   const skipped: SkippedTarget[] = [];

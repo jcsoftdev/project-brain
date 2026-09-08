@@ -493,6 +493,23 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   };
 }
 
+/**
+ * Deterministic, grouped-by-directory text for the "Skill installed in:" line.
+ *
+ * `installSkill` (via Task 4's `installOneSkill`) produces `written` in
+ * skill-major order — every root for skill A, then every root for skill B —
+ * not the dir-major order it used to. That reorder is invisible to
+ * `InstallResult`'s own tests, but this is the one place it was user-visible:
+ * with two or more skill target roots (Claude Code + Codex + the shared
+ * `~/.agents/skills` is the normal case), the raw array interleaves
+ * directories instead of grouping them. Sorting a COPY here — never
+ * `result.skillTargets` itself — keeps the installer's own ordering exactly as
+ * it produces it; this is a display concern only.
+ */
+export function formatSkillTargets(skillTargets: string[]): string {
+  return [...skillTargets].sort().join(", ");
+}
+
 /** CLI entry point for the setup command. */
 export async function execute(args: string[]): Promise<void> {
   console.log("project-brain setup\n");
@@ -536,7 +553,7 @@ export async function execute(args: string[]): Promise<void> {
   }
 
   if (result.skillTargets.length > 0) {
-    console.log(`\nSkill installed in: ${result.skillTargets.join(", ")}`);
+    console.log(`\nSkill installed in: ${formatSkillTargets(result.skillTargets)}`);
   }
 
   if (result.routingHooks.installed) {

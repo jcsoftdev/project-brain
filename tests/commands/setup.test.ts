@@ -694,3 +694,50 @@ describe("setup command", () => {
     });
   });
 });
+
+/**
+ * Task 4 fix round 1, finding 1: `installSkill`'s rewrite made `written`
+ * skill-major (every root for skill A, then every root for skill B) instead
+ * of dir-major. No `InstallResult` test cares about order, but `execute()`'s
+ * "Skill installed in:" line printed that array raw — so with two or more
+ * skill target roots the CLI output silently went from grouped-by-directory
+ * to interleaved-by-skill.
+ *
+ * `execute()` itself calls the real environment detection, real registrars
+ * and real interactive prompts with no injection point, so exercising the
+ * actual `console.log` line here would mean either hitting the developer's
+ * real ~/.claude and ~/.agents directories or restructuring `execute()`'s
+ * signature — out of scope for a display-only fix. `formatSkillTargets` is
+ * the display-site fix `execute()` now calls, extracted specifically so this
+ * regression has somewhere to be pinned without either of those costs.
+ */
+describe("formatSkillTargets", () => {
+  it("sorts skill-major installer output back into deterministic, grouped-by-directory order", async () => {
+    const { formatSkillTargets } = await import("../../src/commands/setup.js");
+
+    // Shape installSkill now produces with 2 skills x 2 target roots: every
+    // root for brain-audit, then every root for brain-commit.
+    const skillMajor = [
+      join("/roots/agents", "brain-audit"),
+      join("/roots/claude", "brain-audit"),
+      join("/roots/agents", "brain-commit"),
+      join("/roots/claude", "brain-commit"),
+    ];
+
+    expect(formatSkillTargets(skillMajor)).toBe(
+      [
+        join("/roots/agents", "brain-audit"),
+        join("/roots/agents", "brain-commit"),
+        join("/roots/claude", "brain-audit"),
+        join("/roots/claude", "brain-commit"),
+      ].join(", ")
+    );
+  });
+
+  it("never mutates the array it is given", async () => {
+    const { formatSkillTargets } = await import("../../src/commands/setup.js");
+    const skillMajor = [join("/b"), join("/a")];
+    formatSkillTargets(skillMajor);
+    expect(skillMajor).toEqual([join("/b"), join("/a")]);
+  });
+});
