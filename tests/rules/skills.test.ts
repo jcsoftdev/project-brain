@@ -878,4 +878,41 @@ describe("removeSkill", () => {
 
     await rm(root, { recursive: true, force: true });
   });
+
+  it("prunes the full ancestor chain of nested stamped paths", async () => {
+    const { removeSkill } = await import("../../src/rules/skills.js");
+    const root = await mkdtemp(join(tmpdir(), "pb-remove-nested-"));
+    const skillDir = join(root, "test-skill");
+
+    // Create nested directory structure: references/sub/deep/
+    await mkdir(join(skillDir, "references", "sub", "deep"), { recursive: true });
+    // Write generated files at various depths
+    await writeFile(join(skillDir, "SKILL.md"), `---\nname: test-skill\nmetadata:\n  ${GENERATOR_MARKER}\n---\nGenerated skill\n`);
+    await writeFile(join(skillDir, "references", "root-ref.md"), "# Root level\n");
+    await writeFile(join(skillDir, "references", "sub", "sub-ref.md"), "# One level deep\n");
+    await writeFile(join(skillDir, "references", "sub", "deep", "deep-ref.md"), "# Two levels deep\n");
+
+    // Create stamp that records all these files
+    const stampContent = [
+      "test-hash",
+      "SKILL.md",
+      "references/root-ref.md",
+      "references/sub/sub-ref.md",
+      "references/sub/deep/deep-ref.md",
+    ].join("\n") + "\n";
+    await writeFile(join(skillDir, STAMP_FILE), stampContent, "utf8");
+
+    // Verify setup
+    expect(existsSync(join(skillDir, "references", "sub", "deep", "deep-ref.md"))).toBe(true);
+
+    const outcome = await removeSkill(skillDir);
+
+    // All files should be removed
+    expect(outcome.removed.length).toBeGreaterThan(0);
+    expect(outcome.skipped).toBeNull();
+    // The entire skill directory should be gone — the ancestor chain was complete
+    expect(existsSync(skillDir)).toBe(false);
+
+    await rm(root, { recursive: true, force: true });
+  });
 });

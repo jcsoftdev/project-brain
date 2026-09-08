@@ -469,6 +469,12 @@ export async function installSkill(targetDirs: string[]): Promise<InstallResult>
  *
  * Ownership is checked first, so a hand-written skill that happens to share our
  * directory name is never opened for deletion.
+ *
+ * Directory ancestors are walked for every stamped path (the full ancestor chain,
+ * not just immediate parents), because a partial chain would strand the directory
+ * in an unreadable state: the skill directory would be left with no SKILL.md, so
+ * the next `inspectOwnership` call would return "unreadable" and permanently block
+ * reinstalling.
  */
 export async function removeSkill(
   skillDir: string
@@ -496,13 +502,20 @@ export async function removeSkill(
 
   await rm(join(skillDir, STAMP_FILE), { force: true }).catch(() => {});
 
-  // Prune the directories the manifest created, deepest first, then the skill
-  // directory itself. Each rmdir fails harmlessly when something the user owns
-  // is still inside.
-  const dirs = [...new Set(stamp.files.map((rel) => dirname(rel)).filter((d) => d !== "."))].sort(
-    (a, b) => b.length - a.length
-  );
-  for (const rel of dirs) {
+  // Collect the full ancestor chain for every stamped relative path, then prune
+  // deepest-first. `rmdir` without `recursive` fails harmlessly when anything
+  // the user owns is still inside.
+  const dirs = new Set<string>();
+  for (const rel of stamp.files) {
+    if (rel.startsWith("/") || rel.split("/").includes("..")) continue;
+    let current = dirname(rel);
+    while (current !== ".") {
+      dirs.add(current);
+      current = dirname(current);
+    }
+  }
+  const sortedDirs = [...dirs].sort((a, b) => b.length - a.length);
+  for (const rel of sortedDirs) {
     await rmdir(join(skillDir, rel)).catch(() => {});
   }
   await rmdir(skillDir).catch(() => {});
