@@ -6,6 +6,11 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import skillMd from "../../templates/skills/brain-audit/SKILL.md" with { type: "text" };
 import okfSkillMd from "../../templates/skills/brain-okf/SKILL.md" with { type: "text" };
 import commitSkillMd from "../../templates/skills/brain-commit/SKILL.md" with { type: "text" };
+import worktreeSkillMd from "../../templates/skills/brain-worktree/SKILL.md" with { type: "text" };
+import recordSkillMd from "../../templates/skills/brain-record/SKILL.md" with { type: "text" };
+import recordScript from "../../templates/skills/brain-record/assets/record.mjs" with { type: "text" };
+import recordBuildVideo from "../../templates/skills/brain-record/assets/build-video.sh" with { type: "text" };
+import recordPitfalls from "../../templates/skills/brain-record/references/pitfalls.md" with { type: "text" };
 
 // A. Product & intent
 import functional from "../../templates/skills/brain-audit/references/functional.md" with { type: "text" };
@@ -167,6 +172,49 @@ export const BRAIN_COMMIT_FILES: Record<string, string> = {
 };
 
 /**
+ * brain-worktree — give an isolated task its own brain and its own port.
+ *
+ * Single file, like the two above: the whole skill is one decision followed by a fixed
+ * sequence, with nothing worth deferring to a reference.
+ *
+ * It exists because the two halves of the orchestration are owned by different tools.
+ * project-brain scopes an index by `projectId`; mcp-port-registry leases a port by
+ * (project, worktree). Both derive from the same git facts and spell them differently,
+ * so the pairing has to be written down somewhere an agent will actually read.
+ */
+export const BRAIN_WORKTREE_FILES: Record<string, string> = {
+  "SKILL.md": worktreeSkillMd,
+};
+
+/**
+ * brain-record — record the full flow a ticket/branch touches as PR/ticket evidence.
+ *
+ * Rewritten onto a CDP-screencast engine (v2.0) after live verification that the prior
+ * screen-capture engine cannot work: it drove the browser through the Chrome MCP, whose
+ * tab is never frontmost, so "read the window rect from the page" returned all zeros and
+ * screen capture recorded a different tab entirely. `assets/record.mjs` connects to a
+ * Chrome CDP endpoint with `playwright-core`, drives every beat itself, and captures with
+ * `Page.startScreencast` — which captures the PAGE, so foreground/visibility never
+ * matter. This dropped every avfoundation/window-rect/HiDPI/foreign-window concern the
+ * old engine carried (see templates/skills/brain-record/references/pitfalls.md) and with
+ * it `record.sh` and `filter-frames.py`, which existed only for those concerns.
+ * `assets/build-video.sh` no longer crops browser chrome (a page screencast never had
+ * any); it now turns `record.mjs`'s `stamps.json` — the screencast is VARIABLE-rate, only
+ * emitting a frame on repaint — into an ffmpeg concat file with a per-frame `duration`
+ * before encoding at a constant fps=30.
+ *
+ * The pointer-overlay JS lives inline in `record.mjs`, not as a separate shipped asset:
+ * it is injected via `page.addInitScript`/`page.evaluate`, which take source as a string,
+ * so there is nothing to ship it through separately.
+ */
+export const BRAIN_RECORD_FILES: Record<string, string> = {
+  "SKILL.md": recordSkillMd,
+  "assets/record.mjs": recordScript,
+  "assets/build-video.sh": recordBuildVideo,
+  "references/pitfalls.md": recordPitfalls,
+};
+
+/**
  * Every skill setup installs, keyed by the directory name it occupies inside a
  * skills root. Ownership is proven per skill directory, so a user's
  * hand-written `brain-okf/` is left alone even while `brain-audit/` upgrades.
@@ -175,6 +223,8 @@ export const SKILL_MANIFESTS: Record<string, Record<string, string>> = {
   "brain-audit": BRAIN_AUDIT_FILES,
   "brain-commit": BRAIN_COMMIT_FILES,
   "brain-okf": BRAIN_OKF_FILES,
+  "brain-record": BRAIN_RECORD_FILES,
+  "brain-worktree": BRAIN_WORKTREE_FILES,
 };
 
 /**
