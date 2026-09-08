@@ -2,6 +2,7 @@ import { join } from "node:path";
 import template from "../../templates/project.claude.md" with { type: "text" };
 import { writeSection } from "./section-marker.js";
 import { renderToolDocs } from "../constants.js";
+import { listLiveWorktrees } from "../git/worktree.js";
 import type { StackInfo } from "../indexer/stack.js";
 
 export interface ProjectRulesInfo {
@@ -101,6 +102,42 @@ If there IS something, propose the type, title, and anchor, and let the human co
 }
 
 /**
+ * Render the worktree section, but only for a project that is a git repository.
+ *
+ * Gated for `renderOkfSection`'s reason: a project with no git has no worktrees, and an
+ * instruction it can never act on is dead weight in every CLAUDE.md project-brain
+ * touches.
+ *
+ * This lives in CLAUDE.md rather than only in the SessionStart hook because the decision
+ * it governs is made before any worktree exists. The hook states the rule once per
+ * session and only where a host runs hooks at all; the file states it for every session,
+ * every host, permanently.
+ */
+function renderWorktreeSection(isGitRepo: boolean): string {
+  if (!isGitRepo) return "";
+
+  return `
+## Isolated work (git worktrees)
+
+Before delegating work that changes code AND is checked by running the app — an
+end-to-end pass, a browser walkthrough, a recorded demo — decide whether it belongs in
+its own git worktree. Use the \`brain-worktree\` skill for the full sequence.
+
+Why it is not optional: project-brain scopes its index per worktree, so a worktree that
+was never initialized has no brain for its branch, and the MCP server refuses to serve
+it rather than answer from an empty index. Ports are scoped the same way through
+\`port_acquire\`, so two agents that both assume the default port collide and the failure
+looks like a broken app rather than a taken port.
+
+\`project-brain worktree status --json\` reports both identities: \`projectId\` for
+project-brain tools, and the \`project\` + \`worktree\` pair for \`port_acquire\`. They are
+spelled differently and are not interchangeable.
+
+Read-only work needs none of this.
+`;
+}
+
+/**
  * Write project-specific rules into <root>/CLAUDE.md using the project template.
  * Substitutes {{projectId}} and {{stack}} placeholders.
  * Uses writeSection for idempotent marker-based insertion.
@@ -116,7 +153,11 @@ export async function writeProjectRules(
     .replace(/\{\{stack\}\}/g, formatStack(info.stack))
     .replace(/\{\{tools\}\}/g, renderToolDocs())
     .replace(/\{\{modules\}\}/g, modulesSection)
-    .replace(/\{\{okf\}\}/g, renderOkfSection(info.hasOkfBundle ?? false));
+    .replace(/\{\{okf\}\}/g, renderOkfSection(info.hasOkfBundle ?? false))
+    // git is asked directly rather than trusting a flag from the caller: `init` runs in
+    // places that are not repositories, and a wrong answer here writes an instruction
+    // the project can never follow.
+    .replace(/\{\{worktree\}\}/g, renderWorktreeSection(listLiveWorktrees(root).length > 0));
 
   const claudeMdPath = join(root, "CLAUDE.md");
   await writeSection(claudeMdPath, rendered);
