@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { deriveProjectId } from "../../src/indexer/project-id.js";
+import {
+  deriveProjectId,
+  scopedProjectId,
+  parseScopedProjectId,
+  isScopedProjectId,
+} from "../../src/indexer/project-id.js";
 
 describe("deriveProjectId", () => {
   let tempDir: string;
@@ -70,5 +75,54 @@ describe("deriveProjectId", () => {
   it("falls back to directory basename for non-git directory", async () => {
     const id = await deriveProjectId(tempDir);
     expect(id.length).toBeGreaterThan(0);
+  });
+});
+
+describe("scopedProjectId", () => {
+  it("leaves the base id untouched for the main checkout", () => {
+    expect(scopedProjectId("project-brain", "main")).toBe("project-brain");
+  });
+
+  it("suffixes the base id with the worktree name for a linked worktree", () => {
+    expect(scopedProjectId("project-brain", "agent-a")).toBe("project-brain@agent-a");
+  });
+
+  it("does not double-scope an id that is already scoped", () => {
+    expect(scopedProjectId("project-brain@agent-a", "agent-a")).toBe("project-brain@agent-a");
+  });
+});
+
+describe("parseScopedProjectId", () => {
+  it("splits a scoped id into its base and worktree", () => {
+    expect(parseScopedProjectId("project-brain@agent-a")).toEqual({
+      base: "project-brain",
+      worktree: "agent-a",
+    });
+  });
+
+  it("reports an unscoped id as the main checkout", () => {
+    expect(parseScopedProjectId("project-brain")).toEqual({
+      base: "project-brain",
+      worktree: "main",
+    });
+  });
+
+  it("splits on the LAST separator so a base id containing one survives", () => {
+    expect(parseScopedProjectId("weird@name@agent-a")).toEqual({
+      base: "weird@name",
+      worktree: "agent-a",
+    });
+  });
+
+  it("round-trips every scoped id it produces", () => {
+    const parsed = parseScopedProjectId(scopedProjectId("my-repo", "wt-7"));
+    expect(parsed).toEqual({ base: "my-repo", worktree: "wt-7" });
+  });
+});
+
+describe("isScopedProjectId", () => {
+  it("is true only for ids that name a linked worktree", () => {
+    expect(isScopedProjectId("project-brain@agent-a")).toBe(true);
+    expect(isScopedProjectId("project-brain")).toBe(false);
   });
 });

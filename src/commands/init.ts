@@ -3,7 +3,8 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { DEFAULT_BUNDLE_DIRNAME } from "../okf/init.js";
 import { detectStack } from "../indexer/stack.js";
-import { deriveProjectId } from "../indexer/project-id.js";
+import { deriveProjectId, scopedProjectId } from "../indexer/project-id.js";
+import { detectGitContext } from "../git/worktree.js";
 import { installGitHook } from "../hooks/git.js";
 import { upsertContextHook } from "../hooks/claude-settings.js";
 import { writeProjectRules } from "../rules/project.js";
@@ -71,10 +72,15 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
   }
 
   // 3. Derive project ID (stable: use existing one if present)
+  //
+  // In a linked worktree the id is namespaced by the worktree's directory name, which
+  // is what gives that worktree its own vector table, its own graph and its own
+  // registry entry. The main checkout keeps the bare id, so nothing existing moves.
+  const gitContext = detectGitContext(root);
   const projectId =
     typeof existingConfig.projectId === "string" && existingConfig.projectId.length > 0
       ? existingConfig.projectId
-      : await deriveProjectId(root);
+      : scopedProjectId(await deriveProjectId(root), gitContext.worktree);
 
   // 4. Detect stack
   const stack = await detectStack(root);
@@ -83,6 +89,9 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
   const config = {
     projectId,
     root,
+    // Recorded so `worktree prune` and any reader of project.json can tell a
+    // throwaway worktree index from the durable main one without shelling out to git.
+    worktree: gitContext.worktree,
     stack,
     initializedAt:
       typeof existingConfig.initializedAt === "string"

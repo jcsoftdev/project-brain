@@ -116,3 +116,23 @@ export async function lookupProjectRoot(dataDir: string, projectId: string): Pro
   if (!entry) return null;
   return existsSync(entry.root) ? entry.root : null;
 }
+
+/**
+ * Drop entries by id. Best-effort like the rest of this file.
+ *
+ * Separate from `registerProject`'s missing-root bookkeeping on purpose: that path
+ * MARKS absent roots and lets `prune` decide after a grace window, because a missing
+ * root can mean an unmounted volume. This one is for callers that already know the
+ * project is gone for good and are removing its storage in the same breath.
+ */
+export async function unregisterProjects(dataDir: string, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    const registry = await readRegistry(dataDir);
+    for (const id of ids) delete registry[id];
+    await mkdir(dataDir, { recursive: true });
+    await writeFile(join(dataDir, PROJECTS_FILE), JSON.stringify(registry, null, 2), "utf-8");
+  } catch {
+    // Best-effort: a stale entry is inert — it resolves to null once its root is gone.
+  }
+}

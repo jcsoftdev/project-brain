@@ -25,7 +25,8 @@ import { openGraphDb } from "./graph/db.js";
 import { GraphStore } from "./graph/store.js";
 import { GraphCache } from "./graph/cache.js";
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
+import { detectGitContext } from "./git/worktree.js";
 import type { EmbeddingClient, ToolDeps } from "./types.js";
 
 interface ServerOptions {
@@ -73,6 +74,22 @@ export async function createServer(options: ServerOptions = {}) {
   // Structural graph lives at the PROJECT-LOCAL path (not the global data dir)
   // so the served tools query the same graph.db that runSync/the watcher write.
   const projectRoot = options.projectRoot || process.cwd();
+
+  // A linked worktree with no `.project-brain/` of its own is the one case where
+  // booting does active harm rather than nothing. The mkdirSync below creates the
+  // directory and openGraphDb mints an EMPTY graph inside it, while resolveProjectId
+  // falls back to the worktree's basename and so names an empty vector table too.
+  // Every tool then answers "nothing found" where the truth is "never indexed" —
+  // indistinguishable to a caller, and worse to an agent, which trusts it.
+  const gitContext = detectGitContext(projectRoot);
+  if (!gitContext.isMain && !existsSync(join(projectRoot, ".project-brain", "project.json"))) {
+    throw new Error(
+      `project-brain is not initialized in worktree "${gitContext.worktree}" (${projectRoot}). ` +
+        "Serving it would answer every query from an empty index. " +
+        "Run `project-brain init` there, then `project-brain sync`."
+    );
+  }
+
   const graphDir = join(projectRoot, ".project-brain");
   mkdirSync(graphDir, { recursive: true });
   const graphPath = join(graphDir, GRAPH_DB_FILE);
