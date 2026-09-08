@@ -287,10 +287,23 @@ jobs:
           chmod +x "platform-pkg/bin/project-brain-native${{ matrix.ext }}" || true
           node -e "
             const fs = require('fs');
+            // `repository` is REQUIRED, not metadata. Publishing over OIDC attaches a
+            // sigstore provenance attestation naming this repo, and npm rejects the
+            // upload with 422 when package.json does not agree with it:
+            //   Error verifying sigstore provenance bundle: Failed to validate
+            //   repository information: package.json: "repository.url" is "",
+            //   expected to match "https://github.com/jcsoftdev/project-brain"
+            // The main package always had one, which is why only the generated
+            // platform packages failed — and why the failure only appeared once the
+            // token flow was replaced by trusted publishing.
+            //
+            // Derived from the GitHub context rather than hardcoded, so a fork or a
+            // rename cannot silently reintroduce the mismatch.
             const pkg = {
               name: 'project-brain-${{ matrix.target }}',
               version: process.env.VERSION,
               description: '${{ matrix.target }} binary for project-brain',
+              repository: { type: 'git', url: 'git+' + process.env.REPO_URL + '.git' },
               os: ['${{ matrix.node_os }}'],
               cpu: ['${{ matrix.node_cpu }}'],
               license: 'MIT',
@@ -306,6 +319,7 @@ jobs:
           fi
         env:
           VERSION: ${{ github.ref_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
 
   package-managers:
     name: Package for Homebrew and Scoop
