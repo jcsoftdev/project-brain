@@ -7,6 +7,8 @@ import {
   collectPositionals,
   parseIntFlag,
   parseListFlag,
+  parseWorktreeHookFlag,
+  parseRecordConnectionFlag,
 } from "../src/cli-args.js";
 
 describe("parsePort", () => {
@@ -197,5 +199,60 @@ describe("parseListFlag", () => {
 
   it("returns undefined when the flag is the last argument with no value", () => {
     expect(parseListFlag(["--focus"], "--focus")).toBeUndefined();
+  });
+});
+
+describe("parseWorktreeHookFlag", () => {
+  it("installs by default, with no guard", () => {
+    expect(parseWorktreeHookFlag([])).toEqual({ mode: "yes", strict: false });
+  });
+
+  it("opts out entirely on --no-worktree-hook", () => {
+    expect(parseWorktreeHookFlag(["--no-worktree-hook"])).toEqual({ mode: "no", strict: false });
+  });
+
+  it("--worktree-hook-strict implies installation", () => {
+    // Asking for the guard and then being asked whether to install hooks at all
+    // is one question too many.
+    expect(parseWorktreeHookFlag(["--worktree-hook-strict"])).toEqual({
+      mode: "yes",
+      strict: true,
+    });
+  });
+
+  it("resolves contradictory flags to the reading that writes nothing", () => {
+    expect(
+      parseWorktreeHookFlag(["--worktree-hook-strict", "--no-worktree-hook"])
+    ).toEqual({ mode: "no", strict: false });
+  });
+});
+
+describe("parseRecordConnectionFlag", () => {
+  it('defaults to "fresh" on CDP port 9222', () => {
+    expect(parseRecordConnectionFlag([])).toEqual({ mode: "fresh", cdpPort: 9222 });
+  });
+
+  it("switches to live only on the explicit flag", () => {
+    expect(parseRecordConnectionFlag(["--record-connection-live"])).toEqual({
+      mode: "live",
+      cdpPort: 9222,
+    });
+  });
+
+  it("reads a custom CDP port independently of the mode", () => {
+    expect(parseRecordConnectionFlag(["--record-cdp-port", "9333"])).toEqual({
+      mode: "fresh",
+      cdpPort: 9333,
+    });
+    expect(
+      parseRecordConnectionFlag(["--record-connection-live", "--record-cdp-port", "9333"])
+    ).toEqual({ mode: "live", cdpPort: 9333 });
+  });
+
+  it("falls back to the default port on a garbage value", () => {
+    expect(parseRecordConnectionFlag(["--record-cdp-port", "not-a-number"])).toEqual({
+      mode: "fresh",
+      cdpPort: 9222,
+    });
   });
 });
