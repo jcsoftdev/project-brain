@@ -4,6 +4,26 @@ const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 4000;
 const MAX_ATTEMPTS_PER_TEXT = 3;
 
+/**
+ * How many chunks in a row may exhaust every attempt before the pass gives up
+ * on the whole batch.
+ *
+ * The pass exists for a backend that is STRUGGLING — memory-constrained,
+ * failing batches it could serve one text at a time. A backend that is DOWN
+ * looks identical from inside a single attempt, and the deliberate
+ * `reset()` below means the circuit breaker can never end the pass on its own.
+ * Without this cap the two cases diverge only in cost: a down Ollama makes
+ * every chunk burn 3 attempts at the capped 4s backoff (~13.6s measured), so a
+ * thousand-chunk pass grinds for about four hours while holding the run's
+ * buffers resident. Jobs stacked up until the machine ran out of swap.
+ *
+ * Three consecutive write-offs is ~40s of continuous evidence that nothing is
+ * answering — while a single poisoned chunk (an over-length input, a bad
+ * encoding) still fails alone between neighbours that succeed, and any success
+ * clears the streak.
+ */
+export const MAX_CONSECUTIVE_FAILED_CHUNKS = 3;
+
 export interface RescueEmbedOptions {
   /**
    * Injectable sleep — tests replace this with an instant no-op so the
@@ -59,6 +79,7 @@ export async function rescueEmbedPass(
   embeddings.reset?.();
 
   let backoffMs = INITIAL_BACKOFF_MS;
+  let consecutiveFailedChunks = 0;
   // True once any attempt has failed — the NEXT attempt (whether a retry of
   // the same text or the first attempt of the next text) must sleep/backoff
   // before trying again. Cleared on any success.
@@ -88,5 +109,19 @@ export async function rescueEmbedPass(
     }
     // If every attempt failed, embeddedVectors[idx] stays null — the caller
     // recomputes embedFailed from the remaining null count.
+    if (succeeded) {
+      consecutiveFailedChunks = 0;
+      continue;
+    }
+
+    consecutiveFailedChunks++;
+    if (consecutiveFailedChunks >= MAX_CONSECUTIVE_FAILED_CHUNKS) {
+      const abandoned = indices.length - indices.indexOf(idx) - 1;
+      console.warn(
+        `[sync] final rescue pass: giving up after ${consecutiveFailedChunks} chunks in a row failed every attempt ` +
+          `(the embedding backend looks down, not slow); ${abandoned} chunks left unembedded`
+      );
+      return;
+    }
   }
 }
