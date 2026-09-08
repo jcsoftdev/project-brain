@@ -10,6 +10,9 @@ verified:
   - by: "human:jcsoftdev"
     at: 2026-09-03T09:00:00-05:00
     note: "Re-checked sync.ts's okf skip branch — deleteBySource still runs before the manifest write (now L545-559), so the fix this gotcha documents is still in place."
+  - by: "human:jcsoftdev"
+    at: 2026-09-08T00:00:00-05:00
+    note: "Flagged again by the sync-lock/watchdog work, which only touched execute() at the end of sync.ts. The skip branch is untouched at L547 and still deletes before the manifest write."
 ---
 
 # Gotcha
