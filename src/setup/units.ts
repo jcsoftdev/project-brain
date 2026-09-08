@@ -388,3 +388,94 @@ export function guidanceUnits(): SetupUnit[] {
     }),
   ];
 }
+
+/**
+ * The two units that belong to no other group.
+ *
+ * `embed:ollama-model` is the one unit whose `remove` does nothing, and that is
+ * deliberate rather than unfinished: an Ollama model is global to the machine
+ * and shared with every other tool on it. Deselecting means "stop pulling it",
+ * and the confirm screen says so instead of implying a delete we would be wrong
+ * to perform.
+ */
+export function otherUnits(): SetupUnit[] {
+  return [
+    {
+      id: "embed:ollama-model",
+      group: "Other",
+      label: "Ollama model",
+      description: "pulls nomic-embed-text; never deleted on removal, it is shared machine-wide",
+      defaultSelected: true,
+
+      async inspect(ctx): Promise<UnitState> {
+        if (ctx.skipOllama) return "unavailable";
+        const { detectEnvironment } = await import("../env/detect.js");
+        const env = await detectEnvironment();
+        if (!env.ollama.available) return "unavailable";
+        return env.ollama.models.includes("nomic-embed-text") ? "current" : "absent";
+      },
+
+      async apply(ctx): Promise<void> {
+        if (ctx.skipOllama) return;
+        try {
+          const proc = Bun.spawn(["ollama", "pull", "nomic-embed-text"], {
+            stdout: "inherit",
+            stderr: "inherit",
+          });
+          await proc.exited;
+        } catch {
+          console.warn("Warning: Failed to pull Ollama model.");
+        }
+      },
+
+      async remove(): Promise<void> {
+        // Intentionally empty. See the unit's description.
+      },
+    },
+    {
+      id: "config:record-connection",
+      group: "Other",
+      label: "brain-record config",
+      description: "which Chrome brain-record drives, and on which CDP port",
+      defaultSelected: true,
+
+      async inspect(ctx): Promise<UnitState> {
+        try {
+          const parsed = JSON.parse(await Bun.file(ctx.recordConfigPath).text());
+          return parsed.mode === ctx.recordConnection.mode &&
+            parsed.cdpPort === ctx.recordConnection.cdpPort
+            ? "current"
+            : "stale";
+        } catch {
+          return "absent";
+        }
+      },
+
+      async apply(ctx): Promise<void> {
+        const { mkdir } = await import("node:fs/promises");
+        const { dirname } = await import("node:path");
+        await mkdir(dirname(ctx.recordConfigPath), { recursive: true });
+        await Bun.write(
+          ctx.recordConfigPath,
+          `${JSON.stringify(ctx.recordConnection, null, 2)}\n`
+        );
+      },
+
+      async remove(ctx): Promise<void> {
+        const { rm } = await import("node:fs/promises");
+        await rm(ctx.recordConfigPath, { force: true });
+      },
+    },
+  ];
+}
+
+/**
+ * Every unit setup can offer, in display order.
+ *
+ * Hosts come first because everything below them depends on a host existing:
+ * a skills root comes from a detected tool, and both hook units are Claude
+ * Code's.
+ */
+export function allUnits(ctx: SetupContext): SetupUnit[] {
+  return [...hostUnits(ctx.installed), ...guidanceUnits(), ...skillUnits(), ...otherUnits()];
+}
