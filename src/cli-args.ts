@@ -51,6 +51,28 @@ export function parseRoutingHookFlag(args: string[]): {
 }
 
 /**
+ * Resolve the worktree-hook flags.
+ *
+ * Installation defaults to yes with no prompt, unlike the routing hooks. Those carry
+ * guidance someone can reasonably not want; the reconciling hooks prevent an index that
+ * outlives its worktree and a session that does not know its brain is scoped to another
+ * branch. Only an explicit opt-out suppresses them.
+ *
+ * `strict` is the opposite: it adds a PreToolUse guard that blocks a delegation until it
+ * states whether it needs isolation, costing one extra turn on every spawn that forgot.
+ * That is never a default. `--no-worktree-hook` still wins over it — contradictory flags
+ * resolve to the reading that writes nothing.
+ */
+export function parseWorktreeHookFlag(args: string[]): {
+  mode: "yes" | "no";
+  strict: boolean;
+} {
+  if (args.includes("--no-worktree-hook")) return { mode: "no", strict: false };
+  if (args.includes("--worktree-hook-strict")) return { mode: "yes", strict: true };
+  return { mode: "yes", strict: false };
+}
+
+/**
  * Resolve the non-interactive override for the bundled-skill install.
  *
  * Mirrors `parseModelRoutingFlag`, but the default differs downstream: "ask"
@@ -65,6 +87,30 @@ export function parseSkillInstallFlag(args: string[]): "ask" | "yes" | "no" {
   if (args.includes("--skills") || args.includes("--brain-audit")) return "yes";
   if (args.includes("--no-skills") || args.includes("--no-brain-audit")) return "no";
   return "ask";
+}
+
+/**
+ * Resolve brain-record's connection-mode preference: which Chrome instance the
+ * CDP screencast connects to, and on which port.
+ *
+ * Defaults to "fresh" — a throwaway, logged-out `--user-data-dir` profile — and
+ * NEVER to "live" without the explicit flag. Chrome's own warning on the
+ * chrome://inspect toggle "live" requires is the honest cost of that mode: it
+ * "allows external apps to request full control of this browser. This includes
+ * read access to your saved data, cookies and site data, and the ability to
+ * navigate to any URL." A setup default that opts a user into that silently,
+ * for convenience, would be the wrong direction to fail in.
+ *
+ * The port is independent of the mode — either mode can run on a non-default
+ * CDP port, e.g. because 9222 is already taken by another debugging session.
+ */
+export function parseRecordConnectionFlag(args: string[]): {
+  mode: "fresh" | "live";
+  cdpPort: number;
+} {
+  const cdpPort = parseIntFlag(args, "--record-cdp-port", { def: 9222, min: 1, max: 65535 });
+  const mode = args.includes("--record-connection-live") ? "live" : "fresh";
+  return { mode, cdpPort };
 }
 
 /**

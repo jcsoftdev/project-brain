@@ -87,11 +87,20 @@ Commands:
   serve --http       Start MCP server over HTTP with bearer auth
   setup              One-time global setup (detect env, register in AI tools)
                        --model-routing / --no-model-routing  force the model-routing prompt answer
+                       --no-worktree-hook  skip the worktree identity + cleanup hooks
+                       --worktree-hook-strict  also block a spawn that never decided about isolation
+                       --record-connection-live  brain-record drives YOUR logged-in Chrome via
+                         chrome://inspect (full browser control — see brain-record/SKILL.md).
+                         Default is a fresh, logged-out profile.
+                       --record-cdp-port <n>  CDP port brain-record connects to (default: 9222)
   init               Initialize project (detect stack, index, install hook)
   sync               Incremental sync (re-index changed files)
   conceptualize      Update conceptual module docs from the latest commit
   reindex            Full re-index (drop + rebuild)
   prune              Reclaim storage from projects whose roots are gone [--dry-run]
+  worktree           Show this worktree's brain + port identity, or reclaim dead ones
+                       status [--json]   identity for project-brain and mcp-port-registry
+                       prune [--dry-run] drop indexes of worktrees git no longer lists
   compact            Reclaim storage from old versions + deleted rows [--project <id>]
   bench <file.jsonl> Measure retrieval quality (recall@k, MRR) for this index [--project <id>]
   health             Check system health and staleness
@@ -243,6 +252,16 @@ switch (command) {
     await execute();
     break;
   }
+  case "worktree-hook": {
+    const { execute } = await import("./hooks/worktree-hook.js");
+    await execute(args);
+    break;
+  }
+  case "worktree-guard": {
+    const { execute } = await import("./hooks/worktree-guard.js");
+    await execute();
+    break;
+  }
   case "sync": {
     const { execute } = await import("./commands/sync.js");
     await execute(args);
@@ -290,6 +309,12 @@ switch (command) {
   case "prune": {
     const { pruneCommand } = await import("./commands/prune.js");
     await pruneCommand({ dryRun: args.includes("--dry-run") });
+    break;
+  }
+
+  case "worktree": {
+    const { execute } = await import("./commands/worktree.js");
+    await execute(args);
     break;
   }
 

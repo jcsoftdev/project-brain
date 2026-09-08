@@ -147,3 +147,73 @@ export function upsertRoutingHooks(
 
   return { ...base, hooks };
 }
+
+const WORKTREE_SESSION_COMMAND = "project-brain worktree-hook session";
+const WORKTREE_CLEANUP_COMMAND = "project-brain worktree-hook cleanup";
+const WORKTREE_GUARD_COMMAND = "project-brain worktree-guard";
+
+/**
+ * Ensure the worktree hooks exist in a parsed settings object.
+ *
+ * Two events, because one of them is not enough. `WorktreeRemove` is the honest signal
+ * and fires the moment a worktree goes, but Claude Code skips hooks entirely on
+ * non-interactive runs — exactly the runs a delegated agent makes. So `SessionStart`
+ * reconciles as well: it asks git which worktrees are still live and reclaims whatever
+ * the removal event never reported. The same reason mcp-port-registry reconciles its
+ * leases instead of trusting release alone.
+ *
+ * `strict` adds a PreToolUse guard that blocks a sub-agent spawn from the main checkout
+ * until its description says whether the task needs a worktree. Opt-in for
+ * {@link upsertRoutingHooks}' reason: it blocks a real tool call, and one extra turn on
+ * every delegation is a cost only its owner can agree to.
+ *
+ * Idempotent and non-mutating, like {@link upsertRoutingHooks}.
+ */
+export function upsertWorktreeHooks(
+  existing: object | null,
+  options: { strict: boolean } = { strict: false }
+): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  addGroup(hooks, "SessionStart", WORKTREE_SESSION_COMMAND, {
+    hooks: [
+      {
+        type: "command",
+        command: WORKTREE_SESSION_COMMAND,
+        timeout: 10,
+        statusMessage: "project-brain: worktree identity",
+      },
+    ],
+  });
+
+  addGroup(hooks, "WorktreeRemove", WORKTREE_CLEANUP_COMMAND, {
+    hooks: [
+      {
+        type: "command",
+        command: WORKTREE_CLEANUP_COMMAND,
+        timeout: 15,
+        statusMessage: "project-brain: reclaim worktree index",
+      },
+    ],
+  });
+
+  if (options.strict) {
+    addGroup(hooks, "PreToolUse", WORKTREE_GUARD_COMMAND, {
+      matcher: SPAWN_TOOL_MATCHER,
+      hooks: [
+        {
+          type: "command",
+          command: WORKTREE_GUARD_COMMAND,
+          timeout: 10,
+        },
+      ],
+    });
+  }
+
+  return { ...base, hooks };
+}

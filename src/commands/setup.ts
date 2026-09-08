@@ -5,7 +5,13 @@ import { detectEnvironment, type Environment } from "../env/detect.js";
 import { getRegistrars, type AIToolRegistrar } from "../registrars/types.js";
 import { UnparseableConfigError, standardServerEntry } from "../registrars/json-config.js";
 import { getGlobalRules } from "../rules/global.js";
-import { parseModelRoutingFlag, parseRoutingHookFlag, parseSkillInstallFlag } from "../cli-args.js";
+import {
+  parseModelRoutingFlag,
+  parseRecordConnectionFlag,
+  parseRoutingHookFlag,
+  parseSkillInstallFlag,
+  parseWorktreeHookFlag,
+} from "../cli-args.js";
 import { getSkillTargetDirs, installSkill, type SkippedTarget } from "../rules/skills.js";
 
 export interface SetupOptions {
@@ -20,8 +26,29 @@ export interface SetupOptions {
   routingConfigPath?: string;
   /** Whether to install the routing hooks into Claude Code's global settings. */
   routingHook?: { mode: "ask" | "yes" | "no"; strict: boolean };
+  /**
+   * Worktree hooks. Installation defaults to yes and is deliberately NOT tied to
+   * `routingHook`: routing guidance is a preference, an index that outlives its worktree
+   * is a bug. `strict` adds the blocking PreToolUse guard and is never a default.
+   */
+  worktreeHook?: { mode: "yes" | "no"; strict: boolean };
   /** Injectable for testing; defaults to ~/.claude/settings.json. */
   claudeSettingsPath?: string;
+  /**
+   * brain-record's connection-mode preference: whether the skill drives a
+   * fresh, logged-out `--user-data-dir` Chrome profile (the safe default) or
+   * the user's own logged-in session via the `chrome://inspect` remote-debugging
+   * toggle, plus which CDP port to connect on. Never asked and never defaults to
+   * "live" — see `parseRecordConnectionFlag`'s doc comment for why.
+   */
+  recordConnection?: { mode: "fresh" | "live"; cdpPort: number };
+  /**
+   * Injectable for testing; defaults to `<dataDir>/record-config.json`, NOT a
+   * fixed homedir() constant — tying it to the already-injected `dataDir` is
+   * what keeps every other setup test, which never mentions this preference,
+   * from writing into the developer's real ~/.project-brain during a run.
+   */
+  recordConfigPath?: string;
   /** Injectable for testing; defaults to the real promptModelRouting from src/interactive.js. */
   promptModelRouting?: () => Promise<boolean>;
   /**
@@ -58,6 +85,10 @@ export interface SetupResult {
   skillSkipped: SkippedTarget[];
   /** Which routing hooks were installed into Claude Code's global settings. */
   routingHooks: { installed: boolean; strict: boolean };
+  /** Whether the worktree hooks were written, and whether the spawn guard came with them. */
+  worktreeHooks: { installed: boolean; strict: boolean };
+  /** brain-record's connection-mode preference, as written to record-config.json. */
+  recordConnection: { mode: "fresh" | "live"; cdpPort: number };
 }
 
 /** Tool names whose settings file is commonly hand-edited as JSONC (comments allowed). */
@@ -90,7 +121,7 @@ async function installRoutingHooks(
   const claude = targets.find((r) => r.routing?.hostKey === "claude");
   if (!claude) return { installed: false, strict: false };
 
-  const settingsPath = options.claudeSettingsPath ?? join(homedir(), ".claude", "settings.json");
+  const settingsPath = options.claudeSettingsPath ?? defaultClaudeSettingsPath();
 
   try {
     const { upsertRoutingHooks } = await import("../hooks/claude-settings.js");
@@ -120,6 +151,90 @@ async function installRoutingHooks(
     console.warn(`Warning: Failed to install routing hooks: ${e.message}`);
     return { installed: false, strict: false };
   }
+}
+
+/**
+ * Install the worktree hooks into Claude Code's settings.
+ *
+ * Not gated on the routing answer, and never asked about. The two hooks it writes are
+ * hygiene, not guidance: one reclaims the vector table of a worktree git no longer
+ * lists, the other tells a session it is sitting in a worktree whose brain is scoped to
+ * a different branch. Both prevent wrong answers rather than offer advice, and the
+ * SessionStart one stays silent in a main checkout, which is nearly every session.
+ *
+ * Claude Code only, for `installRoutingHooks`' reason: it is the host verified to fire
+ * these events and to accept `additionalContext` on SessionStart.
+ */
+async function installWorktreeHooks(
+  targets: AIToolRegistrar[],
+  options: SetupOptions
+): Promise<{ installed: boolean; strict: boolean }> {
+  const NONE = { installed: false, strict: false };
+  const { mode, strict } = options.worktreeHook ?? { mode: "yes" as const, strict: false };
+  if (mode === "no") return NONE;
+
+  const claude = targets.find((r) => r.routing?.hostKey === "claude");
+  if (!claude) return NONE;
+
+  const settingsPath = options.claudeSettingsPath ?? defaultClaudeSettingsPath();
+
+  try {
+    const { upsertWorktreeHooks } = await import("../hooks/claude-settings.js");
+
+    let existing: object | null = null;
+    try {
+      existing = JSON.parse(await Bun.file(settingsPath).text());
+    } catch {
+      // Absent is normal. Unparseable is not ours to repair: upserting from scratch
+      // would silently replace whatever the user has there.
+      const raw = await Bun.file(settingsPath)
+        .text()
+        .catch(() => "");
+      if (raw.trim().length > 0) {
+        console.warn(`Warning: ${settingsPath} is not valid JSON — worktree hooks not installed.`);
+        return NONE;
+      }
+    }
+
+    await mkdir(join(settingsPath, ".."), { recursive: true });
+    await Bun.write(
+      settingsPath,
+      `${JSON.stringify(upsertWorktreeHooks(existing, { strict }), null, 2)}\n`
+    );
+    return { installed: true, strict };
+  } catch (e: any) {
+    console.warn(`Warning: Failed to install worktree hooks: ${e.message}`);
+    return NONE;
+  }
+}
+
+/**
+ * Persist brain-record's connection-mode preference to
+ * `<dataDir>/record-config.json`.
+ *
+ * Unlike the routing/worktree hooks, this is a small standalone preference
+ * file this generator fully owns — not a shared settings.json belonging to
+ * some other tool that has to be merged into. So there is nothing to ask
+ * about (no `mode: "ask"`) and no ownership check: it is always (re)written,
+ * the way `renderStamp` always rewrites the skill stamp. `mode` defaults to
+ * "fresh", the safe choice that needs no flag; "live" always requires one —
+ * see `SetupOptions.recordConnection`.
+ */
+async function writeRecordConnectionConfig(
+  dataDir: string,
+  options: SetupOptions
+): Promise<{ mode: "fresh" | "live"; cdpPort: number }> {
+  const config = options.recordConnection ?? { mode: "fresh" as const, cdpPort: 9222 };
+  const path = options.recordConfigPath ?? join(dataDir, "record-config.json");
+
+  try {
+    await mkdir(join(path, ".."), { recursive: true });
+    await Bun.write(path, `${JSON.stringify(config, null, 2)}\n`);
+  } catch (e: any) {
+    console.warn(`Warning: Failed to write brain-record connection config: ${e.message}`);
+  }
+
+  return config;
 }
 
 /**
@@ -205,6 +320,23 @@ function buildManualInstructions(
     `${toolName} config at ${err.configPath} is not valid JSON (JSONC/comments?)` +
     ` — add this entry manually:${jsoncHint}\n${snippet}`
   );
+}
+
+/**
+ * Where Claude Code keeps its settings, with an env override that exists for one
+ * concrete reason: **Bun's `os.homedir()` ignores a runtime `HOME` change.**
+ *
+ *   bun  -e 'process.env.HOME="/tmp/x"; homedir()'  -> the real home
+ *   node -e 'process.env.HOME="/tmp/x"; homedir()'  -> /tmp/x
+ *
+ * So a test running under `bun test` CANNOT redirect this path by setting HOME,
+ * and 27 of the runSetup calls in the suite pass no explicit path. A full
+ * `bun test` run was observed writing real hooks into a developer's own
+ * settings.json. The routing installer hid the same hazard because it returns
+ * early without consent; the worktree installer is ungated and fired every time.
+ */
+function defaultClaudeSettingsPath(): string {
+  return process.env.BRAIN_CLAUDE_SETTINGS ?? join(homedir(), ".claude", "settings.json");
 }
 
 const DEFAULT_DATA_DIR = join(homedir(), ".project-brain");
@@ -302,6 +434,11 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   // rendered text is.
   const routingAccepted = await writeRoutingGuidance(routingTargets, options);
   const routingHooks = await installRoutingHooks(routingTargets, options, routingAccepted);
+  // After the routing hooks, never before: both write the same file, and this one must
+  // merge into whatever they left rather than be overwritten by them.
+  const worktreeHooks = await installWorktreeHooks(routingTargets, options);
+  // Independent of both — its own file, no registrar, nothing to merge into.
+  const recordConnection = await writeRecordConnectionConfig(dataDir, options);
 
   // 5. Install the brain-audit skill.
   //
@@ -351,6 +488,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     skillTargets,
     skillSkipped,
     routingHooks,
+    worktreeHooks,
+    recordConnection,
   };
 }
 
@@ -361,7 +500,15 @@ export async function execute(args: string[]): Promise<void> {
   const modelRouting = parseModelRoutingFlag(args);
   const skillInstall = parseSkillInstallFlag(args);
   const routingHook = parseRoutingHookFlag(args);
-  const result = await runSetup({ modelRouting, skillInstall, routingHook });
+  const worktreeHook = parseWorktreeHookFlag(args);
+  const recordConnection = parseRecordConnectionFlag(args);
+  const result = await runSetup({
+    modelRouting,
+    skillInstall,
+    routingHook,
+    worktreeHook,
+    recordConnection,
+  });
 
   console.log(`Environment:`);
   console.log(`  Bun: ${result.env.bun}`);
@@ -399,6 +546,22 @@ export async function execute(args: string[]): Promise<void> {
       }.`
     );
   }
+
+  if (result.worktreeHooks.installed) {
+    console.log(
+      "\nWorktree hooks: SessionStart identity + WorktreeRemove index cleanup installed" +
+        (result.worktreeHooks.strict ? ", PreToolUse spawn guard enforcing" : "") +
+        "."
+    );
+  }
+
+  console.log(
+    `\nbrain-record connection: ${result.recordConnection.mode}` +
+      (result.recordConnection.mode === "live"
+        ? " (your logged-in Chrome via chrome://inspect — full browser control)"
+        : " (fresh, logged-out Chrome profile)") +
+      `, CDP port ${result.recordConnection.cdpPort}.`
+  );
 
   if (result.manualInstructions.length > 0) {
     console.log(`\nManual setup needed:`);
