@@ -177,3 +177,103 @@ export function parseListFlag(args: string[], flag: string): string[] | undefine
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
+
+/**
+ * Legacy flag → the unit ids it turns off. The `*` is a group wildcard,
+ * expanded against the real id list so a new skill is covered by `--no-skills`
+ * the day it ships.
+ */
+const LEGACY_OFF: Record<string, string> = {
+  "--no-skills": "skill:*",
+  "--no-brain-audit": "skill:*",
+  "--no-model-routing": "guidance:model-routing",
+  "--no-routing-hook": "hooks:routing",
+  "--no-worktree-hook": "hooks:worktree",
+};
+
+/** Expand `group:*` against the known ids; anything else passes through. */
+function expandIds(patterns: string[], allIds: string[]): string[] {
+  const out = new Set<string>();
+  for (const pattern of patterns) {
+    if (pattern.endsWith(":*")) {
+      const prefix = pattern.slice(0, -1);
+      for (const id of allIds) if (id.startsWith(prefix)) out.add(id);
+    } else {
+      out.add(pattern);
+    }
+  }
+  return [...out];
+}
+
+function valueOf(args: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (const arg of args) {
+    if (arg.startsWith(`${flag}=`)) {
+      values.push(...arg.slice(flag.length + 1).split(",").filter(Boolean));
+    }
+  }
+  return values;
+}
+
+/**
+ * Resolve which units a non-interactive run should end up with.
+ *
+ * `mode: "default"` means no selection flag was given, so the caller falls back
+ * to the saved selection or to each unit's own default — that fallback is what
+ * keeps a scripted `project-brain setup` with no arguments behaving exactly as
+ * it does today.
+ *
+ * An unknown id is a hard error rather than a silent skip: a typo in a
+ * provisioning script would otherwise mean the machine quietly does not get
+ * what the script asked for, and nothing would ever say so.
+ */
+export function parseUnitFlags(
+  args: string[],
+  allIds: string[]
+):
+  | { mode: "default" | "explicit"; selected: string[]; error?: undefined }
+  | { error: string; mode?: undefined; selected?: undefined } {
+  const withValues = valueOf(args, "--with");
+  const withoutValues = valueOf(args, "--without");
+  const legacyOff = Object.keys(LEGACY_OFF).filter((f) => args.includes(f));
+  const legacyOn =
+    args.includes("--skills") || args.includes("--brain-audit") ? ["skill:*"] : [];
+  const all = args.includes("--all");
+  const none = args.includes("--none");
+
+  const touched =
+    withValues.length > 0 ||
+    withoutValues.length > 0 ||
+    legacyOff.length > 0 ||
+    legacyOn.length > 0 ||
+    all ||
+    none;
+
+  if (!touched) return { mode: "default", selected: [] };
+
+  const known = new Set(allIds);
+  const unknown = [...withValues, ...withoutValues].filter(
+    (id) => !id.endsWith(":*") && !known.has(id)
+  );
+  if (unknown.length > 0) {
+    return {
+      error:
+        `Unknown setup unit${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")}\n` +
+        `Valid ids: ${allIds.join(", ")}`,
+    };
+  }
+
+  // `--with` is additive from nothing; everything else starts from the full set
+  // and subtracts, which is what makes `--without` and the legacy `--no-*`
+  // flags mean "everything except this".
+  const startFromNothing = none || (withValues.length > 0 && !all);
+  const selected = new Set<string>(startFromNothing ? [] : allIds);
+
+  for (const id of expandIds([...withValues, ...legacyOn], allIds)) selected.add(id);
+  for (const id of expandIds(withoutValues, allIds)) selected.delete(id);
+  for (const flag of legacyOff) {
+    for (const id of expandIds([LEGACY_OFF[flag]!], allIds)) selected.delete(id);
+  }
+
+  return { mode: "explicit", selected: allIds.filter((id) => selected.has(id)) };
+}

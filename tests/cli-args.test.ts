@@ -256,3 +256,71 @@ describe("parseRecordConnectionFlag", () => {
     });
   });
 });
+
+describe("parseUnitFlags", () => {
+  const ALL = [
+    "host:claudecode",
+    "guidance:model-routing",
+    "hooks:routing",
+    "hooks:worktree",
+    "skill:brain-audit",
+    "skill:brain-okf",
+    "embed:ollama-model",
+  ];
+
+  it("reports default mode when no selection flag is present", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    expect(parseUnitFlags([], ALL)).toEqual({ mode: "default", selected: [] });
+  });
+
+  it("selects everything with --all and nothing with --none", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    expect(parseUnitFlags(["--all"], ALL)).toEqual({ mode: "explicit", selected: ALL });
+    expect(parseUnitFlags(["--none"], ALL)).toEqual({ mode: "explicit", selected: [] });
+  });
+
+  it("--without starts from everything and subtracts", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    const result = parseUnitFlags(["--without=skill:brain-okf"], ALL);
+    expect(result).toEqual({
+      mode: "explicit",
+      selected: ALL.filter((id) => id !== "skill:brain-okf"),
+    });
+  });
+
+  it("--with starts from nothing and adds", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    expect(parseUnitFlags(["--with=skill:brain-audit,hooks:routing"], ALL)).toEqual({
+      mode: "explicit",
+      selected: ["hooks:routing", "skill:brain-audit"],
+    });
+  });
+
+  it("expands the group wildcard used by the legacy skill flags", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    expect(parseUnitFlags(["--with=skill:*"], ALL)).toEqual({
+      mode: "explicit",
+      selected: ["skill:brain-audit", "skill:brain-okf"],
+    });
+  });
+
+  it("maps every legacy flag onto the new ids", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+
+    expect(parseUnitFlags(["--no-skills"], ALL).selected).not.toContain("skill:brain-audit");
+    expect(parseUnitFlags(["--no-brain-audit"], ALL).selected).not.toContain("skill:brain-okf");
+    expect(parseUnitFlags(["--no-model-routing"], ALL).selected).not.toContain(
+      "guidance:model-routing"
+    );
+    expect(parseUnitFlags(["--no-routing-hook"], ALL).selected).not.toContain("hooks:routing");
+    expect(parseUnitFlags(["--no-worktree-hook"], ALL).selected).not.toContain("hooks:worktree");
+  });
+
+  it("rejects an unknown id instead of silently ignoring it", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    const result = parseUnitFlags(["--with=skill:brain-typo"], ALL) as { error: string };
+
+    expect(result.error).toContain("skill:brain-typo");
+    expect(result.error).toContain("skill:brain-audit");
+  });
+});
