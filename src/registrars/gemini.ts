@@ -30,9 +30,12 @@ export class GeminiRegistrar implements AIToolRegistrar {
     return { path: join(this.baseDir, "settings.json"), containerKey: "mcpServers" };
   }
 
+  rulesFilePath(): string {
+    return join(this.baseDir, "GEMINI.md");
+  }
+
   async writeRules(rulesContent: string): Promise<void> {
-    const rulesPath = join(this.baseDir, "GEMINI.md");
-    await writeSection(rulesPath, rulesContent);
+    await writeSection(this.rulesFilePath(), rulesContent);
   }
 
   // Gemini's lineup turns over faster than our release cadence, so the tiers

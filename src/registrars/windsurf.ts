@@ -58,6 +58,10 @@ export class WindsurfRegistrar implements AIToolRegistrar {
     await writeRoutingSection(this.rulesPath(), content);
   }
 
+  rulesFilePath(): string {
+    return this.rulesPath();
+  }
+
   private rulesPath(): string {
     return join(this.baseDir, "rules", "project-brain.md");
   }

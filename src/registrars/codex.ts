@@ -53,9 +53,12 @@ export class CodexRegistrar implements AIToolRegistrar {
     return join(this.baseDir, "config.toml");
   }
 
+  rulesFilePath(): string {
+    return join(this.baseDir, "instructions.md");
+  }
+
   async writeRules(rulesContent: string): Promise<void> {
-    const rulesPath = join(this.baseDir, "instructions.md");
-    await writeSection(rulesPath, rulesContent);
+    await writeSection(this.rulesFilePath(), rulesContent);
   }
 
   // One flagship model: depth here comes from reasoning effort, not a third

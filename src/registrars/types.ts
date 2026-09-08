@@ -60,6 +60,16 @@ export interface AIToolRegistrar {
   mcpConfigTarget?(): { path: string; containerKey: string };
 
   /**
+   * Path of the rules file `writeRules` writes into, for the setup unit that
+   * has to remove our section again.
+   *
+   * Optional for `mcpConfigTarget`'s reason: a host that writes no rules file
+   * (VS Code, Zed) has nothing to point at, and a `removeSection` with no path
+   * is correctly a no-op rather than an error.
+   */
+  rulesFilePath?(): string;
+
+  /**
    * Path to this host's TOML config, for hosts whose server map is not JSON.
    * Repaired by targeted text edit rather than parse-and-reserialise, which
    * would drop the user's comments and reorder their tables.

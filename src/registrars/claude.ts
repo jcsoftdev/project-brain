@@ -42,9 +42,12 @@ export class ClaudeRegistrar implements AIToolRegistrar {
     return { path: join(this.homeDir, ".claude.json"), containerKey: "mcpServers" };
   }
 
+  rulesFilePath(): string {
+    return join(this.baseDir, "CLAUDE.md");
+  }
+
   async writeRules(rulesContent: string): Promise<void> {
-    const rulesPath = join(this.baseDir, "CLAUDE.md");
-    await writeSection(rulesPath, rulesContent);
+    await writeSection(this.rulesFilePath(), rulesContent);
   }
 
   // The only host with a PER-CALL label: the Agent/Task tool's `description`

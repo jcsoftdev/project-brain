@@ -117,3 +117,88 @@ export function skillUnits(): SetupUnit[] {
     },
   }));
 }
+
+/**
+ * The id segment for a host.
+ *
+ * Lowercase with whitespace stripped, so "Claude Code" and "Gemini CLI" produce
+ * ids stable enough to persist: `host:claudecode`, `host:geminicli`. Derived
+ * rather than hand-mapped because the registrar list is the source of truth for
+ * which hosts exist.
+ */
+export function hostKeyOf(name: string): string {
+  return name.toLowerCase().replace(/\s+/g, "");
+}
+
+/**
+ * A unit per detected host: the MCP registration and its rules file together.
+ *
+ * The two are ONE unit on purpose. A rules file describing an MCP server that
+ * was never registered is instructions for a tool that is not there, and
+ * splitting them would let a user build exactly that state.
+ *
+ * `inspect` can only answer honestly for hosts that expose
+ * `mcpConfigTarget()`. Codex registers through `codex mcp add` against a TOML
+ * only that CLI can safely rewrite, so it reports `absent` and re-applying is a
+ * harmless no-op — better than claiming a state we cannot read.
+ */
+export function hostUnits(installed: AIToolRegistrar[]): SetupUnit[] {
+  return installed.map((registrar) => ({
+    id: `host:${hostKeyOf(registrar.name)}`,
+    group: "Hosts" as const,
+    label: registrar.name,
+    description: "registers the project-brain MCP server and writes its rules file",
+    defaultSelected: true,
+
+    async inspect(ctx: SetupContext): Promise<UnitState> {
+      const present = ctx.installed.some((r) => r.name === registrar.name);
+      if (!present) return "unavailable";
+
+      const target = registrar.mcpConfigTarget?.();
+      if (!target) return "absent";
+
+      try {
+        const parsed = JSON.parse(await Bun.file(target.path).text()) as Record<string, unknown>;
+        const container = parsed[target.containerKey] as Record<string, unknown> | undefined;
+        return container && "project-brain" in container ? "current" : "absent";
+      } catch {
+        // Missing file, or JSONC we refuse to parse. Both mean "not registered
+        // as far as we can prove", and apply() handles the JSONC case by
+        // raising UnparseableConfigError, which setup already reports.
+        return "absent";
+      }
+    },
+
+    async apply(ctx: SetupContext): Promise<void> {
+      await registrar.register(ctx.serverPath);
+      const { getGlobalRules } = await import("../rules/global.js");
+      const toolKey = hostKeyOf(registrar.name)
+        .replace("claudecode", "claude")
+        .replace("geminicli", "gemini");
+      await registrar.writeRules(await getGlobalRules(toolKey));
+    },
+
+    async remove(_ctx: SetupContext): Promise<void> {
+      const { removeSection } = await import("../rules/section-marker.js");
+      const target = registrar.mcpConfigTarget?.();
+
+      if (target) {
+        try {
+          const parsed = JSON.parse(await Bun.file(target.path).text()) as Record<string, unknown>;
+          const container = parsed[target.containerKey] as Record<string, unknown> | undefined;
+          if (container && "project-brain" in container) {
+            delete container["project-brain"];
+            await Bun.write(target.path, `${JSON.stringify(parsed, null, 2)}\n`);
+          }
+        } catch {
+          // Unparseable is not ours to repair — the same rule the installers use.
+        }
+      }
+
+      // The rules file is a marked section inside a file the user owns, so only
+      // our section goes. `removeSection` no-ops when the markers are absent.
+      const rulesPath = registrar.rulesFilePath?.();
+      if (rulesPath) await removeSection(rulesPath);
+    },
+  }));
+}
