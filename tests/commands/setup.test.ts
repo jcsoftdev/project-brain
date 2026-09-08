@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm, mkdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -9,6 +9,27 @@ import { SKILL_MANIFESTS } from "../../src/rules/skills.js";
 import { ROUTING_CONTENT_VERSION } from "../../src/constants.js";
 
 describe("setup command", () => {
+  // The settings path is redirected for the whole file: the hook installers
+  // resolve it at CALL time, and 27 of the runSetup calls below inject no
+  // explicit path. Without this the suite WRITES INTO THE DEVELOPER'S REAL
+  // settings.json — observed once, on a full `bun test` run.
+  //
+  // Redirected via BRAIN_CLAUDE_SETTINGS and NOT via HOME, because Bun's
+  // os.homedir() ignores a runtime HOME change while node's honours it, so a
+  // HOME override here would look like a guard and protect nothing.
+  let homeBackup: string | undefined;
+  let fakeHome: string;
+  beforeAll(async () => {
+    homeBackup = process.env.BRAIN_CLAUDE_SETTINGS;
+    fakeHome = await mkdtemp(join(tmpdir(), "pb-fake-home-"));
+    process.env.BRAIN_CLAUDE_SETTINGS = join(fakeHome, "settings.json");
+  });
+  afterAll(async () => {
+    if (homeBackup === undefined) delete process.env.BRAIN_CLAUDE_SETTINGS;
+    else process.env.BRAIN_CLAUDE_SETTINGS = homeBackup;
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
   let tempDir: string;
 
   beforeEach(async () => {
@@ -451,10 +472,13 @@ describe("setup command", () => {
         return { result, written, settingsPath };
       }
 
-      it('writes nothing on "no"', async () => {
+      it('writes no ROUTING hook on "no"', async () => {
+        // The settings file may still exist: the worktree hooks install on their own
+        // answer, because index hygiene is not a routing preference.
         const { result, written } = await runWithHooks({ mode: "no", strict: false });
         expect(result.routingHooks).toEqual({ installed: false, strict: false });
-        expect(written).toBeNull();
+        expect(JSON.stringify(written ?? {})).not.toContain("routing-rules");
+        expect(JSON.stringify(written ?? {})).not.toContain("routing-guard");
       });
 
       it("installs the SessionStart reminder without the guard by default", async () => {
@@ -481,7 +505,7 @@ describe("setup command", () => {
         );
 
         expect(result.routingHooks.installed).toBe(false);
-        expect(written).toBeNull();
+        expect(JSON.stringify(written ?? {})).not.toContain("routing-rules");
       });
 
       it("refuses to touch a settings.json it cannot parse", async () => {
