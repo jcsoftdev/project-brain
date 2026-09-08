@@ -26,6 +26,7 @@ import {
   installSkill,
   parseStamp,
   refreshStaleSkills,
+  removeSkill,
 } from "../../src/rules/skills.js";
 
 describe("getSkillTargetDirs", () => {
@@ -812,5 +813,69 @@ describe("reference module lint (self-review layer 1)", () => {
       if (always && hasGate) problems.push(`${name}: always proposed in SKILL.md but states a Gate: sentence`);
     }
     expect(problems, `gate parity:\n${problems.join("\n")}`).toEqual([]);
+  });
+});
+
+describe("removeSkill", () => {
+  it("deletes every file the stamp records, then the directory", async () => {
+    const { installSkill, removeSkill } = await import("../../src/rules/skills.js");
+    const root = await mkdtemp(join(tmpdir(), "pb-remove-"));
+    await installSkill([root]);
+
+    const skillDir = join(root, "brain-okf");
+    expect(existsSync(skillDir)).toBe(true);
+
+    const outcome = await removeSkill(skillDir);
+
+    expect(outcome.skipped).toBeNull();
+    expect(outcome.removed.length).toBeGreaterThan(0);
+    expect(existsSync(skillDir)).toBe(false);
+    // Sibling skills are untouched.
+    expect(existsSync(join(root, "brain-audit"))).toBe(true);
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("refuses a directory it does not own and deletes nothing", async () => {
+    const { removeSkill } = await import("../../src/rules/skills.js");
+    const root = await mkdtemp(join(tmpdir(), "pb-remove-foreign-"));
+    const skillDir = join(root, "brain-okf");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, "SKILL.md"), "---\nname: mine\n---\nhand written\n", "utf8");
+
+    const outcome = await removeSkill(skillDir);
+
+    expect(outcome.removed).toEqual([]);
+    expect(outcome.skipped).toEqual({ dir: skillDir, reason: "foreign" });
+    expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("keeps a hand-written file and therefore keeps the directory", async () => {
+    const { installSkill, removeSkill } = await import("../../src/rules/skills.js");
+    const root = await mkdtemp(join(tmpdir(), "pb-remove-extra-"));
+    await installSkill([root]);
+
+    const skillDir = join(root, "brain-okf");
+    await writeFile(join(skillDir, "my-notes.md"), "mine\n", "utf8");
+
+    await removeSkill(skillDir);
+
+    expect(existsSync(join(skillDir, "my-notes.md"))).toBe(true);
+    expect(existsSync(join(skillDir, "SKILL.md"))).toBe(false);
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("is a no-op on a directory that is not there", async () => {
+    const { removeSkill } = await import("../../src/rules/skills.js");
+    const root = await mkdtemp(join(tmpdir(), "pb-remove-absent-"));
+
+    const outcome = await removeSkill(join(root, "brain-okf"));
+
+    expect(outcome).toEqual({ removed: [], skipped: null });
+
+    await rm(root, { recursive: true, force: true });
   });
 });

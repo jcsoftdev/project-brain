@@ -1,7 +1,7 @@
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 
 import skillMd from "../../templates/skills/brain-audit/SKILL.md" with { type: "text" };
 import okfSkillMd from "../../templates/skills/brain-okf/SKILL.md" with { type: "text" };
@@ -456,6 +456,58 @@ export async function installSkill(targetDirs: string[]): Promise<InstallResult>
   }
 
   return { written, skipped, removed };
+}
+
+/**
+ * Delete one installed skill directory, bounded by its own stamp.
+ *
+ * The stamp is the only list of paths we can prove we wrote, which is exactly
+ * why it is the deletion boundary: a `references/custom.md` the user added
+ * survives, and so does the directory holding it. `rmdir` without `recursive`
+ * is doing real work here — it fails when anything is left, which is how a
+ * user's file keeps its parent alive without us having to enumerate it.
+ *
+ * Ownership is checked first, so a hand-written skill that happens to share our
+ * directory name is never opened for deletion.
+ */
+export async function removeSkill(
+  skillDir: string
+): Promise<{ removed: string[]; skipped: SkippedTarget | null }> {
+  const ownership = await inspectOwnership(skillDir);
+  if (ownership === "absent") return { removed: [], skipped: null };
+  if (ownership !== "ours") return { removed: [], skipped: { dir: skillDir, reason: ownership } };
+
+  const stamp = await readStamp(skillDir);
+  const removed: string[] = [];
+
+  for (const rel of stamp.files) {
+    // Same traversal guard as pruneOrphans: a stamp is a file on disk, and a
+    // bad merge or an attacker must not be able to point it outside the
+    // directory it describes.
+    if (rel.startsWith("/") || rel.split("/").includes("..")) continue;
+    const dest = join(skillDir, rel);
+    try {
+      await rm(dest, { force: true });
+      removed.push(dest);
+    } catch {
+      // A read-only or already-vanished file must not break the removal.
+    }
+  }
+
+  await rm(join(skillDir, STAMP_FILE), { force: true }).catch(() => {});
+
+  // Prune the directories the manifest created, deepest first, then the skill
+  // directory itself. Each rmdir fails harmlessly when something the user owns
+  // is still inside.
+  const dirs = [...new Set(stamp.files.map((rel) => dirname(rel)).filter((d) => d !== "."))].sort(
+    (a, b) => b.length - a.length
+  );
+  for (const rel of dirs) {
+    await rmdir(join(skillDir, rel)).catch(() => {});
+  }
+  await rmdir(skillDir).catch(() => {});
+
+  return { removed, skipped: null };
 }
 
 export interface RefreshResult {
