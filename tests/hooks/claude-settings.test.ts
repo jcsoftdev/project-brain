@@ -160,3 +160,104 @@ describe("init hook installation (file IO)", () => {
     expect(exists).toBe(false);
   });
 });
+
+/** Collect every command string for one event across all matcher groups. */
+function commandsForEvent(settings: Record<string, unknown>, event: string): string[] {
+  const hooks = settings.hooks as Record<string, unknown> | undefined;
+  const groups = (hooks?.[event] as Array<Record<string, unknown>> | undefined) ?? [];
+  const cmds: string[] = [];
+  for (const g of groups) {
+    const inner = Array.isArray(g.hooks) ? (g.hooks as Array<Record<string, unknown>>) : [];
+    for (const h of inner) if (typeof h.command === "string") cmds.push(h.command);
+  }
+  return cmds;
+}
+
+describe("removeRoutingHooks (pure function)", () => {
+  it("removes both the SessionStart reminder and the PreToolUse guard", async () => {
+    const { upsertRoutingHooks, removeRoutingHooks } = await import(
+      "../../src/hooks/claude-settings.js"
+    );
+    const installed = upsertRoutingHooks(null, { strict: true });
+    const result = removeRoutingHooks(installed) as Record<string, unknown>;
+
+    expect(commandsForEvent(result, "SessionStart")).toEqual([]);
+    expect(commandsForEvent(result, "PreToolUse")).toEqual([]);
+  });
+
+  it("leaves another tool's hooks and unrelated keys untouched", async () => {
+    const { upsertRoutingHooks, removeRoutingHooks } = await import(
+      "../../src/hooks/claude-settings.js"
+    );
+    const foreign = {
+      permissions: { allow: ["Bash(ls:*)"] },
+      hooks: {
+        SessionStart: [{ hooks: [{ type: "command", command: "other-tool greet" }] }],
+      },
+    };
+    const result = removeRoutingHooks(upsertRoutingHooks(foreign, { strict: true })) as Record<
+      string,
+      unknown
+    >;
+
+    expect(commandsForEvent(result, "SessionStart")).toEqual(["other-tool greet"]);
+    expect(result.permissions).toEqual({ allow: ["Bash(ls:*)"] });
+  });
+
+  it("is idempotent and safe on settings that never had the hooks", async () => {
+    const { removeRoutingHooks } = await import("../../src/hooks/claude-settings.js");
+    expect(removeRoutingHooks(null)).toEqual({ hooks: {} });
+    expect(removeRoutingHooks({ hooks: {} })).toEqual({ hooks: {} });
+  });
+
+  it("does not remove the worktree hooks", async () => {
+    const { upsertWorktreeHooks, removeRoutingHooks } = await import(
+      "../../src/hooks/claude-settings.js"
+    );
+    const result = removeRoutingHooks(upsertWorktreeHooks(null, { strict: false })) as Record<
+      string,
+      unknown
+    >;
+
+    expect(commandsForEvent(result, "SessionStart")).toEqual([
+      "project-brain worktree-hook session",
+    ]);
+  });
+});
+
+describe("removeWorktreeHooks (pure function)", () => {
+  it("removes the SessionStart, WorktreeRemove and PreToolUse entries", async () => {
+    const { upsertWorktreeHooks, removeWorktreeHooks } = await import(
+      "../../src/hooks/claude-settings.js"
+    );
+    const result = removeWorktreeHooks(
+      upsertWorktreeHooks(null, { strict: true })
+    ) as Record<string, unknown>;
+
+    expect(commandsForEvent(result, "SessionStart")).toEqual([]);
+    expect(commandsForEvent(result, "WorktreeRemove")).toEqual([]);
+    expect(commandsForEvent(result, "PreToolUse")).toEqual([]);
+  });
+
+  it("does not remove the routing hooks", async () => {
+    const { upsertRoutingHooks, removeWorktreeHooks } = await import(
+      "../../src/hooks/claude-settings.js"
+    );
+    const result = removeWorktreeHooks(
+      upsertRoutingHooks(null, { strict: false })
+    ) as Record<string, unknown>;
+
+    expect(commandsForEvent(result, "SessionStart")).toEqual(["project-brain routing-rules"]);
+  });
+
+  it("does not remove the project-level context hook", async () => {
+    const { upsertContextHook, removeWorktreeHooks } = await import(
+      "../../src/hooks/claude-settings.js"
+    );
+    const result = removeWorktreeHooks(upsertContextHook(null)) as Record<string, unknown>;
+
+    expect(commandsForEvent(result, "UserPromptSubmit")).toEqual([
+      "project-brain search --stdin",
+    ]);
+  });
+});
