@@ -1191,64 +1191,110 @@ export async function execute(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
-  const { createEmbeddingClient } = await import("../embeddings/factory.js");
-  const { readTableMeta } = await import("../store/meta.js");
-  const store = new LanceDbStore(DB_PATH);
+  // Single-flight: the post-commit hook spawns a sync per commit, detached and
+  // in the background. Without this, every commit landed during a slow run
+  // stacked another full-memory job beside the last one — the field report that
+  // prompted this had 31 of them alive at once, 12 GB resident, until the
+  // machine ran out of swap and the OS started killing unrelated processes.
+  // Skipping (not queueing) is the right answer: the holder is about to index
+  // the same working tree.
+  const { acquireSyncLock } = await import("./sync-lock.js");
+  const lock = await acquireSyncLock(root);
+  if (lock === null) {
+    console.log(`A sync is already running for ${projectId} — skipping this one.`);
+    return;
+  }
 
-  // Prefer the model the project's index was already built with (stored table
-  // meta) over the registry default — otherwise sync on an existing project
-  // built with a non-default model (e.g. nomic-embed-text) tries to embed with
-  // the CURRENT registry default (qwen3-embedding), causing a dim mismatch and
-  // total embed failure. An explicit BRAIN_EMBED_MODEL override still wins
-  // (deliberate model-switch path).
-  const storedMeta = await readTableMeta(DB_PATH, projectId);
-  const embeddings = await createEmbeddingClient(resolveSyncModel({ envModel: process.env.BRAIN_EMBED_MODEL || undefined, storedMeta }), { host: OLLAMA_HOST, autoPull: true });
-
-  console.log(`Syncing project: ${projectId}\n`);
-
-  const { makeProgressPrinter, formatDuration, formatModelLabel } = await import("../indexer/progress.js");
-  const { onProgress, clear } = makeProgressPrinter();
-
-  const startedAt = Date.now();
-  const result = await runSync({
-    root,
-    projectId,
-    store,
-    embeddings,
-    changedFiles: changedOnly ? [] : undefined,
-    onProgress,
-    dbPath: DB_PATH,
+  // Wall-clock budget, armed BEFORE the first call that can hang. Everything
+  // below has its own per-request timeouts, but the model auto-pull has none,
+  // and no per-request timeout bounds a run that keeps making progress far too
+  // slowly to ever finish.
+  const { resolveSyncTimeoutMs, startSyncWatchdog } = await import("./sync-watchdog.js");
+  const timeoutMs = resolveSyncTimeoutMs();
+  const cancelWatchdog = startSyncWatchdog({
+    timeoutMs,
+    onExpire: () => {
+      console.error(
+        `\nsync: aborting after ${Math.round(timeoutMs / 1000)}s — this job is wedged, not slow. ` +
+          `Set BRAIN_SYNC_TIMEOUT_MS to raise the budget, or 0 to remove it.`
+      );
+      // Exit without unwinding, and leave the lock file behind on purpose: the
+      // next run reads a dead pid out of it and reclaims it immediately. That
+      // is more reliable than asking a process we have just declared wedged to
+      // complete an async cleanup first.
+      process.exit(1);
+    },
   });
 
-  clear();
+  let exitCode = 0;
+  try {
+    const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
+    const { createEmbeddingClient } = await import("../embeddings/factory.js");
+    const { readTableMeta } = await import("../store/meta.js");
+    const store = new LanceDbStore(DB_PATH);
 
-  if (result.error) {
-    // Total embed failure: do not report "Ingested: 0" as success
-    console.error(`\nError: ${result.error}`);
-    process.exit(1);
+    // Prefer the model the project's index was already built with (stored table
+    // meta) over the registry default — otherwise sync on an existing project
+    // built with a non-default model (e.g. nomic-embed-text) tries to embed with
+    // the CURRENT registry default (qwen3-embedding), causing a dim mismatch and
+    // total embed failure. An explicit BRAIN_EMBED_MODEL override still wins
+    // (deliberate model-switch path).
+    const storedMeta = await readTableMeta(DB_PATH, projectId);
+    const embeddings = await createEmbeddingClient(resolveSyncModel({ envModel: process.env.BRAIN_EMBED_MODEL || undefined, storedMeta }), { host: OLLAMA_HOST, autoPull: true });
+
+    console.log(`Syncing project: ${projectId}\n`);
+
+    const { makeProgressPrinter, formatDuration, formatModelLabel } = await import("../indexer/progress.js");
+    const { onProgress, clear } = makeProgressPrinter();
+
+    const startedAt = Date.now();
+    const result = await runSync({
+      root,
+      projectId,
+      store,
+      embeddings,
+      changedFiles: changedOnly ? [] : undefined,
+      onProgress,
+      dbPath: DB_PATH,
+    });
+
+    clear();
+
+    if (result.error) {
+      // Total embed failure: do not report "Ingested: 0" as success
+      console.error(`\nError: ${result.error}`);
+      exitCode = 1;
+    } else {
+      console.log(`  Scanned:  ${result.scanned} files`);
+      console.log(`  Ingested: ${result.ingested} files`);
+      console.log(`  Skipped:  ${result.skipped} files (unchanged)`);
+      if (result.deleted > 0) {
+        console.log(`  Deleted:  ${result.deleted} files (removed from disk)`);
+      }
+      if (result.excluded > 0) {
+        // Named, not just counted: a file dropped for being unreadable, oversized
+        // or non-text is usually a surprise, and a bare count gives no way to tell
+        // an expected vendored blob from a source file that should have indexed.
+        console.log(`  Excluded: ${result.excluded} files (unreadable, oversized, or not indexable text)`);
+        for (const source of result.excludedSources) console.log(`            - ${source}`);
+      }
+      console.log(`  Model:    ${formatModelLabel(embeddings.model)}`);
+      console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
+      if (result.embedFailed > 0) {
+        console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);
+        for (const source of result.embedFailedSources) console.warn(`            - ${source}`);
+        console.log("\nSync incomplete.");
+        exitCode = syncExitCode(result);
+      } else {
+        console.log("\nSync complete.");
+      }
+    }
+  } finally {
+    // Both must run on the throw path too, or a crashed sync leaves the next
+    // one locked out until the stale window expires.
+    cancelWatchdog();
+    await lock.release();
   }
 
-  console.log(`  Scanned:  ${result.scanned} files`);
-  console.log(`  Ingested: ${result.ingested} files`);
-  console.log(`  Skipped:  ${result.skipped} files (unchanged)`);
-  if (result.deleted > 0) {
-    console.log(`  Deleted:  ${result.deleted} files (removed from disk)`);
-  }
-  if (result.excluded > 0) {
-    // Named, not just counted: a file dropped for being unreadable, oversized
-    // or non-text is usually a surprise, and a bare count gives no way to tell
-    // an expected vendored blob from a source file that should have indexed.
-    console.log(`  Excluded: ${result.excluded} files (unreadable, oversized, or not indexable text)`);
-    for (const source of result.excludedSources) console.log(`            - ${source}`);
-  }
-  console.log(`  Model:    ${formatModelLabel(embeddings.model)}`);
-  console.log(`  Duration: ${formatDuration(Date.now() - startedAt)}`);
-  if (result.embedFailed > 0) {
-    console.warn(`  Warning:  ${result.embedFailed} chunks failed to embed (partial failure — stored what succeeded).`);
-    for (const source of result.embedFailedSources) console.warn(`            - ${source}`);
-    console.log("\nSync incomplete.");
-    process.exit(syncExitCode(result));
-  }
-  console.log("\nSync complete.");
+  if (exitCode !== 0) process.exit(exitCode);
 }
