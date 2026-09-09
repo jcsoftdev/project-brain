@@ -98,6 +98,26 @@ function addGroup(
 }
 
 /**
+ * Drop every matcher group for `event` whose command list mentions one of
+ * `needles`, and delete the event key entirely when nothing is left.
+ *
+ * A group is removed whole rather than filtered entry by entry because
+ * `addGroup` only ever adds groups it built itself, one command each — so a
+ * group carrying one of our commands has nothing of the user's in it. A group
+ * we did not write survives untouched, which is what keeps another tool's
+ * SessionStart hook alive next to ours.
+ */
+function dropGroups(hooks: Record<string, unknown>, event: string, needles: string[]): void {
+  const current: Array<Record<string, unknown>> = Array.isArray(hooks[event])
+    ? (hooks[event] as Array<Record<string, unknown>>)
+    : [];
+
+  const kept = current.filter((g) => !needles.some((n) => groupHasCommand(g, n)));
+  if (kept.length === 0) delete hooks[event];
+  else hooks[event] = kept;
+}
+
+/**
  * Ensure the model-routing hooks exist in a parsed settings object.
  *
  * SessionStart carries the reminder because it is one of the few events that
@@ -214,6 +234,50 @@ export function upsertWorktreeHooks(
       ],
     });
   }
+
+  return { ...base, hooks };
+}
+
+/**
+ * Remove the model-routing hooks from a parsed settings object.
+ *
+ * The inverse of {@link upsertRoutingHooks}, and deliberately narrow: it names
+ * only the two routing commands, so the worktree hooks and the project-level
+ * context hook survive even though all three share `SessionStart`.
+ *
+ * Pure, non-mutating and idempotent, like its counterpart.
+ */
+export function removeRoutingHooks(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "SessionStart", [ROUTING_REMINDER_COMMAND]);
+  dropGroups(hooks, "PreToolUse", [ROUTING_GUARD_COMMAND]);
+
+  return { ...base, hooks };
+}
+
+/**
+ * Remove the worktree hooks from a parsed settings object.
+ *
+ * The inverse of {@link upsertWorktreeHooks}, narrow for
+ * {@link removeRoutingHooks}' reason.
+ */
+export function removeWorktreeHooks(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "SessionStart", [WORKTREE_SESSION_COMMAND]);
+  dropGroups(hooks, "WorktreeRemove", [WORKTREE_CLEANUP_COMMAND]);
+  dropGroups(hooks, "PreToolUse", [WORKTREE_GUARD_COMMAND]);
 
   return { ...base, hooks };
 }

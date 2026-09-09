@@ -13,10 +13,17 @@ async function run(extra: Record<string, unknown> = {}) {
     dataDir,
     skipOllama: true,
     skipRegistration: true,
-    skillInstall: "no",
-    modelRouting: "no",
-    routingHook: { mode: "no", strict: false },
-    worktreeHook: { mode: "no", strict: false },
+    // "hooks:routing" and "hooks:worktree" are not gated by host detection at
+    // all — they read Claude Code's own settings.json regardless of
+    // `skipRegistration`. Leaving them OUT of this explicit selection does
+    // not leave them untouched: an unselected unit whose state is `current`
+    // computes to `remove`, so a real settings.json with project-brain's
+    // hooks already in it would have them stripped out. `claudeSettingsPath`
+    // below is what actually keeps this file off the developer's real home
+    // file — the explicit selection only decides install vs. remove once a
+    // path is already redirected.
+    claudeSettingsPath: join(dir, "settings.json"),
+    units: { mode: "explicit", selected: ["config:record-connection"] },
     ...extra,
   });
 
@@ -65,10 +72,8 @@ describe("setup records brain-record's connection preference", () => {
       dataDir,
       skipOllama: true,
       skipRegistration: true,
-      skillInstall: "no",
-      modelRouting: "no",
-      routingHook: { mode: "no", strict: false },
-      worktreeHook: { mode: "no", strict: false },
+      claudeSettingsPath: join(dir, "settings.json"),
+      units: { mode: "explicit", selected: ["config:record-connection"] },
       recordConfigPath,
     });
 
@@ -85,10 +90,8 @@ describe("setup records brain-record's connection preference", () => {
       dataDir,
       skipOllama: true,
       skipRegistration: true,
-      skillInstall: "no" as const,
-      modelRouting: "no" as const,
-      routingHook: { mode: "no" as const, strict: false },
-      worktreeHook: { mode: "no" as const, strict: false },
+      claudeSettingsPath: join(dir, "settings.json"),
+      units: { mode: "explicit" as const, selected: ["config:record-connection"] },
       recordConnection: { mode: "live" as const, cdpPort: 9400 },
     };
 

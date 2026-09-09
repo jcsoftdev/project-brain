@@ -1,7 +1,7 @@
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 
 import skillMd from "../../templates/skills/brain-audit/SKILL.md" with { type: "text" };
 import okfSkillMd from "../../templates/skills/brain-okf/SKILL.md" with { type: "text" };
@@ -374,6 +374,11 @@ async function readStamp(skillDir: string): Promise<Stamp> {
   }
 }
 
+/** Public read of an installed skill's stamp, for the setup units. */
+export async function readSkillStamp(skillDir: string): Promise<Stamp> {
+  return readStamp(skillDir);
+}
+
 /**
  * Delete files a previous stamp claims we wrote and this manifest no longer
  * ships. Never touches a path we did not record — a hand-written
@@ -422,40 +427,133 @@ export async function inspectOwnership(skillDir: string): Promise<Ownership> {
 }
 
 /**
- * Write every embedded file into `<dir>/brain-audit/`, creating subdirectories.
+ * Write one skill's embedded files into `<dir>/<name>/` for every target,
+ * creating subdirectories as needed.
  *
  * Ownership is checked once per target BEFORE any write to that target, so a
  * foreign directory is never partially clobbered. A skipped target is not an
  * error: the remaining targets still install and setup continues.
+ *
+ * Extracted from `installSkill` so a unit can install exactly its own skill.
+ * `installSkill` is now this in a loop, which is what keeps the two paths from
+ * disagreeing about ownership, stamping or pruning.
+ */
+export async function installOneSkill(
+  targetDirs: string[],
+  name: string
+): Promise<InstallResult> {
+  const manifest = SKILL_MANIFESTS[name];
+  if (!manifest) throw new Error(`Unknown skill: ${name}`);
+
+  const written: string[] = [];
+  const skipped: SkippedTarget[] = [];
+  const removed: string[] = [];
+
+  for (const dir of targetDirs) {
+    const skillDir = join(dir, name);
+    const ownership = await inspectOwnership(skillDir);
+    if (ownership !== "absent" && ownership !== "ours") {
+      skipped.push({ dir: skillDir, reason: ownership });
+      continue;
+    }
+
+    const previous = ownership === "ours" ? await readStamp(skillDir) : { hash: "", files: [] };
+
+    for (const [rel, content] of Object.entries(manifest)) {
+      const dest = join(skillDir, rel);
+      await mkdir(dirname(dest), { recursive: true });
+      await writeFile(dest, content, "utf8");
+    }
+    removed.push(...(await pruneOrphans(skillDir, previous.files, manifest)));
+    await writeFile(join(skillDir, STAMP_FILE), renderStamp(manifest), "utf8");
+    written.push(skillDir);
+  }
+
+  return { written, skipped, removed };
+}
+
+/**
+ * Install every skill in the registry into every target root: `installOneSkill`
+ * run once per skill name, with the three results merged.
  */
 export async function installSkill(targetDirs: string[]): Promise<InstallResult> {
   const written: string[] = [];
   const skipped: SkippedTarget[] = [];
   const removed: string[] = [];
 
-  for (const dir of targetDirs) {
-    for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
-      const skillDir = join(dir, name);
-      const ownership = await inspectOwnership(skillDir);
-      if (ownership !== "absent" && ownership !== "ours") {
-        skipped.push({ dir: skillDir, reason: ownership });
-        continue;
-      }
-
-      const previous = ownership === "ours" ? await readStamp(skillDir) : { hash: "", files: [] };
-
-      for (const [rel, content] of Object.entries(manifest)) {
-        const dest = join(skillDir, rel);
-        await mkdir(dirname(dest), { recursive: true });
-        await writeFile(dest, content, "utf8");
-      }
-      removed.push(...(await pruneOrphans(skillDir, previous.files, manifest)));
-      await writeFile(join(skillDir, STAMP_FILE), renderStamp(manifest), "utf8");
-      written.push(skillDir);
-    }
+  for (const name of Object.keys(SKILL_MANIFESTS)) {
+    const outcome = await installOneSkill(targetDirs, name);
+    written.push(...outcome.written);
+    skipped.push(...outcome.skipped);
+    removed.push(...outcome.removed);
   }
 
   return { written, skipped, removed };
+}
+
+/**
+ * Delete one installed skill directory, bounded by its own stamp.
+ *
+ * The stamp is the only list of paths we can prove we wrote, which is exactly
+ * why it is the deletion boundary: a `references/custom.md` the user added
+ * survives, and so does the directory holding it. `rmdir` without `recursive`
+ * is doing real work here — it fails when anything is left, which is how a
+ * user's file keeps its parent alive without us having to enumerate it.
+ *
+ * Ownership is checked first, so a hand-written skill that happens to share our
+ * directory name is never opened for deletion.
+ *
+ * Directory ancestors are walked for every stamped path (the full ancestor chain,
+ * not just immediate parents), because a partial chain would strand the directory
+ * in an unreadable state: the skill directory would be left with no SKILL.md, so
+ * the next `inspectOwnership` call would return "unreadable" and permanently block
+ * reinstalling.
+ */
+export async function removeSkill(
+  skillDir: string
+): Promise<{ removed: string[]; skipped: SkippedTarget | null }> {
+  const ownership = await inspectOwnership(skillDir);
+  if (ownership === "absent") return { removed: [], skipped: null };
+  if (ownership !== "ours") return { removed: [], skipped: { dir: skillDir, reason: ownership } };
+
+  const stamp = await readStamp(skillDir);
+  const removed: string[] = [];
+
+  for (const rel of stamp.files) {
+    // Same traversal guard as pruneOrphans: a stamp is a file on disk, and a
+    // bad merge or an attacker must not be able to point it outside the
+    // directory it describes.
+    if (rel.startsWith("/") || rel.split("/").includes("..")) continue;
+    const dest = join(skillDir, rel);
+    try {
+      await rm(dest, { force: true });
+      removed.push(dest);
+    } catch {
+      // A read-only or already-vanished file must not break the removal.
+    }
+  }
+
+  await rm(join(skillDir, STAMP_FILE), { force: true }).catch(() => {});
+
+  // Collect the full ancestor chain for every stamped relative path, then prune
+  // deepest-first. `rmdir` without `recursive` fails harmlessly when anything
+  // the user owns is still inside.
+  const dirs = new Set<string>();
+  for (const rel of stamp.files) {
+    if (rel.startsWith("/") || rel.split("/").includes("..")) continue;
+    let current = dirname(rel);
+    while (current !== ".") {
+      dirs.add(current);
+      current = dirname(current);
+    }
+  }
+  const sortedDirs = [...dirs].sort((a, b) => b.length - a.length);
+  for (const rel of sortedDirs) {
+    await rmdir(join(skillDir, rel)).catch(() => {});
+  }
+  await rmdir(skillDir).catch(() => {});
+
+  return { removed, skipped: null };
 }
 
 export interface RefreshResult {
@@ -511,8 +609,33 @@ async function rootIsAdopted(dir: string): Promise<boolean> {
  * carry our marker, never one the user never opted into — but inside such a
  * root, "missing" and "unwanted" are indistinguishable on disk. Someone who
  * wants a skill gone should decline the root, not delete one directory.
+ *
+ * That last cost is now closed for anyone who has run the selection-aware
+ * setup: `selectionPath`, when given, gates both branches below on the user's
+ * saved answer. A DECLINED skill stays gone, and one in NEITHER list is new to
+ * this user — its offer belongs on the setup screen, not in a silent write
+ * from whichever unrelated command happened to trigger this check. With no
+ * selection file at all — the common case for someone who has not yet run the
+ * new setup — behaviour is exactly what it was before: the old bug above is
+ * still the live risk for them, so new skills keep arriving automatically.
  */
-export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshResult> {
+export async function refreshStaleSkills(
+  targetDirs: string[],
+  selectionPath?: string
+): Promise<RefreshResult> {
+  const { loadSelection, membership } = await import("../setup/selection.js");
+  const selection = selectionPath ? await loadSelection(selectionPath) : null;
+
+  /**
+   * Whether this skill may be written at all.
+   *
+   * With no selection file, every skill is wanted — today's completing
+   * behaviour, unchanged. With a selection present, only an explicitly
+   * selected skill is touched; declined and unseen skills are left alone.
+   */
+  const wanted = (name: string): boolean =>
+    selection === null || membership(selection, `skill:${name}`) === "selected";
+
   const refreshed: string[] = [];
   const added: string[] = [];
   const upToDate: string[] = [];
@@ -523,6 +646,7 @@ export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshR
     const adopted = await rootIsAdopted(dir);
 
     for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
+      if (!wanted(name)) continue;
       const skillDir = join(dir, name);
 
       if (!existsSync(skillDir)) {

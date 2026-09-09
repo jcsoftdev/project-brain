@@ -33,9 +33,12 @@ async function run(extra: Record<string, unknown> = {}) {
     dataDir: join(dir, "data"),
     skipOllama: true,
     registrars: [claudeRegistrar()],
-    skillInstall: "no",
-    modelRouting: "no",
-    routingHook: { mode: "no", strict: false },
+    skillTargetDirs: [],
+    // Only "hooks:worktree" selected by default — "hooks:routing" and
+    // "guidance:model-routing" are deliberately left out, standing in for the
+    // old routingHook:"no"/modelRouting:"no" flags this test used to isolate
+    // the worktree hook from everything else.
+    units: { mode: "explicit", selected: ["hooks:worktree"] },
     claudeSettingsPath: settingsPath,
     ...extra,
   });
@@ -69,7 +72,7 @@ describe("setup installs the worktree hooks", () => {
   });
 
   it("writes nothing when explicitly declined", async () => {
-    const { result, written } = await run({ worktreeHook: { mode: "no", strict: false } });
+    const { result, written } = await run({ units: { mode: "explicit", selected: [] } });
     expect(result.worktreeHooks).toEqual({ installed: false, strict: false });
     expect(written).toBeNull();
   });
@@ -81,7 +84,7 @@ describe("setup installs the worktree hooks", () => {
   });
 
   it("installs the spawn guard in strict mode", async () => {
-    const { result, written } = await run({ worktreeHook: { mode: "yes", strict: true } });
+    const { result, written } = await run({ worktreeHook: { strict: true } });
     expect(result.worktreeHooks).toEqual({ installed: true, strict: true });
     expect(commands(written, "PreToolUse").some((c) => c.includes("worktree-guard"))).toBe(true);
   });
@@ -94,10 +97,9 @@ describe("setup installs the worktree hooks", () => {
       dataDir: join(dir, "data"),
       skipOllama: true,
       registrars: [claudeRegistrar()],
-      skillInstall: "no" as const,
-      modelRouting: "no" as const,
-      routingHook: { mode: "no" as const, strict: false },
-      worktreeHook: { mode: "yes" as const, strict: true },
+      skillTargetDirs: [],
+      units: { mode: "explicit" as const, selected: ["hooks:worktree"] },
+      worktreeHook: { strict: true },
       claudeSettingsPath: settingsPath,
     };
 

@@ -4,15 +4,19 @@ import { mkdir } from "node:fs/promises";
 import { detectEnvironment, type Environment } from "../env/detect.js";
 import { getRegistrars, type AIToolRegistrar } from "../registrars/types.js";
 import { UnparseableConfigError, standardServerEntry } from "../registrars/json-config.js";
-import { getGlobalRules } from "../rules/global.js";
 import {
-  parseModelRoutingFlag,
   parseRecordConnectionFlag,
   parseRoutingHookFlag,
-  parseSkillInstallFlag,
+  parseUnitFlags,
   parseWorktreeHookFlag,
 } from "../cli-args.js";
-import { getSkillTargetDirs, installSkill, type SkippedTarget } from "../rules/skills.js";
+import { getSkillTargetDirs, inspectOwnership, type SkippedTarget } from "../rules/skills.js";
+import { allUnits, type SetupContext, type UnitState } from "../setup/units.js";
+import { computePlan, initialChecked, type PlanRow } from "../setup/plan.js";
+import { loadSelection, saveSelection, membership } from "../setup/selection.js";
+import { renderPlan } from "../setup/render.js";
+import { isInteractive } from "../interactive.js";
+import { VERSION } from "../constants.js";
 
 export interface SetupOptions {
   dataDir?: string;
@@ -20,18 +24,16 @@ export interface SetupOptions {
   skipRegistration?: boolean;
   /** Injectable for testing; defaults to the real getRegistrars(). */
   registrars?: AIToolRegistrar[];
-  /** Non-interactive override for the model-routing prompt. Defaults to "ask". */
-  modelRouting?: "ask" | "yes" | "no";
   /** Injectable for testing; defaults to the real ~/.project-brain/model-routing.json. */
   routingConfigPath?: string;
-  /** Whether to install the routing hooks into Claude Code's global settings. */
-  routingHook?: { mode: "ask" | "yes" | "no"; strict: boolean };
+  /** Whether the PreToolUse routing guard should be strict, if "hooks:routing" is selected. */
+  routingHook?: { strict: boolean };
   /**
-   * Worktree hooks. Installation defaults to yes and is deliberately NOT tied to
-   * `routingHook`: routing guidance is a preference, an index that outlives its worktree
-   * is a bug. `strict` adds the blocking PreToolUse guard and is never a default.
+   * Worktree-hook strictness. Whether the hooks themselves are installed is the
+   * "hooks:worktree" unit's own concern; `strict` adds the blocking PreToolUse
+   * guard and is never a default.
    */
-  worktreeHook?: { mode: "yes" | "no"; strict: boolean };
+  worktreeHook?: { strict: boolean };
   /** Injectable for testing; defaults to ~/.claude/settings.json. */
   claudeSettingsPath?: string;
   /**
@@ -49,23 +51,30 @@ export interface SetupOptions {
    * from writing into the developer's real ~/.project-brain during a run.
    */
   recordConfigPath?: string;
-  /** Injectable for testing; defaults to the real promptModelRouting from src/interactive.js. */
-  promptModelRouting?: () => Promise<boolean>;
-  /**
-   * Non-interactive override for the brain-audit skill install. Defaults to
-   * "ask", which resolves to INSTALL when non-interactive — unlike
-   * modelRouting, the skill is part of what setup delivers.
-   */
-  skillInstall?: "ask" | "yes" | "no";
-  /** Injectable for testing; defaults to the real promptSkillInstall from src/interactive.js. */
-  promptSkillInstall?: () => Promise<boolean>;
   /**
    * Injectable for testing; defaults to getSkillTargetDirs(registeredTools).
    * Tests MUST set this — the default resolves against homedir(), so a suite
-   * that injects fake registrars would otherwise write brain-audit into the
+   * that injects fake registrars would otherwise write skills into the
    * developer's real ~/.claude/skills.
    */
   skillTargetDirs?: string[];
+  /**
+   * Injectable for testing; defaults to `<dataDir>/setup-selection.json`.
+   *
+   * Tied to the already-injected `dataDir` rather than a homedir() constant,
+   * exactly like `recordConfigPath` — and for a sharper reason: the units this
+   * path governs can DELETE, and `os.homedir()` under `bun test` ignores a
+   * runtime HOME change, so a suite cannot redirect a homedir default.
+   */
+  selectionPath?: string;
+  /** Non-interactive override for the unit checklist, from `parseUnitFlags`. */
+  units?: { mode: "default" | "explicit"; selected: string[] };
+  /**
+   * Injectable for testing; defaults to the real `promptUnitSelection` from
+   * `src/interactive.js`. Every other prompt in this file is injectable and the
+   * existing suite depends on that, so this one is too.
+   */
+  promptUnitSelection?: (rows: Omit<PlanRow, "action">[]) => Promise<string[] | null>;
 }
 
 export interface SetupResult {
@@ -89,220 +98,14 @@ export interface SetupResult {
   worktreeHooks: { installed: boolean; strict: boolean };
   /** brain-record's connection-mode preference, as written to record-config.json. */
   recordConnection: { mode: "fresh" | "live"; cdpPort: number };
+  /** Every unit, its inspected state and the action taken. */
+  units: PlanRow[];
+  /** Where the selection was written. */
+  selectionPath: string;
 }
 
 /** Tool names whose settings file is commonly hand-edited as JSONC (comments allowed). */
 const JSONC_TOOLS = new Set(["Zed", "VS Code"]);
-
-/**
- * Install the routing hooks into Claude Code's GLOBAL settings.json.
- *
- * Global, not project-level, because the routing rules are global — unlike the
- * `init` context hook, which is about one indexed project.
- *
- * Claude Code only: it is the one host verified to fire PreToolUse on a
- * sub-agent spawn and to accept `additionalContext` on SessionStart. Writing a
- * hook for a host that silently never fires it is worse than writing none.
- */
-async function installRoutingHooks(
-  targets: AIToolRegistrar[],
-  options: SetupOptions,
-  routingAccepted: boolean
-): Promise<{ installed: boolean; strict: boolean }> {
-  const { mode, strict } = options.routingHook ?? { mode: "ask", strict: false };
-  if (mode === "no") return { installed: false, strict: false };
-
-  // With no flag, the hooks ride on the ONE decision already made about
-  // routing. Someone who declined the guidance did not ask to be reminded of
-  // it every session, and asking a second question to install a reminder for
-  // the answer to the first is how prompts get clicked through.
-  if (mode === "ask" && !routingAccepted) return { installed: false, strict: false };
-
-  const claude = targets.find((r) => r.routing?.hostKey === "claude");
-  if (!claude) return { installed: false, strict: false };
-
-  const settingsPath = options.claudeSettingsPath ?? defaultClaudeSettingsPath();
-
-  try {
-    const { upsertRoutingHooks } = await import("../hooks/claude-settings.js");
-
-    let existing: object | null = null;
-    try {
-      existing = JSON.parse(await Bun.file(settingsPath).text());
-    } catch {
-      // Absent or unparseable. Absent is normal; unparseable is not ours to
-      // repair — upsert starts from scratch rather than destroying it, so bail
-      // out instead if there was real content.
-      const raw = await Bun.file(settingsPath)
-        .text()
-        .catch(() => "");
-      if (raw.trim().length > 0) {
-        console.warn(
-          `Warning: ${settingsPath} is not valid JSON — routing hooks not installed.`
-        );
-        return { installed: false, strict: false };
-      }
-    }
-
-    await mkdir(join(settingsPath, ".."), { recursive: true });
-    await Bun.write(settingsPath, `${JSON.stringify(upsertRoutingHooks(existing, { strict }), null, 2)}\n`);
-    return { installed: true, strict };
-  } catch (e: any) {
-    console.warn(`Warning: Failed to install routing hooks: ${e.message}`);
-    return { installed: false, strict: false };
-  }
-}
-
-/**
- * Install the worktree hooks into Claude Code's settings.
- *
- * Not gated on the routing answer, and never asked about. The two hooks it writes are
- * hygiene, not guidance: one reclaims the vector table of a worktree git no longer
- * lists, the other tells a session it is sitting in a worktree whose brain is scoped to
- * a different branch. Both prevent wrong answers rather than offer advice, and the
- * SessionStart one stays silent in a main checkout, which is nearly every session.
- *
- * Claude Code only, for `installRoutingHooks`' reason: it is the host verified to fire
- * these events and to accept `additionalContext` on SessionStart.
- */
-async function installWorktreeHooks(
-  targets: AIToolRegistrar[],
-  options: SetupOptions
-): Promise<{ installed: boolean; strict: boolean }> {
-  const NONE = { installed: false, strict: false };
-  const { mode, strict } = options.worktreeHook ?? { mode: "yes" as const, strict: false };
-  if (mode === "no") return NONE;
-
-  const claude = targets.find((r) => r.routing?.hostKey === "claude");
-  if (!claude) return NONE;
-
-  const settingsPath = options.claudeSettingsPath ?? defaultClaudeSettingsPath();
-
-  try {
-    const { upsertWorktreeHooks } = await import("../hooks/claude-settings.js");
-
-    let existing: object | null = null;
-    try {
-      existing = JSON.parse(await Bun.file(settingsPath).text());
-    } catch {
-      // Absent is normal. Unparseable is not ours to repair: upserting from scratch
-      // would silently replace whatever the user has there.
-      const raw = await Bun.file(settingsPath)
-        .text()
-        .catch(() => "");
-      if (raw.trim().length > 0) {
-        console.warn(`Warning: ${settingsPath} is not valid JSON — worktree hooks not installed.`);
-        return NONE;
-      }
-    }
-
-    await mkdir(join(settingsPath, ".."), { recursive: true });
-    await Bun.write(
-      settingsPath,
-      `${JSON.stringify(upsertWorktreeHooks(existing, { strict }), null, 2)}\n`
-    );
-    return { installed: true, strict };
-  } catch (e: any) {
-    console.warn(`Warning: Failed to install worktree hooks: ${e.message}`);
-    return NONE;
-  }
-}
-
-/**
- * Persist brain-record's connection-mode preference to
- * `<dataDir>/record-config.json`.
- *
- * Unlike the routing/worktree hooks, this is a small standalone preference
- * file this generator fully owns — not a shared settings.json belonging to
- * some other tool that has to be merged into. So there is nothing to ask
- * about (no `mode: "ask"`) and no ownership check: it is always (re)written,
- * the way `renderStamp` always rewrites the skill stamp. `mode` defaults to
- * "fresh", the safe choice that needs no flag; "live" always requires one —
- * see `SetupOptions.recordConnection`.
- */
-async function writeRecordConnectionConfig(
-  dataDir: string,
-  options: SetupOptions
-): Promise<{ mode: "fresh" | "live"; cdpPort: number }> {
-  const config = options.recordConnection ?? { mode: "fresh" as const, cdpPort: 9222 };
-  const path = options.recordConfigPath ?? join(dataDir, "record-config.json");
-
-  try {
-    await mkdir(join(path, ".."), { recursive: true });
-    await Bun.write(path, `${JSON.stringify(config, null, 2)}\n`);
-  } catch (e: any) {
-    console.warn(`Warning: Failed to write brain-record connection config: ${e.message}`);
-  }
-
-  return config;
-}
-
-/**
- * Write the model-routing section to every eligible host, asking at most once.
- *
- * Three states, three behaviours:
- *   - nothing written  → ask (opt-out: the default answer is yes)
- *   - stale version    → rewrite silently; consent was already given, and
- *                        re-asking on every content update teaches people to
- *                        decline
- *   - current version  → leave it alone
- *
- * A failure on one host is reported and skipped, never fatal: a full disk in
- * ~/.codex must not cost the user their CLAUDE.md section.
- */
-async function writeRoutingGuidance(
-  targets: AIToolRegistrar[],
-  options: SetupOptions
-): Promise<boolean> {
-  const mode = options.modelRouting ?? "ask";
-  if (mode === "no") return false;
-
-  const eligible = targets.filter((r) => r.routing && r.writeModelRouting);
-  if (eligible.length === 0) return false;
-
-  // Version state is read before prompting: if every host is already current
-  // there is nothing to ask about.
-  const states = await Promise.all(
-    eligible.map(async (registrar) => {
-      try {
-        return { registrar, written: (await registrar.writtenRoutingVersion?.()) ?? null };
-      } catch {
-        return { registrar, written: null };
-      }
-    })
-  );
-
-  const { ROUTING_CONTENT_VERSION } = await import("../constants.js");
-  const pending = states.filter((s) => s.written === null || s.written < ROUTING_CONTENT_VERSION);
-  // Everything already current still counts as accepted — the guidance IS in
-  // place, which is what the caller is asking about.
-  if (pending.length === 0) return true;
-
-  if (mode === "ask" && pending.some((s) => s.written === null)) {
-    const prompt =
-      options.promptModelRouting ?? (await import("../interactive.js")).promptModelRouting;
-    if (!(await prompt())) return false;
-  }
-
-  const { loadRoutingConfig } = await import("../rules/model-routing-config.js");
-  const resolved = await loadRoutingConfig(options.routingConfigPath);
-  for (const warning of resolved.warnings) console.warn(`Warning: ${warning}`);
-
-  const { getModelRoutingSection } = await import("../rules/model-routing.js");
-
-  let wrote = false;
-  for (const { registrar } of pending) {
-    try {
-      await registrar.writeModelRouting!(await getModelRoutingSection(registrar, resolved));
-      wrote = true;
-    } catch (e: any) {
-      console.warn(
-        `Warning: Failed to write model-routing guidance for ${registrar.name}: ${e.message}`
-      );
-    }
-  }
-  return wrote;
-}
 
 function buildManualInstructions(
   toolName: string,
@@ -330,16 +133,90 @@ function buildManualInstructions(
  *   node -e 'process.env.HOME="/tmp/x"; homedir()'  -> /tmp/x
  *
  * So a test running under `bun test` CANNOT redirect this path by setting HOME,
- * and 27 of the runSetup calls in the suite pass no explicit path. A full
- * `bun test` run was observed writing real hooks into a developer's own
- * settings.json. The routing installer hid the same hazard because it returns
- * early without consent; the worktree installer is ungated and fired every time.
+ * and the suite has calls that pass no explicit path. A full `bun test` run was
+ * once observed writing real hooks into a developer's own settings.json.
  */
 function defaultClaudeSettingsPath(): string {
   return process.env.BRAIN_CLAUDE_SETTINGS ?? join(homedir(), ".claude", "settings.json");
 }
 
 const DEFAULT_DATA_DIR = join(homedir(), ".project-brain");
+
+/**
+ * Assemble the final `SetupResult` from the plan, in the one place both the
+ * cancel path and the normal return call into — so the two can never disagree
+ * about the shape they hand back.
+ *
+ * `failed` names unit ids whose `apply()`/`remove()` threw during this run
+ * (empty on the cancel path, since nothing was ever applied). It is what keeps
+ * `registeredTools` reporting only hosts that ACTUALLY registered, not merely
+ * hosts the plan intended to register — a distinction the plan alone cannot
+ * make, because its `action` is computed before apply() ever runs.
+ */
+async function buildResult(
+  ctx: SetupContext,
+  env: Environment,
+  dataDir: string,
+  plan: PlanRow[],
+  manualInstructions: string[],
+  failed: Set<string> = new Set()
+): Promise<SetupResult> {
+  const acted = (id: string) =>
+    plan.some((p) => p.id === id && (p.action === "install" || p.action === "update"));
+
+  const routingHooks = {
+    installed: acted("hooks:routing"),
+    strict: ctx.hookStrict.routing && acted("hooks:routing"),
+  };
+  const worktreeHooks = {
+    installed: acted("hooks:worktree"),
+    strict: ctx.hookStrict.worktree && acted("hooks:worktree"),
+  };
+  const skillTargets = plan
+    .filter((p) => p.group === "Skills" && (p.action === "install" || p.action === "update"))
+    .flatMap((p) => ctx.skillTargetDirs.map((d) => join(d, p.label)));
+  const registeredTools = plan
+    .filter(
+      (p) =>
+        p.group === "Hosts" &&
+        (p.action === "install" || p.action === "update") &&
+        !failed.has(p.id)
+    )
+    .map((p) => p.label);
+
+  // A `blocked` skill (a foreign copy on at least one root) does not go
+  // through `installOneSkill`, which is where the old `skillSkipped` entries
+  // used to come from — the unit is all-or-nothing, so `apply()` is never
+  // called for it. Re-checking ownership here, only for blocked skill rows,
+  // is what keeps this field naming the SPECIFIC foreign directory rather
+  // than guessing from the unit's single aggregate state.
+  const skillSkipped: SkippedTarget[] = [];
+  for (const row of plan) {
+    if (row.group !== "Skills" || row.action !== "blocked") continue;
+    for (const root of ctx.skillTargetDirs) {
+      const dir = join(root, row.label);
+      const ownership = await inspectOwnership(dir);
+      if (ownership !== "absent" && ownership !== "ours") {
+        skillSkipped.push({ dir, reason: ownership });
+      }
+    }
+  }
+
+  return {
+    dataDir,
+    env,
+    registeredTools,
+    installedTools: ctx.installed.map((r) => r.name),
+    manualInstructions,
+    skillTargets,
+    skillSkipped,
+    routingHooks,
+    worktreeHooks,
+    recordConnection: ctx.recordConnection,
+    units: plan,
+    selectionPath: ctx.selectionPath,
+  };
+}
 
 /**
  * Core setup logic — testable with injectable options.
@@ -353,162 +230,242 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   // 2. Detect environment
   const env = await detectEnvironment();
 
-  // 3. Pull Ollama model if available (and not skipped)
-  if (!options.skipOllama && env.ollama.available) {
-    if (!env.ollama.models.includes("nomic-embed-text")) {
-      try {
-        const proc = Bun.spawn(["ollama", "pull", "nomic-embed-text"], {
-          stdout: "inherit",
-          stderr: "inherit",
-        });
-        await proc.exited;
-      } catch {
-        console.warn("Warning: Failed to pull Ollama model.");
-      }
-    }
-  } else if (!options.skipOllama && !env.ollama.available) {
-    console.warn(
-      "Warning: Ollama not available. Embedding features will be degraded."
-    );
-  }
+  // 3. Ollama pulling is a unit now (`embed:ollama-model`) — no standalone step here.
 
-  // 4. Register in AI tools
-  const registeredTools: string[] = [];
-  /** Every detected tool, whether or not its MCP registration succeeded. */
-  const installedTools: string[] = [];
-  const manualInstructions: string[] = [];
-  /** Registered hosts that can carry a model-routing section. */
-  const routingTargets: AIToolRegistrar[] = [];
-
+  // 4. Detect hosts. Registration itself is a unit, so this loop only detects.
+  const installedRegistrars: AIToolRegistrar[] = [];
   if (!options.skipRegistration) {
     const registrars = options.registrars ?? (await getRegistrars());
-    const serverPath =
-      Bun.which("project-brain") ??
-      join(import.meta.dir, "../../src/cli.ts");
-
     for (const registrar of registrars) {
-      const installed = await registrar.isInstalled();
-      if (!installed) continue;
-
-      // Skill targets follow INSTALLED, not REGISTERED.
-      //
-      // A skill is a directory of markdown the host reads on its own; it needs
-      // no MCP server behind it. Gating it on registration success meant one
-      // unparseable config file silently cost the user every skill for that
-      // tool — two unrelated failures welded together.
-      installedTools.push(registrar.name);
-
-      let registered = false;
-      try {
-        await registrar.register(serverPath);
-
-        // Determine tool key for template loading
-        const toolKey = registrar.name
-          .toLowerCase()
-          .replace(/\s+/g, "")
-          .replace("claudecode", "claude")
-          .replace("geminicli", "gemini");
-        const rules = await getGlobalRules(toolKey);
-        await registrar.writeRules(rules);
-        registeredTools.push(registrar.name);
-        registered = true;
-      } catch (e: any) {
-        if (e instanceof UnparseableConfigError) {
-          manualInstructions.push(buildManualInstructions(registrar.name, e));
-        } else {
-          console.warn(`Warning: Failed to register in ${registrar.name}: ${e.message}`);
-        }
-      }
-
-      if (registered) {
-        routingTargets.push(registrar);
-      }
+      if (await registrar.isInstalled()) installedRegistrars.push(registrar);
     }
   }
 
-  // 4b. Model-routing guidance, once across every eligible host.
+  const ctx: SetupContext = {
+    dataDir,
+    installed: installedRegistrars,
+    serverPath: Bun.which("project-brain") ?? join(import.meta.dir, "../../src/cli.ts"),
+    claudeSettingsPath: options.claudeSettingsPath ?? defaultClaudeSettingsPath(),
+    recordConfigPath: options.recordConfigPath ?? join(dataDir, "record-config.json"),
+    selectionPath: options.selectionPath ?? join(dataDir, "setup-selection.json"),
+    skillTargetDirs:
+      options.skillTargetDirs ?? getSkillTargetDirs(installedRegistrars.map((r) => r.name)),
+    recordConnection: options.recordConnection ?? { mode: "fresh", cdpPort: 9222 },
+    hookStrict: {
+      routing: options.routingHook?.strict ?? false,
+      worktree: options.worktreeHook?.strict ?? false,
+    },
+    skipOllama: options.skipOllama ?? false,
+    routingConfigPath: options.routingConfigPath,
+  };
+
+  // Preserved from the previous implementation: UnparseableConfigError from a
+  // host's apply() still becomes a manual-setup instruction in the result.
+  const manualInstructions: string[] = [];
+
+  // 5. Inspect every unit BEFORE anything is drawn or written. This is what
+  // lets the checklist report disk rather than assumption.
+  const units = allUnits(ctx);
+  const selection = await loadSelection(ctx.selectionPath);
+
+  const inspected = await Promise.all(
+    units.map(async (unit) => {
+      const state = await unit.inspect(ctx).catch(() => "absent" as UnitState);
+      const seen = membership(selection, unit.id);
+      return {
+        id: unit.id,
+        label: unit.label,
+        group: unit.group,
+        description: unit.description,
+        state,
+        membership: seen,
+        chosen: initialChecked(state, seen, unit.defaultSelected, selection !== null),
+      };
+    })
+  );
+
+  // 6. Resolve the ticks: explicit flags win, then the prompt, then the seeds.
   //
-  // Deliberately AFTER the registrar loop, not inside it: the decision is one
-  // decision. Asking per host turned a single yes into six chances to
-  // accidentally say no, and the answer is never host-specific — only the
-  // rendered text is.
-  const routingAccepted = await writeRoutingGuidance(routingTargets, options);
-  const routingHooks = await installRoutingHooks(routingTargets, options, routingAccepted);
-  // After the routing hooks, never before: both write the same file, and this one must
-  // merge into whatever they left rather than be overwritten by them.
-  const worktreeHooks = await installWorktreeHooks(routingTargets, options);
-  // Independent of both — its own file, no registrar, nothing to merge into.
-  const recordConnection = await writeRecordConnectionConfig(dataDir, options);
+  // `cancelled()` is the one "write nothing" exit — reached both when the
+  // checklist itself is cancelled and when the confirm screen below is
+  // declined, so the two paths can never drift into reporting different
+  // shapes for the same "nothing happened" outcome.
+  const cancelled = () =>
+    buildResult(
+      ctx,
+      env,
+      dataDir,
+      computePlan(inspected.map((r) => ({ ...r, chosen: false }))),
+      manualInstructions
+    );
 
-  // 5. Install the brain-audit skill.
-  //
-  // Runs once after the registrar loop, not per registrar: six of the eight
-  // tools share ~/.agents/skills, and getSkillTargetDirs already dedupes them.
-  let skillTargets: string[] = [];
-  let skillSkipped: SkippedTarget[] = [];
+  let chosenIds: string[];
+  if (options.units?.mode === "explicit") {
+    chosenIds = options.units.selected;
+  } else {
+    const answer = await (options.promptUnitSelection ??
+      (await import("../interactive.js")).promptUnitSelection)(inspected);
+    if (answer === null) {
+      // Cancelled. Write nothing, including the selection file.
+      return cancelled();
+    }
+    chosenIds = answer;
+  }
 
-  const skillMode = options.skillInstall ?? "ask";
-  const skillDirs = options.skillTargetDirs ?? getSkillTargetDirs(installedTools);
+  const chosen = new Set(chosenIds);
+  const plan = computePlan(inspected.map((row) => ({ ...row, chosen: chosen.has(row.id) })));
 
-  if (skillMode !== "no" && skillDirs.length > 0) {
+  // 6.5. Show the diff before a single write happens, and — in a real
+  // interactive session, and only when the plan actually does something —
+  // require explicit consent. `blocked` rows are informational (a foreign
+  // directory we already refuse to touch), not something to confirm, so they
+  // do not count as "work" any more than `unchanged` does.
+  console.log(`\n${renderPlan(plan)}`);
+  const hasWork = plan.some(
+    (p) => p.action === "install" || p.action === "update" || p.action === "remove"
+  );
+  if (hasWork && isInteractive()) {
+    const clack = await import("@clack/prompts");
+    const proceed = await clack.confirm({ message: "Apply?", initialValue: false });
+    if (clack.isCancel(proceed) || proceed !== true) {
+      return cancelled();
+    }
+  }
+
+  // 7. Apply.
+  const byId = new Map(units.map((u) => [u.id, u]));
+  const failed = new Set<string>();
+  for (const row of plan) {
+    const unit = byId.get(row.id)!;
     try {
-      const prompt =
-        options.promptSkillInstall ?? (await import("../interactive.js")).promptSkillInstall;
-      const accepted = skillMode === "yes" ? true : await prompt();
-      if (accepted) {
-        const outcome = await installSkill(skillDirs);
-        skillTargets = outcome.written;
-        skillSkipped = outcome.skipped;
-      }
+      if (row.action === "install" || row.action === "update") await unit.apply(ctx);
+      else if (row.action === "remove") await unit.remove(ctx);
     } catch (e: any) {
-      console.warn(`Warning: Failed to install skills: ${e.message}`);
+      failed.add(row.id);
+      if (e instanceof UnparseableConfigError) {
+        manualInstructions.push(buildManualInstructions(row.label, e));
+      } else {
+        console.warn(`Warning: ${row.action} failed for ${row.label}: ${e.message}`);
+      }
     }
-  } else if (skillMode !== "no") {
-    // Say so. A silent skip here is indistinguishable from a broken install:
-    // the user runs setup, sees nothing about skills, and has no thread to pull.
-    console.warn(
-      "Warning: No skill targets found — no supported AI tool was detected," +
-        " so no skills were installed."
-    );
   }
 
-  for (const target of skillSkipped) {
-    console.warn(
-      `Warning: ${target.dir} already exists and was not created by project-brain` +
-        ` — left untouched. Move or delete it, then re-run setup.`
-    );
+  // 8. Persist the choice. Written AFTER applying so a crash mid-apply does not
+  // record a state the disk never reached.
+  //
+  // `unavailable`/`foreign` rows are excluded from the id list entirely, not
+  // merely kept out of `selected` — `saveSelection` derives `declined` as
+  // "every id minus selected", so a row left in would land in `declined` and
+  // be recorded as the user's refusal. That is durable and wrong: a unit that
+  // could not be applied HERE (no Ollama, no detected host, a foreign
+  // directory) was never actually offered a real choice, and must stay
+  // `unseen` so it is offered again once the blocker goes away.
+  const selectableIds = inspected
+    .filter((r) => r.state !== "unavailable" && r.state !== "foreign")
+    .map((r) => r.id);
+  await saveSelection(ctx.selectionPath, chosenIds, selectableIds, VERSION);
+
+  return buildResult(ctx, env, dataDir, plan, manualInstructions, failed);
+}
+
+/**
+ * Deterministic, grouped-by-directory text for the "Skill installed in:" line.
+ *
+ * `installSkill` (via Task 4's `installOneSkill`) produces `written` in
+ * skill-major order — every root for skill A, then every root for skill B —
+ * not the dir-major order it used to. That reorder is invisible to
+ * `InstallResult`'s own tests, but this is the one place it was user-visible:
+ * with two or more skill target roots (Claude Code + Codex + the shared
+ * `~/.agents/skills` is the normal case), the raw array interleaves
+ * directories instead of grouping them. Sorting a COPY here — never
+ * `result.skillTargets` itself — keeps the installer's own ordering exactly as
+ * it produces it; this is a display concern only.
+ *
+ * `skillTargets` is now skill-major for the same reason on the setup-unit
+ * path (Task 11 derives it by iterating the plan's Skills group, one unit —
+ * one skill — at a time), so this sort is still load-bearing.
+ */
+export function formatSkillTargets(skillTargets: string[]): string {
+  return [...skillTargets].sort().join(", ");
+}
+
+/**
+ * Build a `SetupContext` from detection alone, with no consent step and no
+ * writes — just enough to know the real unit id list.
+ *
+ * `execute()` needs that list before it can resolve `--with`/`--without`
+ * flags via `parseUnitFlags`, and `runSetup()` builds its own context moments
+ * later. Sharing this helper is what keeps the two from ever disagreeing
+ * about which ids exist.
+ */
+export async function probeContext(options: {
+  recordConnection?: { mode: "fresh" | "live"; cdpPort: number };
+  routingHook?: { strict: boolean };
+  worktreeHook?: { strict: boolean };
+  routingConfigPath?: string;
+} = {}): Promise<SetupContext> {
+  const dataDir = DEFAULT_DATA_DIR;
+  const registrars = await getRegistrars();
+  const installed: AIToolRegistrar[] = [];
+  for (const registrar of registrars) {
+    if (await registrar.isInstalled()) installed.push(registrar);
   }
 
   return {
     dataDir,
-    env,
-    registeredTools,
-    installedTools,
-    manualInstructions,
-    skillTargets,
-    skillSkipped,
-    routingHooks,
-    worktreeHooks,
-    recordConnection,
+    installed,
+    serverPath: Bun.which("project-brain") ?? join(import.meta.dir, "../../src/cli.ts"),
+    claudeSettingsPath: defaultClaudeSettingsPath(),
+    recordConfigPath: join(dataDir, "record-config.json"),
+    selectionPath: join(dataDir, "setup-selection.json"),
+    skillTargetDirs: getSkillTargetDirs(installed.map((r) => r.name)),
+    recordConnection: options.recordConnection ?? { mode: "fresh", cdpPort: 9222 },
+    hookStrict: {
+      routing: options.routingHook?.strict ?? false,
+      worktree: options.worktreeHook?.strict ?? false,
+    },
+    skipOllama: false,
+    routingConfigPath: options.routingConfigPath,
   };
 }
 
 /** CLI entry point for the setup command. */
 export async function execute(args: string[]): Promise<void> {
-  console.log("project-brain setup\n");
-
-  const modelRouting = parseModelRoutingFlag(args);
-  const skillInstall = parseSkillInstallFlag(args);
+  const recordConnection = parseRecordConnectionFlag(args);
   const routingHook = parseRoutingHookFlag(args);
   const worktreeHook = parseWorktreeHookFlag(args);
-  const recordConnection = parseRecordConnectionFlag(args);
-  const result = await runSetup({
-    modelRouting,
-    skillInstall,
-    routingHook,
-    worktreeHook,
-    recordConnection,
-  });
+
+  // The id list needs a context, and a context needs detection — so this runs
+  // a detection-only pass first. Cheap: `isInstalled()` is a file stat per host.
+  const probe = await probeContext({ recordConnection, routingHook, worktreeHook });
+  const ids = allUnits(probe).map((u) => u.id);
+
+  const units = parseUnitFlags(args, ids);
+  if (units.mode === undefined) {
+    console.error(units.error);
+    process.exit(1);
+    return;
+  }
+
+  // The header the spec promises: version, detected hosts, and where the
+  // selection lives — with its `updatedAt`/`binaryVersion` when a prior run
+  // left one. Both fields are written on every `saveSelection` call and, until
+  // now, read by nothing.
+  const priorSelection = await loadSelection(probe.selectionPath);
+  console.log(`project-brain setup ${VERSION}`);
+  console.log(
+    `Detected: ${
+      probe.installed.length > 0 ? probe.installed.map((r) => r.name).join(", ") : "none"
+    }`
+  );
+  console.log(
+    `Selection: ${probe.selectionPath}` +
+      (priorSelection
+        ? ` (last run ${priorSelection.updatedAt.slice(0, 10)}, v${priorSelection.binaryVersion})`
+        : "")
+  );
+
+  const result = await runSetup({ recordConnection, routingHook, worktreeHook, units });
 
   console.log(`Environment:`);
   console.log(`  Bun: ${result.env.bun}`);
@@ -536,7 +493,7 @@ export async function execute(args: string[]): Promise<void> {
   }
 
   if (result.skillTargets.length > 0) {
-    console.log(`\nSkill installed in: ${result.skillTargets.join(", ")}`);
+    console.log(`\nSkill installed in: ${formatSkillTargets(result.skillTargets)}`);
   }
 
   if (result.routingHooks.installed) {
@@ -569,6 +526,8 @@ export async function execute(args: string[]): Promise<void> {
       console.log(`\n${instructions}`);
     }
   }
+
+  console.log(`\nSelection saved to ${result.selectionPath}`);
 
   console.log("\nSetup complete. Run `project-brain init` in a project.");
 }

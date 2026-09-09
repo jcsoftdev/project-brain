@@ -26,6 +26,7 @@ import {
   installSkill,
   parseStamp,
   refreshStaleSkills,
+  removeSkill,
 } from "../../src/rules/skills.js";
 
 describe("getSkillTargetDirs", () => {
@@ -812,5 +813,173 @@ describe("reference module lint (self-review layer 1)", () => {
       if (always && hasGate) problems.push(`${name}: always proposed in SKILL.md but states a Gate: sentence`);
     }
     expect(problems, `gate parity:\n${problems.join("\n")}`).toEqual([]);
+  });
+});
+
+describe("removeSkill", () => {
+  it("deletes every file the stamp records, then the directory", async () => {
+    const { installSkill, removeSkill } = await import("../../src/rules/skills.js");
+    const root = await mkdtemp(join(tmpdir(), "pb-remove-"));
+    await installSkill([root]);
+
+    const skillDir = join(root, "brain-okf");
+    expect(existsSync(skillDir)).toBe(true);
+
+    const outcome = await removeSkill(skillDir);
+
+    expect(outcome.skipped).toBeNull();
+    expect(outcome.removed.length).toBeGreaterThan(0);
+    expect(existsSync(skillDir)).toBe(false);
+    // Sibling skills are untouched.
+    expect(existsSync(join(root, "brain-audit"))).toBe(true);
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("refuses a directory it does not own and deletes nothing", async () => {
+    const { removeSkill } = await import("../../src/rules/skills.js");
+    const root = await mkdtemp(join(tmpdir(), "pb-remove-foreign-"));
+    const skillDir = join(root, "brain-okf");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, "SKILL.md"), "---\nname: mine\n---\nhand written\n", "utf8");
+
+    const outcome = await removeSkill(skillDir);
+
+    expect(outcome.removed).toEqual([]);
+    expect(outcome.skipped).toEqual({ dir: skillDir, reason: "foreign" });
+    expect(existsSync(join(skillDir, "SKILL.md"))).toBe(true);
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("keeps a hand-written file and therefore keeps the directory", async () => {
+    const { installSkill, removeSkill } = await import("../../src/rules/skills.js");
+    const root = await mkdtemp(join(tmpdir(), "pb-remove-extra-"));
+    await installSkill([root]);
+
+    const skillDir = join(root, "brain-okf");
+    await writeFile(join(skillDir, "my-notes.md"), "mine\n", "utf8");
+
+    await removeSkill(skillDir);
+
+    expect(existsSync(join(skillDir, "my-notes.md"))).toBe(true);
+    expect(existsSync(join(skillDir, "SKILL.md"))).toBe(false);
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("is a no-op on a directory that is not there", async () => {
+    const { removeSkill } = await import("../../src/rules/skills.js");
+    const root = await mkdtemp(join(tmpdir(), "pb-remove-absent-"));
+
+    const outcome = await removeSkill(join(root, "brain-okf"));
+
+    expect(outcome).toEqual({ removed: [], skipped: null });
+
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("prunes the full ancestor chain of nested stamped paths", async () => {
+    const { removeSkill } = await import("../../src/rules/skills.js");
+    const root = await mkdtemp(join(tmpdir(), "pb-remove-nested-"));
+    const skillDir = join(root, "test-skill");
+
+    // Create nested directory structure: references/sub/deep/
+    await mkdir(join(skillDir, "references", "sub", "deep"), { recursive: true });
+    // Write generated files at various depths
+    await writeFile(join(skillDir, "SKILL.md"), `---\nname: test-skill\nmetadata:\n  ${GENERATOR_MARKER}\n---\nGenerated skill\n`);
+    await writeFile(join(skillDir, "references", "root-ref.md"), "# Root level\n");
+    await writeFile(join(skillDir, "references", "sub", "sub-ref.md"), "# One level deep\n");
+    await writeFile(join(skillDir, "references", "sub", "deep", "deep-ref.md"), "# Two levels deep\n");
+
+    // Create stamp that records all these files
+    const stampContent = [
+      "test-hash",
+      "SKILL.md",
+      "references/root-ref.md",
+      "references/sub/sub-ref.md",
+      "references/sub/deep/deep-ref.md",
+    ].join("\n") + "\n";
+    await writeFile(join(skillDir, STAMP_FILE), stampContent, "utf8");
+
+    // Verify setup
+    expect(existsSync(join(skillDir, "references", "sub", "deep", "deep-ref.md"))).toBe(true);
+
+    const outcome = await removeSkill(skillDir);
+
+    // All files should be removed
+    expect(outcome.removed.length).toBeGreaterThan(0);
+    expect(outcome.skipped).toBeNull();
+    // The entire skill directory should be gone — the ancestor chain was complete
+    expect(existsSync(skillDir)).toBe(false);
+
+    await rm(root, { recursive: true, force: true });
+  });
+});
+
+describe("refreshStaleSkills with a selection", () => {
+  it("never re-creates a skill the user declined", async () => {
+    const { installSkill, removeSkill, refreshStaleSkills } = await import(
+      "../../src/rules/skills.js"
+    );
+    const { saveSelection } = await import("../../src/setup/selection.js");
+    const dir = await mkdtemp(join(tmpdir(), "pb-refresh-sel-"));
+    const root = join(dir, "skills");
+    const selectionPath = join(dir, "setup-selection.json");
+
+    await installSkill([root]);
+    await removeSkill(join(root, "brain-okf"));
+    await saveSelection(
+      selectionPath,
+      ["skill:brain-audit"],
+      ["skill:brain-audit", "skill:brain-okf"],
+      "0.27.0"
+    );
+
+    const result = await refreshStaleSkills([root], selectionPath);
+
+    expect(existsSync(join(root, "brain-okf"))).toBe(false);
+    expect(result.added).toEqual([]);
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("does not silently add a skill the user has never been offered", async () => {
+    const { installSkill, removeSkill, refreshStaleSkills } = await import(
+      "../../src/rules/skills.js"
+    );
+    const { saveSelection } = await import("../../src/setup/selection.js");
+    const dir = await mkdtemp(join(tmpdir(), "pb-refresh-new-"));
+    const root = join(dir, "skills");
+    const selectionPath = join(dir, "setup-selection.json");
+
+    await installSkill([root]);
+    await removeSkill(join(root, "brain-okf"));
+    // brain-okf is in NEITHER list: it is "new" as far as this user is concerned.
+    await saveSelection(selectionPath, ["skill:brain-audit"], ["skill:brain-audit"], "0.27.0");
+
+    await refreshStaleSkills([root], selectionPath);
+
+    expect(existsSync(join(root, "brain-okf"))).toBe(false);
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps today's completing behaviour when no selection has ever been saved", async () => {
+    const { installSkill, removeSkill, refreshStaleSkills } = await import(
+      "../../src/rules/skills.js"
+    );
+    const dir = await mkdtemp(join(tmpdir(), "pb-refresh-legacy-"));
+    const root = join(dir, "skills");
+
+    await installSkill([root]);
+    await removeSkill(join(root, "brain-okf"));
+
+    const result = await refreshStaleSkills([root], join(dir, "setup-selection.json"));
+
+    expect(existsSync(join(root, "brain-okf"))).toBe(true);
+    expect(result.added).toContain(join(root, "brain-okf"));
+
+    await rm(dir, { recursive: true, force: true });
   });
 });
