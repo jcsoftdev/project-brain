@@ -78,11 +78,16 @@ export async function promptUnitSelection(
 
   const clack = await import("@clack/prompts");
 
-  const selectable = rows.filter((r) => r.state !== "unavailable" && r.state !== "foreign");
-  for (const row of rows) {
-    if (row.state === "unavailable" || row.state === "foreign") {
-      clack.log.info(`${row.label}: ${renderStateLabel(row.state, row.membership)}`);
-    }
+  // One partition, not two independent filters: the excluded set and the
+  // logged set must never drift apart, or a unit ends up either logged and
+  // still offered, or excluded with no explanation.
+  const isUnselectable = (row: Omit<PlanRow, "action">) =>
+    row.state === "unavailable" || row.state === "foreign";
+  const excluded = rows.filter(isUnselectable);
+  const selectable = rows.filter((r) => !isUnselectable(r));
+
+  for (const row of excluded) {
+    clack.log.info(`${row.label}: ${renderStateLabel(row.state, row.membership)}`);
   }
 
   const answer = await clack.multiselect({

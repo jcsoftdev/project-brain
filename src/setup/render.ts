@@ -22,6 +22,12 @@ export function renderStateLabel(state: UnitState, membership: Membership): stri
       return "not available on this machine";
     case "absent":
       return membership === "unseen" ? "NEW" : "not installed";
+    default: {
+      // Exhaustiveness guard: a new UnitState added without a case here fails
+      // to compile instead of rendering a blank cell nobody traces back.
+      const exhaustive: never = state;
+      throw new Error(`renderStateLabel: unhandled state ${exhaustive as string}`);
+    }
   }
 }
 
