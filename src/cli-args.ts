@@ -191,28 +191,56 @@ const LEGACY_OFF: Record<string, string> = {
   "--no-worktree-hook": "hooks:worktree",
 };
 
-/** Expand `group:*` against the known ids; anything else passes through. */
-function expandIds(patterns: string[], allIds: string[]): string[] {
+/** Expand `group:*` against the known ids; return both results and which patterns matched. */
+function expandIds(
+  patterns: string[],
+  allIds: string[]
+): { ids: string[]; matched: Map<string, boolean> } {
   const out = new Set<string>();
+  const matched = new Map<string, boolean>();
   for (const pattern of patterns) {
     if (pattern.endsWith(":*")) {
       const prefix = pattern.slice(0, -1);
-      for (const id of allIds) if (id.startsWith(prefix)) out.add(id);
+      let patternMatched = false;
+      for (const id of allIds) {
+        if (id.startsWith(prefix)) {
+          out.add(id);
+          patternMatched = true;
+        }
+      }
+      matched.set(pattern, patternMatched);
     } else {
       out.add(pattern);
+      matched.set(pattern, true);
     }
   }
-  return [...out];
+  return { ids: [...out], matched };
 }
 
-function valueOf(args: string[], flag: string): string[] {
-  const values: string[] = [];
+/**
+ * Parse a flag that expects a value (e.g. --with=..., --without=...).
+ * Returns the parsed values and whether the flag was present, or an error
+ * if the flag is malformed (bare flag with no =).
+ */
+function parseValuedFlag(
+  args: string[],
+  flag: string
+): { present: boolean; values: string[]; error?: string } {
   for (const arg of args) {
+    if (arg === flag) {
+      return {
+        present: true,
+        values: [],
+        error: `${flag} requires a value, e.g. ${flag}=skill:brain-audit,hooks:routing`,
+      };
+    }
     if (arg.startsWith(`${flag}=`)) {
-      values.push(...arg.slice(flag.length + 1).split(",").filter(Boolean));
+      const rawValue = arg.slice(flag.length + 1);
+      const values = rawValue.split(",").filter(Boolean);
+      return { present: true, values };
     }
   }
-  return values;
+  return { present: false, values: [] };
 }
 
 /**
@@ -226,6 +254,11 @@ function valueOf(args: string[], flag: string): string[] {
  * An unknown id is a hard error rather than a silent skip: a typo in a
  * provisioning script would otherwise mean the machine quietly does not get
  * what the script asked for, and nothing would ever say so.
+ *
+ * When flags conflict, subtraction always wins over addition, and `--none`
+ * always wins over `--all`, regardless of argument order. This matches the
+ * convention elsewhere in this file (parseRoutingHookFlag): contradictory
+ * flags resolve toward installing less, which is the safe direction.
  */
 export function parseUnitFlags(
   args: string[],
@@ -233,8 +266,12 @@ export function parseUnitFlags(
 ):
   | { mode: "default" | "explicit"; selected: string[]; error?: undefined }
   | { error: string; mode?: undefined; selected?: undefined } {
-  const withValues = valueOf(args, "--with");
-  const withoutValues = valueOf(args, "--without");
+  const withResult = parseValuedFlag(args, "--with");
+  const withoutResult = parseValuedFlag(args, "--without");
+
+  if (withResult.error) return { error: withResult.error };
+  if (withoutResult.error) return { error: withoutResult.error };
+
   const legacyOff = Object.keys(LEGACY_OFF).filter((f) => args.includes(f));
   const legacyOn =
     args.includes("--skills") || args.includes("--brain-audit") ? ["skill:*"] : [];
@@ -242,8 +279,8 @@ export function parseUnitFlags(
   const none = args.includes("--none");
 
   const touched =
-    withValues.length > 0 ||
-    withoutValues.length > 0 ||
+    withResult.present ||
+    withoutResult.present ||
     legacyOff.length > 0 ||
     legacyOn.length > 0 ||
     all ||
@@ -252,7 +289,7 @@ export function parseUnitFlags(
   if (!touched) return { mode: "default", selected: [] };
 
   const known = new Set(allIds);
-  const unknown = [...withValues, ...withoutValues].filter(
+  const unknown = [...withResult.values, ...withoutResult.values].filter(
     (id) => !id.endsWith(":*") && !known.has(id)
   );
   if (unknown.length > 0) {
@@ -263,16 +300,50 @@ export function parseUnitFlags(
     };
   }
 
+  // Expand wildcards and check that all patterns matched at least one id
+  const withExpanded = expandIds([...withResult.values, ...legacyOn], allIds);
+  const withoutExpanded = expandIds(withoutResult.values, allIds);
+
+  for (const [pattern, matched] of withExpanded.matched.entries()) {
+    if (pattern.endsWith(":*") && !matched) {
+      const validPrefixes = new Set<string>();
+      for (const id of allIds) {
+        const colon = id.indexOf(":");
+        if (colon !== -1) validPrefixes.add(id.slice(0, colon + 1));
+      }
+      return {
+        error:
+          `Wildcard pattern '${pattern}' matched no units.\n` +
+          `Valid group prefixes: ${[...validPrefixes].sort().join(", ")}`,
+      };
+    }
+  }
+
+  for (const [pattern, matched] of withoutExpanded.matched.entries()) {
+    if (pattern.endsWith(":*") && !matched) {
+      const validPrefixes = new Set<string>();
+      for (const id of allIds) {
+        const colon = id.indexOf(":");
+        if (colon !== -1) validPrefixes.add(id.slice(0, colon + 1));
+      }
+      return {
+        error:
+          `Wildcard pattern '${pattern}' matched no units.\n` +
+          `Valid group prefixes: ${[...validPrefixes].sort().join(", ")}`,
+      };
+    }
+  }
+
   // `--with` is additive from nothing; everything else starts from the full set
-  // and subtracts, which is what makes `--without` and the legacy `--no-*`
-  // flags mean "everything except this".
-  const startFromNothing = none || (withValues.length > 0 && !all);
+  // and subtracts. Subtraction always wins: --none wins over --all, and
+  // --without/--no-* wins over --with/legacy-on.
+  const startFromNothing = none || (withResult.present && !all);
   const selected = new Set<string>(startFromNothing ? [] : allIds);
 
-  for (const id of expandIds([...withValues, ...legacyOn], allIds)) selected.add(id);
-  for (const id of expandIds(withoutValues, allIds)) selected.delete(id);
+  for (const id of withExpanded.ids) selected.add(id);
+  for (const id of withoutExpanded.ids) selected.delete(id);
   for (const flag of legacyOff) {
-    for (const id of expandIds([LEGACY_OFF[flag]!], allIds)) selected.delete(id);
+    for (const id of expandIds([LEGACY_OFF[flag]!], allIds).ids) selected.delete(id);
   }
 
   return { mode: "explicit", selected: allIds.filter((id) => selected.has(id)) };

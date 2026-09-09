@@ -323,4 +323,60 @@ describe("parseUnitFlags", () => {
     expect(result.error).toContain("skill:brain-typo");
     expect(result.error).toContain("skill:brain-audit");
   });
+
+  it("treats --with= with an empty value as an explicit empty selection", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    expect(parseUnitFlags(["--with="], ALL)).toEqual({
+      mode: "explicit",
+      selected: [],
+    });
+  });
+
+  it("treats --without= with an empty value as an explicit full selection (subtract nothing)", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    expect(parseUnitFlags(["--without="], ALL)).toEqual({
+      mode: "explicit",
+      selected: ALL,
+    });
+  });
+
+  it("rejects a bare --with (no =) as malformed syntax", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    const result = parseUnitFlags(["--with"], ALL) as { error: string };
+
+    expect(result.error).toContain("--with=");
+    expect(result.error).toContain("skill:brain-audit,hooks:routing");
+  });
+
+  it("rejects a bare --without (no =) as malformed syntax", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    const result = parseUnitFlags(["--without"], ALL) as { error: string };
+
+    expect(result.error).toContain("--without=");
+  });
+
+  it("rejects a wildcard pattern that matches zero units", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    const result = parseUnitFlags(["--with=totallywrong:*"], ALL) as { error: string };
+
+    expect(result.error).toContain("totallywrong:*");
+    expect(result.error).toContain("skill:");
+    expect(result.error).toContain("host:");
+  });
+
+  it("resolves --no-skills --with=skill:brain-audit with subtraction winning (skill NOT selected)", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    const result = parseUnitFlags(["--no-skills", "--with=skill:brain-audit"], ALL);
+
+    expect(result.mode).toBe("explicit");
+    expect(result.selected).not.toContain("skill:brain-audit");
+  });
+
+  it("resolves --all --none with --none winning (empty selection)", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    expect(parseUnitFlags(["--all", "--none"], ALL)).toEqual({
+      mode: "explicit",
+      selected: [],
+    });
+  });
 });
