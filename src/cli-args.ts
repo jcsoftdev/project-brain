@@ -219,28 +219,39 @@ function expandIds(
 
 /**
  * Parse a flag that expects a value (e.g. --with=..., --without=...).
- * Returns the parsed values and whether the flag was present, or an error
- * if the flag is malformed (bare flag with no =).
+ * Scans ALL arguments and accumulates values from EVERY matching occurrence,
+ * in argument order. Returns an error if ANY occurrence is bare (no =),
+ * even if other occurrences are well-formed — a malformed argument next to
+ * a valid one is still malformed, and resolving toward the error is safe.
  */
 function parseValuedFlag(
   args: string[],
   flag: string
 ): { present: boolean; values: string[]; error?: string } {
+  let present = false;
+  const values: string[] = [];
+  let hasBareFlagError = false;
+
   for (const arg of args) {
     if (arg === flag) {
-      return {
-        present: true,
-        values: [],
-        error: `${flag} requires a value, e.g. ${flag}=skill:brain-audit,hooks:routing`,
-      };
-    }
-    if (arg.startsWith(`${flag}=`)) {
+      present = true;
+      hasBareFlagError = true;
+    } else if (arg.startsWith(`${flag}=`)) {
+      present = true;
       const rawValue = arg.slice(flag.length + 1);
-      const values = rawValue.split(",").filter(Boolean);
-      return { present: true, values };
+      values.push(...rawValue.split(",").filter(Boolean));
     }
   }
-  return { present: false, values: [] };
+
+  if (hasBareFlagError) {
+    return {
+      present: true,
+      values: [],
+      error: `${flag} requires a value, e.g. ${flag}=skill:brain-audit,hooks:routing`,
+    };
+  }
+
+  return { present, values };
 }
 
 /**

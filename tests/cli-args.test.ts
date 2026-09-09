@@ -379,4 +379,30 @@ describe("parseUnitFlags", () => {
       selected: [],
     });
   });
+
+  it("accumulates ids from repeated --with= occurrences (guards against silent dropping)", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    expect(parseUnitFlags(["--with=skill:brain-audit", "--with=hooks:routing"], ALL)).toEqual({
+      mode: "explicit",
+      selected: ["hooks:routing", "skill:brain-audit"],
+    });
+  });
+
+  it("accumulates ids from repeated --without= occurrences", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    const result = parseUnitFlags(["--without=skill:brain-audit", "--without=hooks:routing"], ALL);
+
+    expect(result.mode).toBe("explicit");
+    expect(result.selected).not.toContain("skill:brain-audit");
+    expect(result.selected).not.toContain("hooks:routing");
+  });
+
+  it("rejects a bare --with appearing alongside a well-formed --with=...", async () => {
+    const { parseUnitFlags } = await import("../src/cli-args.js");
+    const result = parseUnitFlags(["--with", "--with=skill:brain-audit"], ALL) as {
+      error: string;
+    };
+
+    expect(result.error).toContain("--with=");
+  });
 });
