@@ -916,3 +916,70 @@ describe("removeSkill", () => {
     await rm(root, { recursive: true, force: true });
   });
 });
+
+describe("refreshStaleSkills with a selection", () => {
+  it("never re-creates a skill the user declined", async () => {
+    const { installSkill, removeSkill, refreshStaleSkills } = await import(
+      "../../src/rules/skills.js"
+    );
+    const { saveSelection } = await import("../../src/setup/selection.js");
+    const dir = await mkdtemp(join(tmpdir(), "pb-refresh-sel-"));
+    const root = join(dir, "skills");
+    const selectionPath = join(dir, "setup-selection.json");
+
+    await installSkill([root]);
+    await removeSkill(join(root, "brain-okf"));
+    await saveSelection(
+      selectionPath,
+      ["skill:brain-audit"],
+      ["skill:brain-audit", "skill:brain-okf"],
+      "0.27.0"
+    );
+
+    const result = await refreshStaleSkills([root], selectionPath);
+
+    expect(existsSync(join(root, "brain-okf"))).toBe(false);
+    expect(result.added).toEqual([]);
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("does not silently add a skill the user has never been offered", async () => {
+    const { installSkill, removeSkill, refreshStaleSkills } = await import(
+      "../../src/rules/skills.js"
+    );
+    const { saveSelection } = await import("../../src/setup/selection.js");
+    const dir = await mkdtemp(join(tmpdir(), "pb-refresh-new-"));
+    const root = join(dir, "skills");
+    const selectionPath = join(dir, "setup-selection.json");
+
+    await installSkill([root]);
+    await removeSkill(join(root, "brain-okf"));
+    // brain-okf is in NEITHER list: it is "new" as far as this user is concerned.
+    await saveSelection(selectionPath, ["skill:brain-audit"], ["skill:brain-audit"], "0.27.0");
+
+    await refreshStaleSkills([root], selectionPath);
+
+    expect(existsSync(join(root, "brain-okf"))).toBe(false);
+
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps today's completing behaviour when no selection has ever been saved", async () => {
+    const { installSkill, removeSkill, refreshStaleSkills } = await import(
+      "../../src/rules/skills.js"
+    );
+    const dir = await mkdtemp(join(tmpdir(), "pb-refresh-legacy-"));
+    const root = join(dir, "skills");
+
+    await installSkill([root]);
+    await removeSkill(join(root, "brain-okf"));
+
+    const result = await refreshStaleSkills([root], join(dir, "setup-selection.json"));
+
+    expect(existsSync(join(root, "brain-okf"))).toBe(true);
+    expect(result.added).toContain(join(root, "brain-okf"));
+
+    await rm(dir, { recursive: true, force: true });
+  });
+});

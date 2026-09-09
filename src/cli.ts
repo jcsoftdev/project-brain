@@ -35,7 +35,10 @@ if (!SKIPS_PREAMBLE.includes(command as string)) {
   if (!process.env.BRAIN_NO_SKILL_REFRESH) {
     try {
       const { refreshStaleSkills, knownSkillRoots } = await import("./rules/skills.js");
-      const { refreshed, added } = await refreshStaleSkills(knownSkillRoots());
+      const { join } = await import("node:path");
+      const { homedir } = await import("node:os");
+      const selectionPath = join(homedir(), ".project-brain", "setup-selection.json");
+      const { refreshed, added } = await refreshStaleSkills(knownSkillRoots(), selectionPath);
       if (refreshed.length > 0) {
         console.error(`  project-brain: refreshed ${refreshed.length} skill(s) to match this version`);
       }

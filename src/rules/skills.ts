@@ -609,8 +609,33 @@ async function rootIsAdopted(dir: string): Promise<boolean> {
  * carry our marker, never one the user never opted into — but inside such a
  * root, "missing" and "unwanted" are indistinguishable on disk. Someone who
  * wants a skill gone should decline the root, not delete one directory.
+ *
+ * That last cost is now closed for anyone who has run the selection-aware
+ * setup: `selectionPath`, when given, gates both branches below on the user's
+ * saved answer. A DECLINED skill stays gone, and one in NEITHER list is new to
+ * this user — its offer belongs on the setup screen, not in a silent write
+ * from whichever unrelated command happened to trigger this check. With no
+ * selection file at all — the common case for someone who has not yet run the
+ * new setup — behaviour is exactly what it was before: the old bug above is
+ * still the live risk for them, so new skills keep arriving automatically.
  */
-export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshResult> {
+export async function refreshStaleSkills(
+  targetDirs: string[],
+  selectionPath?: string
+): Promise<RefreshResult> {
+  const { loadSelection, membership } = await import("../setup/selection.js");
+  const selection = selectionPath ? await loadSelection(selectionPath) : null;
+
+  /**
+   * Whether this skill may be written at all.
+   *
+   * With no selection file, every skill is wanted — today's completing
+   * behaviour, unchanged. With a selection present, only an explicitly
+   * selected skill is touched; declined and unseen skills are left alone.
+   */
+  const wanted = (name: string): boolean =>
+    selection === null || membership(selection, `skill:${name}`) === "selected";
+
   const refreshed: string[] = [];
   const added: string[] = [];
   const upToDate: string[] = [];
@@ -621,6 +646,7 @@ export async function refreshStaleSkills(targetDirs: string[]): Promise<RefreshR
     const adopted = await rootIsAdopted(dir);
 
     for (const [name, manifest] of Object.entries(SKILL_MANIFESTS)) {
+      if (!wanted(name)) continue;
       const skillDir = join(dir, name);
 
       if (!existsSync(skillDir)) {
