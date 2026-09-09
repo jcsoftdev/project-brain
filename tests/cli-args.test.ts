@@ -1,9 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import {
   parsePort,
-  parseModelRoutingFlag,
   parseRoutingHookFlag,
-  parseSkillInstallFlag,
   collectPositionals,
   parseIntFlag,
   parseListFlag,
@@ -39,89 +37,27 @@ describe("parsePort", () => {
 });
 
 describe("parseRoutingHookFlag", () => {
-  it('defaults to "ask" with enforcement off', () => {
-    expect(parseRoutingHookFlag([])).toEqual({ mode: "ask", strict: false });
+  it("defaults to enforcement off", () => {
+    expect(parseRoutingHookFlag([])).toEqual({ strict: false });
   });
 
-  it("installs without asking on --routing-hook", () => {
-    expect(parseRoutingHookFlag(["--routing-hook"])).toEqual({ mode: "yes", strict: false });
+  it("resolves enforcement off on --routing-hook", () => {
+    expect(parseRoutingHookFlag(["--routing-hook"])).toEqual({ strict: false });
   });
 
-  it("skips entirely on --no-routing-hook", () => {
-    expect(parseRoutingHookFlag(["--no-routing-hook"])).toEqual({ mode: "no", strict: false });
+  it("resolves enforcement off on --no-routing-hook", () => {
+    expect(parseRoutingHookFlag(["--no-routing-hook"])).toEqual({ strict: false });
   });
 
-  it("implies installation when strict enforcement is asked for", () => {
-    // Asking for the guard and then being prompted whether to install hooks at
-    // all would be one question too many.
-    expect(parseRoutingHookFlag(["--routing-hook-strict"])).toEqual({ mode: "yes", strict: true });
+  it("turns on strict enforcement on --routing-hook-strict", () => {
+    expect(parseRoutingHookFlag(["--routing-hook-strict"])).toEqual({ strict: true });
   });
 
   it("lets an explicit opt-out win over strict", () => {
-    // Contradictory flags resolve to the SAFE reading: write nothing.
+    // Contradictory flags resolve to the SAFE reading: enforce nothing.
     expect(parseRoutingHookFlag(["--routing-hook-strict", "--no-routing-hook"])).toEqual({
-      mode: "no",
       strict: false,
     });
-  });
-});
-
-describe("parseModelRoutingFlag", () => {
-  it('returns "yes" when --model-routing is present', () => {
-    expect(parseModelRoutingFlag(["--model-routing"])).toBe("yes");
-  });
-
-  it('returns "no" when --no-model-routing is present', () => {
-    expect(parseModelRoutingFlag(["--no-model-routing"])).toBe("no");
-  });
-
-  it('returns "ask" when neither flag is present', () => {
-    expect(parseModelRoutingFlag([])).toBe("ask");
-  });
-
-  it('returns "yes" when both flags are present (--model-routing checked first)', () => {
-    expect(parseModelRoutingFlag(["--model-routing", "--no-model-routing"])).toBe("yes");
-  });
-});
-
-describe("parseSkillInstallFlag", () => {
-  it('returns "yes" for --brain-audit', () => {
-    expect(parseSkillInstallFlag(["setup", "--brain-audit"])).toBe("yes");
-  });
-
-  it('returns "no" for --no-brain-audit', () => {
-    expect(parseSkillInstallFlag(["setup", "--no-brain-audit"])).toBe("no");
-  });
-
-  it('returns "ask" when neither flag is present', () => {
-    expect(parseSkillInstallFlag(["setup"])).toBe("ask");
-  });
-
-  it('returns "yes" when both are passed (--brain-audit checked first)', () => {
-    expect(parseSkillInstallFlag(["setup", "--brain-audit", "--no-brain-audit"])).toBe("yes");
-  });
-
-  /** Exact match only — --no-brain-audit must not be read as --brain-audit. */
-  it('does not read --no-brain-audit as a bare --brain-audit', () => {
-    expect(parseSkillInstallFlag(["--no-brain-audit"])).toBe("no");
-  });
-
-  it('returns "yes" for --skills', () => {
-    expect(parseSkillInstallFlag(["setup", "--skills"])).toBe("yes");
-  });
-
-  it('returns "no" for --no-skills', () => {
-    expect(parseSkillInstallFlag(["setup", "--no-skills"])).toBe("no");
-  });
-
-  it('does not read --no-skills as a bare --skills', () => {
-    expect(parseSkillInstallFlag(["--no-skills"])).toBe("no");
-  });
-
-  /** The old spelling was documented; scripts using it must keep working. */
-  it("treats the brain-audit spellings as aliases of the skills flags", () => {
-    expect(parseSkillInstallFlag(["--brain-audit"])).toBe("yes");
-    expect(parseSkillInstallFlag(["--no-brain-audit"])).toBe("no");
   });
 });
 
@@ -203,27 +139,22 @@ describe("parseListFlag", () => {
 });
 
 describe("parseWorktreeHookFlag", () => {
-  it("installs by default, with no guard", () => {
-    expect(parseWorktreeHookFlag([])).toEqual({ mode: "yes", strict: false });
+  it("defaults to no guard", () => {
+    expect(parseWorktreeHookFlag([])).toEqual({ strict: false });
   });
 
-  it("opts out entirely on --no-worktree-hook", () => {
-    expect(parseWorktreeHookFlag(["--no-worktree-hook"])).toEqual({ mode: "no", strict: false });
+  it("resolves enforcement off on --no-worktree-hook", () => {
+    expect(parseWorktreeHookFlag(["--no-worktree-hook"])).toEqual({ strict: false });
   });
 
-  it("--worktree-hook-strict implies installation", () => {
-    // Asking for the guard and then being asked whether to install hooks at all
-    // is one question too many.
-    expect(parseWorktreeHookFlag(["--worktree-hook-strict"])).toEqual({
-      mode: "yes",
-      strict: true,
-    });
+  it("turns on strict enforcement on --worktree-hook-strict", () => {
+    expect(parseWorktreeHookFlag(["--worktree-hook-strict"])).toEqual({ strict: true });
   });
 
-  it("resolves contradictory flags to the reading that writes nothing", () => {
+  it("resolves contradictory flags to the reading that enforces nothing", () => {
     expect(
       parseWorktreeHookFlag(["--worktree-hook-strict", "--no-worktree-hook"])
-    ).toEqual({ mode: "no", strict: false });
+    ).toEqual({ strict: false });
   });
 });
 

@@ -501,7 +501,7 @@ describe("setup command", () => {
 
       it("adds the guard in strict mode", async () => {
         const { result, written } = await runWithHooks(["hooks:routing"], {
-          routingHook: { mode: "yes", strict: true },
+          routingHook: { strict: true },
         });
 
         expect(result.routingHooks.strict).toBe(true);

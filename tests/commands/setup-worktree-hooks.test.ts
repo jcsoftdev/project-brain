@@ -84,7 +84,7 @@ describe("setup installs the worktree hooks", () => {
   });
 
   it("installs the spawn guard in strict mode", async () => {
-    const { result, written } = await run({ worktreeHook: { mode: "yes", strict: true } });
+    const { result, written } = await run({ worktreeHook: { strict: true } });
     expect(result.worktreeHooks).toEqual({ installed: true, strict: true });
     expect(commands(written, "PreToolUse").some((c) => c.includes("worktree-guard"))).toBe(true);
   });
@@ -99,7 +99,7 @@ describe("setup installs the worktree hooks", () => {
       registrars: [claudeRegistrar()],
       skillTargetDirs: [],
       units: { mode: "explicit" as const, selected: ["hooks:worktree"] },
-      worktreeHook: { mode: "yes" as const, strict: true },
+      worktreeHook: { strict: true },
       claudeSettingsPath: settingsPath,
     };
 

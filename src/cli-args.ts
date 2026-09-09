@@ -22,71 +22,37 @@ export function parsePort(
 }
 
 /**
- * Resolve the non-interactive override for the opt-in model-routing prompt.
- * "ask" (the default) defers to the interactive TTY confirm at setup time.
- */
-export function parseModelRoutingFlag(args: string[]): "ask" | "yes" | "no" {
-  if (args.includes("--model-routing")) return "yes";
-  if (args.includes("--no-model-routing")) return "no";
-  return "ask";
-}
-
-/**
- * Resolve the routing-hook flags: whether to install the SessionStart reminder,
- * and whether to add the PreToolUse guard that blocks an unrouted delegation.
+ * Resolve the routing-hook flags: whether to add the PreToolUse guard that
+ * blocks an unrouted delegation. Whether the SessionStart reminder itself is
+ * installed is now the "hooks:routing" unit's own concern (checklist or
+ * `--with`/`--without`); this only carries the `strict` preference through to
+ * `SetupContext`.
  *
- * `--routing-hook-strict` implies installation — asking for the guard and then
- * being prompted whether to install hooks at all is one question too many. An
- * explicit `--no-routing-hook` still wins over it: contradictory flags resolve
- * to the reading that writes nothing.
+ * An explicit `--no-routing-hook` still wins over `--routing-hook-strict`:
+ * contradictory flags resolve to the reading that enforces nothing.
  */
-export function parseRoutingHookFlag(args: string[]): {
-  mode: "ask" | "yes" | "no";
-  strict: boolean;
-} {
-  if (args.includes("--no-routing-hook")) return { mode: "no", strict: false };
-  if (args.includes("--routing-hook-strict")) return { mode: "yes", strict: true };
-  if (args.includes("--routing-hook")) return { mode: "yes", strict: false };
-  return { mode: "ask", strict: false };
+export function parseRoutingHookFlag(args: string[]): { strict: boolean } {
+  if (args.includes("--no-routing-hook")) return { strict: false };
+  if (args.includes("--routing-hook-strict")) return { strict: true };
+  return { strict: false };
 }
 
 /**
  * Resolve the worktree-hook flags.
  *
- * Installation defaults to yes with no prompt, unlike the routing hooks. Those carry
- * guidance someone can reasonably not want; the reconciling hooks prevent an index that
- * outlives its worktree and a session that does not know its brain is scoped to another
- * branch. Only an explicit opt-out suppresses them.
+ * Whether the reconciling hooks themselves are installed is now the
+ * "hooks:worktree" unit's own concern (checklist or `--with`/`--without`);
+ * this only carries the `strict` preference through to `SetupContext`.
  *
- * `strict` is the opposite: it adds a PreToolUse guard that blocks a delegation until it
- * states whether it needs isolation, costing one extra turn on every spawn that forgot.
- * That is never a default. `--no-worktree-hook` still wins over it — contradictory flags
- * resolve to the reading that writes nothing.
+ * `strict` adds a PreToolUse guard that blocks a delegation until it states
+ * whether it needs isolation, costing one extra turn on every spawn that
+ * forgot. That is never a default. `--no-worktree-hook` still wins over it —
+ * contradictory flags resolve to the reading that enforces nothing.
  */
-export function parseWorktreeHookFlag(args: string[]): {
-  mode: "yes" | "no";
-  strict: boolean;
-} {
-  if (args.includes("--no-worktree-hook")) return { mode: "no", strict: false };
-  if (args.includes("--worktree-hook-strict")) return { mode: "yes", strict: true };
-  return { mode: "yes", strict: false };
-}
-
-/**
- * Resolve the non-interactive override for the bundled-skill install.
- *
- * Mirrors `parseModelRoutingFlag`, but the default differs downstream: "ask"
- * resolves to INSTALL in a non-interactive context, because the skills are part
- * of what `setup` delivers. Only an explicit opt-out suppresses them.
- *
- * `--brain-audit` / `--no-brain-audit` are kept as aliases: they were the
- * documented names while brain-audit was the only bundled skill, and silently
- * ignoring a flag someone scripted is worse than carrying two spellings.
- */
-export function parseSkillInstallFlag(args: string[]): "ask" | "yes" | "no" {
-  if (args.includes("--skills") || args.includes("--brain-audit")) return "yes";
-  if (args.includes("--no-skills") || args.includes("--no-brain-audit")) return "no";
-  return "ask";
+export function parseWorktreeHookFlag(args: string[]): { strict: boolean } {
+  if (args.includes("--no-worktree-hook")) return { strict: false };
+  if (args.includes("--worktree-hook-strict")) return { strict: true };
+  return { strict: false };
 }
 
 /**

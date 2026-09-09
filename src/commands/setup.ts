@@ -24,14 +24,14 @@ export interface SetupOptions {
   registrars?: AIToolRegistrar[];
   /** Injectable for testing; defaults to the real ~/.project-brain/model-routing.json. */
   routingConfigPath?: string;
-  /** Whether to install the routing hooks into Claude Code's global settings. */
-  routingHook?: { mode: "ask" | "yes" | "no"; strict: boolean };
+  /** Whether the PreToolUse routing guard should be strict, if "hooks:routing" is selected. */
+  routingHook?: { strict: boolean };
   /**
-   * Worktree hooks. Installation defaults to yes and is deliberately NOT tied to
-   * `routingHook`: routing guidance is a preference, an index that outlives its worktree
-   * is a bug. `strict` adds the blocking PreToolUse guard and is never a default.
+   * Worktree-hook strictness. Whether the hooks themselves are installed is the
+   * "hooks:worktree" unit's own concern; `strict` adds the blocking PreToolUse
+   * guard and is never a default.
    */
-  worktreeHook?: { mode: "yes" | "no"; strict: boolean };
+  worktreeHook?: { strict: boolean };
   /** Injectable for testing; defaults to ~/.claude/settings.json. */
   claudeSettingsPath?: string;
   /**
@@ -367,8 +367,8 @@ export function formatSkillTargets(skillTargets: string[]): string {
  */
 export async function probeContext(options: {
   recordConnection?: { mode: "fresh" | "live"; cdpPort: number };
-  routingHook?: { mode: "ask" | "yes" | "no"; strict: boolean };
-  worktreeHook?: { mode: "yes" | "no"; strict: boolean };
+  routingHook?: { strict: boolean };
+  worktreeHook?: { strict: boolean };
   routingConfigPath?: string;
 } = {}): Promise<SetupContext> {
   const dataDir = DEFAULT_DATA_DIR;

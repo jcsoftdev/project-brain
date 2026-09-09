@@ -283,6 +283,24 @@ One-time global setup. Detects your environment and registers project-brain with
 project-brain setup
 ```
 
+`setup` asks which parts to install and remembers the answer in
+`~/.project-brain/setup-selection.json`. Re-running it shows what is currently on
+disk beside what you are selecting, then a diff of what will change before
+anything is written. A part you deselect is removed and stays removed; a part
+that ships in a later release shows up marked `NEW` and unchecked.
+
+Without a TTY it never prompts — it applies the saved selection, or each part's
+default if there is none.
+
+```bash
+project-brain setup --with=skill:brain-audit,hooks:worktree
+project-brain setup --without=skill:brain-record
+project-brain setup --all
+project-brain setup --none
+```
+
+Run `project-brain setup --with=nope` to print the list of valid ids.
+
 #### Model routing for sub-agents
 
 Setup also writes model-routing guidance into each detected host's rules file: which **tier** — `fast`, `balanced`, or `deep` — a delegated sub-agent should run at for a given kind of task, and how to set that tier *on that host*.
@@ -298,7 +316,7 @@ Tiers rather than model names, because four of the six supported hosts default s
 | opencode | `opencode.json` → `agent.<name>.model` (`provider/model-id`) |
 | Windsurf | Devin Local routes tiers on its own |
 
-It is opt-**out**: a non-interactive run installs it, and `--no-model-routing` is the way out. `--model-routing` forces it without prompting. The section carries a content version, so a later release updates it in place instead of leaving you on the text you first accepted.
+It is opt-**out**: a non-interactive run installs it by default. Leave it out of the checklist, or pass `--without=guidance:model-routing` (`--no-model-routing` still works as an alias), to skip it. The section carries a content version, so a later release updates it in place instead of leaving you on the text you first accepted.
 
 Override the table in `~/.project-brain/model-routing.json`:
 
