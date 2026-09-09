@@ -77,6 +77,31 @@ worktree nobody indexed. The two halves drift apart and nothing errors.
    Both sides reconcile against `git worktree list` on the next session start anyway,
    which is why neither trusts the removal event alone.
 
+## Browsers are per session, not per worktree
+
+A browser MCP server is one process per session, so calls inside a session reuse the same
+browser and a sub-agent drives it through its parent's connection rather than starting
+its own. What multiplies is sessions, not tool calls: four worktrees worked in parallel
+are four browsers, and a session that ends without closing its browser leaves one behind
+that the next agent cannot see and will not reuse.
+
+Fill the browser role in this order, and record which tool filled it:
+
+| Tool | Reach for it when |
+|---|---|
+| `chrome-devtools` | The default. Isolated profile, headless, performance trace, network with headers and timing. |
+| `claude-in-chrome` | The flow needs the user's own signed-in session and the user said so. Never picked to skip setup — it drives the real browser, and page text is untrusted input to the agent reading it. |
+| `playwright` | Last, and only for what the other two cannot do. `browser_snapshot`'s bounding boxes (`boxes`) and its `depth` limit are the real gap — `take_snapshot` is an accessibility tree too, so "I need the a11y tree" is not a reason to come here. |
+
+Sharing one browser across worktrees is not automatic, because each session runs its own
+MCP server process. Where it is worth arranging, point those servers at a single Chrome
+(`--browserUrl`, or `--autoConnect`) and give each worktree its own `isolatedContext`
+name on `new_page`: pages in different contexts share no cookies or storage, and every
+page-scoped tool routes by `pageId`. A worktree then costs a context, not a browser.
+
+A CDP port is a port like any other. Lease it with `port_acquire` instead of assuming
+9222, for the same reason the app's own port is leased.
+
 ## Hard Rules
 
 - Never `sync` a worktree you did not `init` first — sync exits "project not initialized"
@@ -88,6 +113,10 @@ worktree nobody indexed. The two halves drift apart and nothing errors.
   worktrees are live, with no grace window, because a worktree index is re-derivable by
   one `sync`. That is safe for worktrees and wrong for projects — whole projects belong
   to `prune`, which has the grace window.
+- Never leave a browser open when a delegation returns. The browser outlives the
+  sub-agent that opened it, and the next agent has no way to find it, so it opens another.
+- Never reach for `playwright` first because it is already connected. Being installed is
+  not a capability argument, and it is the rung that has to justify itself.
 - Never hardcode a port. Two agents that both assume 3000 collide, and the failure looks
   like a broken app rather than a taken port.
 - If a delegation from the main checkout is blocked with a message about isolation, that
