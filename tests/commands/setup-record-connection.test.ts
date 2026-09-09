@@ -13,10 +13,12 @@ async function run(extra: Record<string, unknown> = {}) {
     dataDir,
     skipOllama: true,
     skipRegistration: true,
-    skillInstall: "no",
-    modelRouting: "no",
-    routingHook: { mode: "no", strict: false },
-    worktreeHook: { mode: "no", strict: false },
+    // Isolate the unit under test: with hosts detected, "hooks:routing" and
+    // "hooks:worktree" are not gated by host detection at all (they read
+    // Claude Code's own settings.json regardless), so leaving them out of an
+    // explicit selection is what keeps this file from touching a settings
+    // path it never mentions.
+    units: { mode: "explicit", selected: ["config:record-connection"] },
     ...extra,
   });
 
@@ -65,10 +67,7 @@ describe("setup records brain-record's connection preference", () => {
       dataDir,
       skipOllama: true,
       skipRegistration: true,
-      skillInstall: "no",
-      modelRouting: "no",
-      routingHook: { mode: "no", strict: false },
-      worktreeHook: { mode: "no", strict: false },
+      units: { mode: "explicit", selected: ["config:record-connection"] },
       recordConfigPath,
     });
 
@@ -85,10 +84,7 @@ describe("setup records brain-record's connection preference", () => {
       dataDir,
       skipOllama: true,
       skipRegistration: true,
-      skillInstall: "no" as const,
-      modelRouting: "no" as const,
-      routingHook: { mode: "no" as const, strict: false },
-      worktreeHook: { mode: "no" as const, strict: false },
+      units: { mode: "explicit" as const, selected: ["config:record-connection"] },
       recordConnection: { mode: "live" as const, cdpPort: 9400 },
     };
 

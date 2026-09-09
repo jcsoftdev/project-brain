@@ -58,9 +58,7 @@ describe("setup never writes outside the paths it was given", () => {
       dataDir: join(dir, "data"),
       skipOllama: true,
       registrars: [claudeRegistrar()],
-      skillInstall: "no",
-      modelRouting: "no",
-      routingHook: { mode: "no", strict: false },
+      skillTargetDirs: [],
       claudeSettingsPath: settingsPath,
     });
 
@@ -76,9 +74,7 @@ describe("setup never writes outside the paths it was given", () => {
       dataDir: join(dir, "data"),
       skipOllama: true,
       registrars: [claudeRegistrar()],
-      skillInstall: "no",
-      modelRouting: "no",
-      routingHook: { mode: "no", strict: false },
+      skillTargetDirs: [],
     });
 
     const written = JSON.parse(await readFile(join(home, ".claude", "settings.json"), "utf8"));

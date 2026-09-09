@@ -138,7 +138,7 @@ describe("setup command", () => {
       dataDir,
       skipOllama: true,
       registrars: [badRegistrar, goodRegistrar],
-      skillInstall: "no",
+      skillTargetDirs: [],
     });
 
     expect(result.registeredTools).toEqual(["Cursor"]);
@@ -166,7 +166,7 @@ describe("setup command", () => {
         dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [failing],
-        skillInstall: "no",
+        skillTargetDirs: [],
       });
 
       expect(result.registeredTools).toEqual([]);
@@ -181,7 +181,6 @@ describe("setup command", () => {
         dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [failing],
-        skillInstall: "yes",
         skillTargetDirs: [skillRoot],
       });
 
@@ -203,7 +202,7 @@ describe("setup command", () => {
         dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [absent],
-        skillInstall: "no",
+        skillTargetDirs: [],
       });
 
       expect(result.installedTools).toEqual([]);
@@ -231,7 +230,7 @@ describe("setup command", () => {
       dataDir,
       skipOllama: true,
       registrars: [badRegistrar],
-      skillInstall: "no",
+      skillTargetDirs: [],
     });
 
     expect(result.registeredTools).toEqual([]);
@@ -282,7 +281,15 @@ describe("setup command", () => {
       return registrar;
     }
 
-    it('"no" touches nothing — not even the version check', async () => {
+    // Task 11 note: `modelRouting`/`promptModelRouting` are gone — the
+    // per-decision prompts they drove were replaced by ONE unit checklist
+    // (`promptUnitSelection`) covering "guidance:model-routing" among every
+    // other unit. Below, explicit `units` selection stands in for the old
+    // "yes"/"no" flags (and proves no prompt happens), and a
+    // `promptUnitSelection` mock stands in for the old "ask" + per-option
+    // prompt.
+
+    it("excluding guidance:model-routing writes nothing (inspect still reads the version)", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
       const fake = makeRoutingRegistrar();
 
@@ -290,15 +297,18 @@ describe("setup command", () => {
         dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [fake],
-        skillInstall: "no",
-        modelRouting: "no",
+        skillTargetDirs: [],
+        units: { mode: "explicit", selected: [] },
       });
 
-      expect(fake.calls.writtenRoutingVersion).toBe(0);
+      // Task 11 inspects every unit BEFORE consent, so the checklist can show
+      // an accurate state regardless of the final choice — the cheap version
+      // read always happens now; it is the WRITE that is gated on selection.
+      expect(fake.calls.writtenRoutingVersion).toBe(1);
       expect(fake.calls.writeModelRouting).toBe(0);
     });
 
-    it('"yes" writes without prompting', async () => {
+    it("an explicit selection writes without prompting", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
       const fake = makeRoutingRegistrar();
       let promptCalled = false;
@@ -307,11 +317,11 @@ describe("setup command", () => {
         dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [fake],
-        skillInstall: "no",
-        modelRouting: "yes",
-        promptModelRouting: async () => {
+        skillTargetDirs: [],
+        units: { mode: "explicit", selected: ["guidance:model-routing"] },
+        promptUnitSelection: async () => {
           promptCalled = true;
-          return true;
+          return [];
         },
       });
 
@@ -319,7 +329,7 @@ describe("setup command", () => {
       expect(promptCalled).toBe(false);
     });
 
-    it('"ask" with nothing written prompts, and writes only on acceptance', async () => {
+    it("with no explicit selection, the checklist is asked, and writes only when chosen", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
 
       const declined = makeRoutingRegistrar();
@@ -327,9 +337,9 @@ describe("setup command", () => {
         dataDir: join(tempDir, "decline"),
         skipOllama: true,
         registrars: [declined],
-        skillInstall: "no",
-        modelRouting: "ask",
-        promptModelRouting: async () => false,
+        skillTargetDirs: [],
+        promptUnitSelection: async (rows) =>
+          rows.filter((r) => r.id !== "guidance:model-routing").map((r) => r.id),
       });
       expect(declined.calls.writeModelRouting).toBe(0);
 
@@ -338,55 +348,41 @@ describe("setup command", () => {
         dataDir: join(tempDir, "accept"),
         skipOllama: true,
         registrars: [accepted],
-        skillInstall: "no",
-        modelRouting: "ask",
-        promptModelRouting: async () => true,
+        skillTargetDirs: [],
+        promptUnitSelection: async (rows) => rows.map((r) => r.id),
       });
       expect(accepted.calls.writeModelRouting).toBe(1);
     });
 
-    it("rewrites a stale section WITHOUT asking again", async () => {
-      // The user already consented to having this section. Re-asking on every
-      // content update would train them to say no.
+    it("a stale section rewrites under the default (non-interactive) selection", async () => {
+      // The user already consented to having this section. The default
+      // resolution pre-ticks a stale unit (see `initialChecked`), so a
+      // non-interactive run rewrites it without a fresh prompt.
       const { runSetup } = await import("../../src/commands/setup.js");
       const stale = makeRoutingRegistrar("Claude Code", 1);
-      let promptCalled = false;
 
       await runSetup({
         dataDir: join(tempDir, "stale"),
         skipOllama: true,
         registrars: [stale],
-        skillInstall: "no",
-        modelRouting: "ask",
-        promptModelRouting: async () => {
-          promptCalled = true;
-          return true;
-        },
+        skillTargetDirs: [],
       });
 
       expect(stale.calls.writeModelRouting).toBe(1);
-      expect(promptCalled).toBe(false);
     });
 
     it("leaves a current section alone", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
       const current = makeRoutingRegistrar("Claude Code", ROUTING_CONTENT_VERSION);
-      let promptCalled = false;
 
       await runSetup({
         dataDir: join(tempDir, "current"),
         skipOllama: true,
         registrars: [current],
-        skillInstall: "no",
-        modelRouting: "ask",
-        promptModelRouting: async () => {
-          promptCalled = true;
-          return true;
-        },
+        skillTargetDirs: [],
       });
 
       expect(current.calls.writeModelRouting).toBe(0);
-      expect(promptCalled).toBe(false);
     });
 
     it("writes host-specific content, not one shared blob", async () => {
@@ -397,8 +393,7 @@ describe("setup command", () => {
         dataDir: join(tempDir, "content"),
         skipOllama: true,
         registrars: [fake],
-        skillInstall: "no",
-        modelRouting: "yes",
+        skillTargetDirs: [],
       });
 
       expect(fake.lastContent).toContain("Claude Code");
@@ -420,8 +415,7 @@ describe("setup command", () => {
         dataDir: join(tempDir, "plain"),
         skipOllama: true,
         registrars: [plainRegistrar],
-        skillInstall: "no",
-        modelRouting: "yes",
+        skillTargetDirs: [],
       });
 
       expect(result.registeredTools).toEqual(["Zed"]);
@@ -439,18 +433,14 @@ describe("setup command", () => {
         dataDir: join(tempDir, "partial"),
         skipOllama: true,
         registrars: [broken, healthy],
-        skillInstall: "no",
-        modelRouting: "yes",
+        skillTargetDirs: [],
       });
 
       expect(healthy.calls.writeModelRouting).toBe(1);
     });
 
     describe("routing hooks", () => {
-      async function runWithHooks(
-        routingHook: { mode: "ask" | "yes" | "no"; strict: boolean },
-        extra: Record<string, unknown> = {}
-      ) {
+      async function runWithHooks(unitIds: string[], extra: Record<string, unknown> = {}) {
         const { runSetup } = await import("../../src/commands/setup.js");
         const dir = await mkdtemp(join(tmpdir(), "pb-hooks-"));
         const settingsPath = join(dir, "settings.json");
@@ -459,9 +449,8 @@ describe("setup command", () => {
           dataDir: join(dir, "data"),
           skipOllama: true,
           registrars: [makeRoutingRegistrar()],
-          skillInstall: "no",
-          modelRouting: "yes",
-          routingHook,
+          skillTargetDirs: [],
+          units: { mode: "explicit", selected: unitIds },
           claudeSettingsPath: settingsPath,
           ...extra,
         });
@@ -472,17 +461,17 @@ describe("setup command", () => {
         return { result, written, settingsPath };
       }
 
-      it('writes no ROUTING hook on "no"', async () => {
+      it("writes no routing hook when hooks:routing is not selected", async () => {
         // The settings file may still exist: the worktree hooks install on their own
-        // answer, because index hygiene is not a routing preference.
-        const { result, written } = await runWithHooks({ mode: "no", strict: false });
+        // selection, because index hygiene is not a routing preference.
+        const { result, written } = await runWithHooks(["guidance:model-routing"]);
         expect(result.routingHooks).toEqual({ installed: false, strict: false });
         expect(JSON.stringify(written ?? {})).not.toContain("routing-rules");
         expect(JSON.stringify(written ?? {})).not.toContain("routing-guard");
       });
 
       it("installs the SessionStart reminder without the guard by default", async () => {
-        const { result, written } = await runWithHooks({ mode: "yes", strict: false });
+        const { result, written } = await runWithHooks(["hooks:routing"]);
 
         expect(result.routingHooks).toEqual({ installed: true, strict: false });
         expect(JSON.stringify(written.hooks.SessionStart)).toContain("routing-rules");
@@ -490,22 +479,24 @@ describe("setup command", () => {
       });
 
       it("adds the guard in strict mode", async () => {
-        const { result, written } = await runWithHooks({ mode: "yes", strict: true });
+        const { result, written } = await runWithHooks(["hooks:routing"], {
+          routingHook: { mode: "yes", strict: true },
+        });
 
         expect(result.routingHooks.strict).toBe(true);
         expect(JSON.stringify(written.hooks.PreToolUse)).toContain("routing-guard");
       });
 
-      it("rides on the routing answer when no flag was given", async () => {
-        // Declining the guidance and then being reminded of it every session
-        // would be the worst of both.
-        const { result, written } = await runWithHooks(
-          { mode: "ask", strict: false },
-          { modelRouting: "ask", promptModelRouting: async () => false }
-        );
+      it("is independent of the model-routing guidance selection", async () => {
+        // Earlier behaviour let the hooks ride on the model-routing answer.
+        // src/setup/units.ts now says explicitly (see guidanceUnits' doc
+        // comment) that the guidance and the two hook pairs are three
+        // separate choices — declining the guidance no longer implies
+        // declining its reminder hook.
+        const { result, written } = await runWithHooks(["hooks:routing"]);
 
-        expect(result.routingHooks.installed).toBe(false);
-        expect(JSON.stringify(written ?? {})).not.toContain("routing-rules");
+        expect(result.routingHooks.installed).toBe(true);
+        expect(JSON.stringify(written.hooks.SessionStart)).toContain("routing-rules");
       });
 
       it("refuses to touch a settings.json it cannot parse", async () => {
@@ -518,9 +509,8 @@ describe("setup command", () => {
           dataDir: join(dir, "data"),
           skipOllama: true,
           registrars: [makeRoutingRegistrar()],
-          skillInstall: "no",
-          modelRouting: "yes",
-          routingHook: { mode: "yes", strict: false },
+          skillTargetDirs: [],
+          units: { mode: "explicit", selected: ["hooks:routing"] },
           claudeSettingsPath: settingsPath,
         });
 
@@ -530,7 +520,7 @@ describe("setup command", () => {
       });
     });
 
-    it("asks once, then applies the answer to every eligible host", async () => {
+    it("prompts once, and the checklist answer applies to every eligible host", async () => {
       // Six prompts for one decision is six chances to say no by accident.
       const { runSetup } = await import("../../src/commands/setup.js");
       const a = makeRoutingRegistrar("Claude Code");
@@ -541,11 +531,10 @@ describe("setup command", () => {
         dataDir: join(tempDir, "once"),
         skipOllama: true,
         registrars: [a, b],
-        skillInstall: "no",
-        modelRouting: "ask",
-        promptModelRouting: async () => {
+        skillTargetDirs: [],
+        promptUnitSelection: async (rows) => {
           prompts++;
-          return true;
+          return rows.map((r) => r.id);
         },
       });
 
@@ -556,11 +545,11 @@ describe("setup command", () => {
   });
 
   /**
-   * brain-audit skill install.
+   * Bundled-skill install, via the "Skills" group of setup units.
    *
    * Every test here MUST pass skillTargetDirs. Without it the real
    * getSkillTargetDirs(registeredTools) resolves against homedir() and the
-   * suite writes brain-audit into the developer's actual ~/.claude/skills.
+   * suite writes skills into the developer's actual ~/.claude/skills.
    * That is not hypothetical — the project registry did exactly this and
    * polluted a real home directory with ~180 entries.
    *
@@ -574,7 +563,7 @@ describe("setup command", () => {
    * An end-to-end run of runSetup written that way wrote into three real home
    * directories while reporting success. Injection is the only sound seam here.
    */
-  describe("brain-audit skill install", () => {
+  describe("bundled skill install", () => {
     function makeInstalledRegistrar(name: string): AIToolRegistrar {
       return {
         name,
@@ -584,26 +573,26 @@ describe("setup command", () => {
       };
     }
 
-    it('skillInstall: "yes" installs without prompting', async () => {
+    it("installing all skills does not require prompting", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
       let prompted = false;
+      const skillIds = Object.keys(SKILL_MANIFESTS).map((name) => `skill:${name}`);
 
       const result = await runSetup({
         dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [makeInstalledRegistrar("Claude Code")],
-        modelRouting: "no",
-        skillInstall: "yes",
         skillTargetDirs: [join(tempDir, "skills")],
-        promptSkillInstall: async () => {
+        units: { mode: "explicit", selected: skillIds },
+        promptUnitSelection: async () => {
           prompted = true;
-          return true;
+          return [];
         },
       });
 
       expect(prompted).toBe(false);
       expect(result.skillSkipped).toEqual([]);
-      // Every registered skill lands, not just the first one.
+      // Every skill lands, not just the first one.
       expect(result.skillTargets.sort()).toEqual(
         Object.keys(SKILL_MANIFESTS)
           .map((name) => join(tempDir, "skills", name))
@@ -616,42 +605,41 @@ describe("setup command", () => {
       }
     });
 
-    it('skillInstall: "no" skips entirely', async () => {
+    it("declining every skill unit skips installation entirely", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
+      const skillsRoot = join(tempDir, "skills");
 
       const result = await runSetup({
         dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [makeInstalledRegistrar("Claude Code")],
-        modelRouting: "no",
-        skillInstall: "no",
-        skillTargetDirs: [join(tempDir, "skills")],
+        skillTargetDirs: [skillsRoot],
+        units: { mode: "explicit", selected: ["host:claudecode"] },
       });
 
       expect(result.skillTargets).toEqual([]);
-      expect(existsSync(join(tempDir, "skills", "brain-audit"))).toBe(false);
+      expect(existsSync(join(skillsRoot, "brain-audit"))).toBe(false);
     });
 
-    it('skillInstall: "ask" defers to promptSkillInstall — declining writes nothing', async () => {
+    it("declining skills in the checklist prompt writes nothing", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
       let prompted = false;
+      const skillsRoot = join(tempDir, "skills");
 
       const result = await runSetup({
         dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [makeInstalledRegistrar("Claude Code")],
-        modelRouting: "no",
-        skillInstall: "ask",
-        skillTargetDirs: [join(tempDir, "skills")],
-        promptSkillInstall: async () => {
+        skillTargetDirs: [skillsRoot],
+        promptUnitSelection: async (rows) => {
           prompted = true;
-          return false;
+          return rows.filter((r) => r.group !== "Skills").map((r) => r.id);
         },
       });
 
       expect(prompted).toBe(true);
       expect(result.skillTargets).toEqual([]);
-      expect(existsSync(join(tempDir, "skills", "brain-audit"))).toBe(false);
+      expect(existsSync(join(skillsRoot, "brain-audit"))).toBe(false);
     });
 
     it("reports no targets when no tools were registered", async () => {
@@ -661,14 +649,13 @@ describe("setup command", () => {
         dataDir: join(tempDir, "data"),
         skipOllama: true,
         skipRegistration: true,
-        skillInstall: "yes",
       });
 
       expect(result.registeredTools).toEqual([]);
       expect(result.skillTargets).toEqual([]);
     });
 
-    /** Design §7: a hand-written brain-audit/ is left alone and setup still succeeds. */
+    /** A hand-written brain-audit/ is left alone and setup still succeeds. */
     it("warns and continues when the target is foreign, leaving it untouched", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
       const skillsRoot = join(tempDir, "skills");
@@ -681,8 +668,6 @@ describe("setup command", () => {
         dataDir: join(tempDir, "data"),
         skipOllama: true,
         registrars: [makeInstalledRegistrar("Claude Code")],
-        modelRouting: "no",
-        skillInstall: "yes",
         skillTargetDirs: [skillsRoot],
       });
 
@@ -691,6 +676,96 @@ describe("setup command", () => {
       expect(await readFile(join(skillDir, "SKILL.md"), "utf8")).toBe(mine);
       // Setup still completed: the other skills installed beside the foreign one.
       expect(result.skillTargets.length).toBe(Object.keys(SKILL_MANIFESTS).length - 1);
+    });
+  });
+
+  describe("runSetup unit selection", () => {
+    it("applies the saved selection without prompting and removes what was declined", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const { saveSelection } = await import("../../src/setup/selection.js");
+      const dir = await mkdtemp(join(tmpdir(), "pb-setup-sel-"));
+      const selectionPath = join(dir, "setup-selection.json");
+      const skillsDir = join(dir, "skills");
+
+      // First run: everything.
+      await runSetup({
+        dataDir: join(dir, "data"),
+        skipOllama: true,
+        skipRegistration: true,
+        selectionPath,
+        skillTargetDirs: [skillsDir],
+        claudeSettingsPath: join(dir, "settings.json"),
+        recordConfigPath: join(dir, "record-config.json"),
+        units: { mode: "explicit", selected: ["skill:brain-audit", "skill:brain-okf"] },
+      });
+      expect(existsSync(join(skillsDir, "brain-okf"))).toBe(true);
+
+      // Second run: the same call with brain-okf dropped must delete it.
+      await runSetup({
+        dataDir: join(dir, "data"),
+        skipOllama: true,
+        skipRegistration: true,
+        selectionPath,
+        skillTargetDirs: [skillsDir],
+        claudeSettingsPath: join(dir, "settings.json"),
+        recordConfigPath: join(dir, "record-config.json"),
+        units: { mode: "explicit", selected: ["skill:brain-audit"] },
+      });
+
+      expect(existsSync(join(skillsDir, "brain-audit"))).toBe(true);
+      expect(existsSync(join(skillsDir, "brain-okf"))).toBe(false);
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it("writes a selection file recording both what was chosen and what was not", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const { loadSelection } = await import("../../src/setup/selection.js");
+      const dir = await mkdtemp(join(tmpdir(), "pb-setup-write-"));
+      const selectionPath = join(dir, "setup-selection.json");
+
+      await runSetup({
+        dataDir: join(dir, "data"),
+        skipOllama: true,
+        skipRegistration: true,
+        selectionPath,
+        skillTargetDirs: [join(dir, "skills")],
+        claudeSettingsPath: join(dir, "settings.json"),
+        recordConfigPath: join(dir, "record-config.json"),
+        units: { mode: "explicit", selected: ["skill:brain-audit"] },
+      });
+
+      const saved = await loadSelection(selectionPath);
+      expect(saved?.selected).toContain("skill:brain-audit");
+      expect(saved?.declined).toContain("skill:brain-okf");
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it("keeps a prior install when upgrading into the picker with no selection file", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const { installSkill } = await import("../../src/rules/skills.js");
+      const dir = await mkdtemp(join(tmpdir(), "pb-setup-migrate-"));
+      const skillsDir = join(dir, "skills");
+
+      // Simulate a machine set up by an older release: skills on disk, no selection file.
+      await installSkill([skillsDir]);
+
+      await runSetup({
+        dataDir: join(dir, "data"),
+        skipOllama: true,
+        skipRegistration: true,
+        selectionPath: join(dir, "setup-selection.json"),
+        skillTargetDirs: [skillsDir],
+        claudeSettingsPath: join(dir, "settings.json"),
+        recordConfigPath: join(dir, "record-config.json"),
+        // No `units` override and no TTY: the defaults path must not delete.
+      });
+
+      expect(existsSync(join(skillsDir, "brain-okf"))).toBe(true);
+      expect(existsSync(join(skillsDir, "brain-audit"))).toBe(true);
+
+      await rm(dir, { recursive: true, force: true });
     });
   });
 });
