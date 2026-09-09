@@ -3,6 +3,9 @@
  * only happens lazily and only when the TTY guard actually needs it.
  */
 
+import type { PlanRow } from "./setup/plan.js";
+import { renderStateLabel } from "./setup/render.js";
+
 /** True only in a real interactive session — both stdio streams attached, not CI. */
 function isInteractive(): boolean {
   return Boolean(process.stdout.isTTY) && Boolean(process.stdin.isTTY) && !process.env.CI;
@@ -56,4 +59,43 @@ export async function promptModelRouting(): Promise<boolean> {
   });
   if (clack.isCancel(answer)) return false;
   return answer;
+}
+
+/**
+ * The one prompt that replaces `promptSkillInstall` and `promptModelRouting`.
+ *
+ * Non-interactive resolves to the ticks it was handed, so a scripted run
+ * applies the saved selection or the defaults without hanging on input.
+ * Cancelling resolves to `null`, which the caller treats as "write nothing" —
+ * an interrupted user consented to no home-directory change, and this prompt
+ * can now authorise deletions.
+ */
+export async function promptUnitSelection(
+  rows: Omit<PlanRow, "action">[]
+): Promise<string[] | null> {
+  const preselected = rows.filter((r) => r.chosen).map((r) => r.id);
+  if (!isInteractive()) return preselected;
+
+  const clack = await import("@clack/prompts");
+
+  const selectable = rows.filter((r) => r.state !== "unavailable" && r.state !== "foreign");
+  for (const row of rows) {
+    if (row.state === "unavailable" || row.state === "foreign") {
+      clack.log.info(`${row.label}: ${renderStateLabel(row.state, row.membership)}`);
+    }
+  }
+
+  const answer = await clack.multiselect({
+    message: "Select what project-brain should install and keep up to date",
+    options: selectable.map((row) => ({
+      value: row.id,
+      label: `${row.group} · ${row.label}`,
+      hint: `${renderStateLabel(row.state, row.membership)} — ${row.description ?? ""}`.trim(),
+    })),
+    initialValues: selectable.filter((r) => r.chosen).map((r) => r.id),
+    required: false,
+  });
+
+  if (clack.isCancel(answer)) return null;
+  return answer as string[];
 }
