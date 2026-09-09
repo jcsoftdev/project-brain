@@ -31,6 +31,12 @@ ps -Ao pid,rss,etime,args | rg "[p]roject-brain sync"
 
 Any elapsed time past a minute or two is a job that will never finish.
 
+Ask with `ps`, not `pgrep`. On the machine this was found on, `pgrep -fc
+"project-brain sync"` answered `0` while `ps` listed nineteen live syncs in the
+same second. A false all-clear from the cheaper command is worse than no check
+at all: it retires the correct hypothesis and sends you back to hunting port
+conflicts.
+
 # Why
 
 The syncs were not hung. They were working, and would have kept working for
@@ -78,6 +84,28 @@ different faults:
 The watchdog exits without unwinding and leaves the lock file behind on purpose.
 The next run finds a dead pid in it and reclaims it, which is more reliable than
 asking a process already declared wedged to finish an async cleanup first.
+
+Upgrading does not end an incident already in progress. The runs are detached
+children of the binary that spawned them, so syncs started by the old version
+keep grinding with the old code — no watchdog, no lock, no failure streak —
+across the install. Clear them by hand once, after upgrading:
+
+```sh
+pkill -f "project-brain sync --changed-only"
+```
+
+Only the `sync --changed-only` children. The long-lived
+`/opt/homebrew/bin/project-brain` MCP servers are not part of this and must be
+left alone.
+
+And the fix bounds the damage, it does not remove the cause. With the backend
+still down, every sync now stops at the watchdog's budget instead of running for
+four hours, which keeps the machine alive but indexes nothing. Check the backend
+itself before concluding the incident is over:
+
+```sh
+curl --max-time 3 http://localhost:11434/api/tags
+```
 
 # How it was found
 
