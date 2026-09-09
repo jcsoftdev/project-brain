@@ -356,8 +356,15 @@ describe("createEmbeddingClient — BRAIN_OLLAMA_HOSTS pooling", () => {
     const { createEmbeddingClient } = await import("../../src/embeddings/factory.js");
     const { EmbeddingPool } = await import("../../src/embeddings/pool.js");
 
+    // `embed` is injected for the same reason every sibling test injects it:
+    // without it `detectDim` runs a REAL probe against `host`, and its abort is
+    // 10s — longer than this test's own 5s timeout. On a machine with Ollama
+    // running but the default model (qwen3-embedding:0.6b) not installed, the
+    // probe neither succeeds nor fails fast and the test times out. CI never
+    // caught it because CI has no Ollama, so the connection is refused instantly.
     const client = await createEmbeddingClient(undefined, {
       isModelAvailable: alwaysAvailable,
+      embed: makeEmbed(768),
       host: "http://127.0.0.1:11434",
     });
 
