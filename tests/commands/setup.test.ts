@@ -360,29 +360,46 @@ describe("setup command", () => {
       // non-interactive run rewrites it without a fresh prompt.
       const { runSetup } = await import("../../src/commands/setup.js");
       const stale = makeRoutingRegistrar("Claude Code", 1);
+      let sawChosen: boolean | undefined;
 
       await runSetup({
         dataDir: join(tempDir, "stale"),
         skipOllama: true,
         registrars: [stale],
         skillTargetDirs: [],
+        // Stands in for the old promptCalled assertion: capture what the
+        // checklist row looked like when it arrived, instead of asserting a
+        // prompt call never happened (one always does now — see the note
+        // above the excluding-guidance-writes-nothing test). "Pre-ticked, not
+        // re-asked" is exactly `chosen === true` on arrival.
+        promptUnitSelection: async (rows) => {
+          sawChosen = rows.find((r) => r.id === "guidance:model-routing")?.chosen;
+          return rows.filter((r) => r.chosen).map((r) => r.id);
+        },
       });
 
       expect(stale.calls.writeModelRouting).toBe(1);
+      expect(sawChosen).toBe(true);
     });
 
     it("leaves a current section alone", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
       const current = makeRoutingRegistrar("Claude Code", ROUTING_CONTENT_VERSION);
+      let sawChosen: boolean | undefined;
 
       await runSetup({
         dataDir: join(tempDir, "current"),
         skipOllama: true,
         registrars: [current],
         skillTargetDirs: [],
+        promptUnitSelection: async (rows) => {
+          sawChosen = rows.find((r) => r.id === "guidance:model-routing")?.chosen;
+          return rows.filter((r) => r.chosen).map((r) => r.id);
+        },
       });
 
       expect(current.calls.writeModelRouting).toBe(0);
+      expect(sawChosen).toBe(true);
     });
 
     it("writes host-specific content, not one shared blob", async () => {
@@ -462,8 +479,12 @@ describe("setup command", () => {
       }
 
       it("writes no routing hook when hooks:routing is not selected", async () => {
-        // The settings file may still exist: the worktree hooks install on their own
-        // selection, because index hygiene is not a routing preference.
+        // This call selects only "guidance:model-routing" — "hooks:worktree" is
+        // also not selected here, so the settings file is never created at all
+        // (`written` resolves to null via the `existsSync` guard). Selecting
+        // "hooks:worktree" without "hooks:routing" would still create the file
+        // and write only the worktree hooks into it — index hygiene installs on
+        // its own selection, independent of the routing preference.
         const { result, written } = await runWithHooks(["guidance:model-routing"]);
         expect(result.routingHooks).toEqual({ installed: false, strict: false });
         expect(JSON.stringify(written ?? {})).not.toContain("routing-rules");

@@ -369,6 +369,7 @@ export async function probeContext(options: {
   recordConnection?: { mode: "fresh" | "live"; cdpPort: number };
   routingHook?: { mode: "ask" | "yes" | "no"; strict: boolean };
   worktreeHook?: { mode: "yes" | "no"; strict: boolean };
+  routingConfigPath?: string;
 } = {}): Promise<SetupContext> {
   const dataDir = DEFAULT_DATA_DIR;
   const registrars = await getRegistrars();
@@ -391,6 +392,7 @@ export async function probeContext(options: {
       worktree: options.worktreeHook?.strict ?? false,
     },
     skipOllama: false,
+    routingConfigPath: options.routingConfigPath,
   };
 }
 
