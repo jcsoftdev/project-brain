@@ -763,6 +763,38 @@ describe("setup command", () => {
       await rm(dir, { recursive: true, force: true });
     });
 
+    // Critical C: `initialChecked` already forces `unavailable`/`foreign`
+    // units unchecked, but `saveSelection` used to derive `declined` as
+    // "every id minus selected" — which put a unit that could not be applied
+    // HERE into `declined` as if the user had refused it. That refusal is
+    // durable: it survives Ollama being installed later, a host being
+    // detected later, or a foreign directory being removed later. The fix is
+    // to drop non-selectable ids from the list entirely, so they stay
+    // `unseen` and are offered again once the blocker is gone.
+    it("keeps a unit that cannot be applied here (unavailable) out of both selected and declined", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const { loadSelection } = await import("../../src/setup/selection.js");
+      const dir = await mkdtemp(join(tmpdir(), "pb-setup-unavailable-"));
+      const selectionPath = join(dir, "setup-selection.json");
+
+      await runSetup({
+        dataDir: join(dir, "data"),
+        skipOllama: true, // embed:ollama-model.inspect() -> "unavailable"
+        skipRegistration: true,
+        selectionPath,
+        skillTargetDirs: [join(dir, "skills")],
+        claudeSettingsPath: join(dir, "settings.json"),
+        recordConfigPath: join(dir, "record-config.json"),
+        units: { mode: "explicit", selected: ["skill:brain-audit"] },
+      });
+
+      const saved = await loadSelection(selectionPath);
+      expect(saved?.selected).not.toContain("embed:ollama-model");
+      expect(saved?.declined).not.toContain("embed:ollama-model");
+
+      await rm(dir, { recursive: true, force: true });
+    });
+
     it("keeps a prior install when upgrading into the picker with no selection file", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
       const { installSkill } = await import("../../src/rules/skills.js");

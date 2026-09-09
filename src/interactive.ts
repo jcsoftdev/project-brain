@@ -6,8 +6,13 @@
 import type { PlanRow } from "./setup/plan.js";
 import { renderStateLabel } from "./setup/render.js";
 
-/** True only in a real interactive session — both stdio streams attached, not CI. */
-function isInteractive(): boolean {
+/**
+ * True only in a real interactive session — both stdio streams attached, not
+ * CI. Exported so every gate on "should we prompt" (the unit checklist, and
+ * the confirm screen in `src/commands/setup.ts`) shares one definition rather
+ * than each writing its own TTY check.
+ */
+export function isInteractive(): boolean {
   return Boolean(process.stdout.isTTY) && Boolean(process.stdin.isTTY) && !process.env.CI;
 }
 

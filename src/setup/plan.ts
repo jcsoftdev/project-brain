@@ -24,18 +24,31 @@ export interface PlanRow {
  * consented to under the old flow — so anything installed starts checked, and
  * only a genuinely absent unit falls through to its default. Nothing is removed
  * as a side effect of upgrading.
+ *
+ * `hasSelection` disambiguates the two facts `membership === "unseen"` alone
+ * cannot tell apart: "there is no selection file at all" (a first run, where
+ * `defaultSelected` should apply) versus "there IS a file and this id is in
+ * neither list" (genuinely new — shipped after the user's last run). Only the
+ * first case may fall through to `defaultSelected`; the second must render
+ * unchecked, or a newly shipped unit installs itself on the next
+ * non-interactive run without ever being offered.
  */
 export function initialChecked(
   state: UnitState,
   membership: Membership,
-  defaultSelected: boolean
+  defaultSelected: boolean,
+  hasSelection: boolean
 ): boolean {
   // A unit that cannot be applied here is never offered as checked, whatever
   // the saved selection says — it would plan work that cannot happen.
   if (state === "unavailable" || state === "foreign") return false;
   if (membership === "selected") return true;
   if (membership === "declined") return false;
+  // Migration path: on-disk state wins over hasSelection, so an upgrade with
+  // no selection file yet loses nothing.
   if (state === "current" || state === "stale") return true;
+  // Genuinely new: a selection file exists and never offered this id.
+  if (membership === "unseen" && hasSelection) return false;
   return defaultSelected;
 }
 

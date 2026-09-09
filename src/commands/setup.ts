@@ -14,6 +14,8 @@ import { getSkillTargetDirs, inspectOwnership, type SkippedTarget } from "../rul
 import { allUnits, type SetupContext, type UnitState } from "../setup/units.js";
 import { computePlan, initialChecked, type PlanRow } from "../setup/plan.js";
 import { loadSelection, saveSelection, membership } from "../setup/selection.js";
+import { renderPlan } from "../setup/render.js";
+import { isInteractive } from "../interactive.js";
 import { VERSION } from "../constants.js";
 
 export interface SetupOptions {
@@ -277,12 +279,26 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
         description: unit.description,
         state,
         membership: seen,
-        chosen: initialChecked(state, seen, unit.defaultSelected),
+        chosen: initialChecked(state, seen, unit.defaultSelected, selection !== null),
       };
     })
   );
 
   // 6. Resolve the ticks: explicit flags win, then the prompt, then the seeds.
+  //
+  // `cancelled()` is the one "write nothing" exit — reached both when the
+  // checklist itself is cancelled and when the confirm screen below is
+  // declined, so the two paths can never drift into reporting different
+  // shapes for the same "nothing happened" outcome.
+  const cancelled = () =>
+    buildResult(
+      ctx,
+      env,
+      dataDir,
+      computePlan(inspected.map((r) => ({ ...r, chosen: false }))),
+      manualInstructions
+    );
+
   let chosenIds: string[];
   if (options.units?.mode === "explicit") {
     chosenIds = options.units.selected;
@@ -291,19 +307,30 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
       (await import("../interactive.js")).promptUnitSelection)(inspected);
     if (answer === null) {
       // Cancelled. Write nothing, including the selection file.
-      return buildResult(
-        ctx,
-        env,
-        dataDir,
-        computePlan(inspected.map((r) => ({ ...r, chosen: false }))),
-        manualInstructions
-      );
+      return cancelled();
     }
     chosenIds = answer;
   }
 
   const chosen = new Set(chosenIds);
   const plan = computePlan(inspected.map((row) => ({ ...row, chosen: chosen.has(row.id) })));
+
+  // 6.5. Show the diff before a single write happens, and — in a real
+  // interactive session, and only when the plan actually does something —
+  // require explicit consent. `blocked` rows are informational (a foreign
+  // directory we already refuse to touch), not something to confirm, so they
+  // do not count as "work" any more than `unchanged` does.
+  console.log(`\n${renderPlan(plan)}`);
+  const hasWork = plan.some(
+    (p) => p.action === "install" || p.action === "update" || p.action === "remove"
+  );
+  if (hasWork && isInteractive()) {
+    const clack = await import("@clack/prompts");
+    const proceed = await clack.confirm({ message: "Apply?", initialValue: false });
+    if (clack.isCancel(proceed) || proceed !== true) {
+      return cancelled();
+    }
+  }
 
   // 7. Apply.
   const byId = new Map(units.map((u) => [u.id, u]));
@@ -325,12 +352,18 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
 
   // 8. Persist the choice. Written AFTER applying so a crash mid-apply does not
   // record a state the disk never reached.
-  await saveSelection(
-    ctx.selectionPath,
-    chosenIds,
-    units.map((u) => u.id),
-    VERSION
-  );
+  //
+  // `unavailable`/`foreign` rows are excluded from the id list entirely, not
+  // merely kept out of `selected` — `saveSelection` derives `declined` as
+  // "every id minus selected", so a row left in would land in `declined` and
+  // be recorded as the user's refusal. That is durable and wrong: a unit that
+  // could not be applied HERE (no Ollama, no detected host, a foreign
+  // directory) was never actually offered a real choice, and must stay
+  // `unseen` so it is offered again once the blocker goes away.
+  const selectableIds = inspected
+    .filter((r) => r.state !== "unavailable" && r.state !== "foreign")
+    .map((r) => r.id);
+  await saveSelection(ctx.selectionPath, chosenIds, selectableIds, VERSION);
 
   return buildResult(ctx, env, dataDir, plan, manualInstructions, failed);
 }
@@ -398,8 +431,6 @@ export async function probeContext(options: {
 
 /** CLI entry point for the setup command. */
 export async function execute(args: string[]): Promise<void> {
-  console.log("project-brain setup\n");
-
   const recordConnection = parseRecordConnectionFlag(args);
   const routingHook = parseRoutingHookFlag(args);
   const worktreeHook = parseWorktreeHookFlag(args);
@@ -415,6 +446,24 @@ export async function execute(args: string[]): Promise<void> {
     process.exit(1);
     return;
   }
+
+  // The header the spec promises: version, detected hosts, and where the
+  // selection lives — with its `updatedAt`/`binaryVersion` when a prior run
+  // left one. Both fields are written on every `saveSelection` call and, until
+  // now, read by nothing.
+  const priorSelection = await loadSelection(probe.selectionPath);
+  console.log(`project-brain setup ${VERSION}`);
+  console.log(
+    `Detected: ${
+      probe.installed.length > 0 ? probe.installed.map((r) => r.name).join(", ") : "none"
+    }`
+  );
+  console.log(
+    `Selection: ${probe.selectionPath}` +
+      (priorSelection
+        ? ` (last run ${priorSelection.updatedAt.slice(0, 10)}, v${priorSelection.binaryVersion})`
+        : "")
+  );
 
   const result = await runSetup({ recordConnection, routingHook, worktreeHook, units });
 
