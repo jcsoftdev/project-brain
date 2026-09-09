@@ -12,7 +12,7 @@ import {
 } from "../cli-args.js";
 import { getSkillTargetDirs, inspectOwnership, type SkippedTarget } from "../rules/skills.js";
 import { allUnits, type SetupContext, type UnitState } from "../setup/units.js";
-import { computePlan, initialChecked, type PlanRow } from "../setup/plan.js";
+import { computePlan, initialChecked, promptSeed, type PlanRow } from "../setup/plan.js";
 import { loadSelection, saveSelection, membership } from "../setup/selection.js";
 import { renderPlan } from "../setup/render.js";
 import { isInteractive } from "../interactive.js";
@@ -74,7 +74,10 @@ export interface SetupOptions {
    * `src/interactive.js`. Every other prompt in this file is injectable and the
    * existing suite depends on that, so this one is too.
    */
-  promptUnitSelection?: (rows: Omit<PlanRow, "action">[]) => Promise<string[] | null>;
+  promptUnitSelection?: (
+    rows: Omit<PlanRow, "action">[],
+    seed?: ReadonlySet<string>
+  ) => Promise<string[] | null>;
 }
 
 export interface SetupResult {
@@ -280,6 +283,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
         state,
         membership: seen,
         chosen: initialChecked(state, seen, unit.defaultSelected, selection !== null),
+        seed: promptSeed(state, seen, unit.defaultSelected, selection !== null),
       };
     })
   );
@@ -303,8 +307,12 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   if (options.units?.mode === "explicit") {
     chosenIds = options.units.selected;
   } else {
+    // The checklist is seeded from `seed`, not `chosen`: a first run shows
+    // only what is already on disk ticked, so nothing installs that the user
+    // did not tick. `chosen` stays the answer for a run with no human.
+    const seed = new Set(inspected.filter((r) => r.seed).map((r) => r.id));
     const answer = await (options.promptUnitSelection ??
-      (await import("../interactive.js")).promptUnitSelection)(inspected);
+      (await import("../interactive.js")).promptUnitSelection)(inspected, seed);
     if (answer === null) {
       // Cancelled. Write nothing, including the selection file.
       return cancelled();

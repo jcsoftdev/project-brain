@@ -64,3 +64,65 @@ describe("promptUnitSelection", () => {
     }
   });
 });
+
+describe("groupRowsForPrompt", () => {
+  it("orders groups Hosts, Guidance, Skills, Other regardless of row order", async () => {
+    const { groupRowsForPrompt } = await import("../src/interactive.js");
+    const rows = [
+      row({ id: "s", group: "Skills" }),
+      row({ id: "o", group: "Other" }),
+      row({ id: "h", group: "Hosts" }),
+      row({ id: "g", group: "Guidance" }),
+    ];
+    expect(groupRowsForPrompt(rows).map((s) => s.group)).toEqual([
+      "Hosts",
+      "Guidance",
+      "Skills",
+      "Other",
+    ]);
+  });
+
+  it("omits a group with no rows instead of prompting for an empty list", async () => {
+    const { groupRowsForPrompt } = await import("../src/interactive.js");
+    const rows = [row({ id: "h", group: "Hosts" })];
+    expect(groupRowsForPrompt(rows).map((s) => s.group)).toEqual(["Hosts"]);
+  });
+
+  it("appends an unrecognised group after the known ones, in first-seen order", async () => {
+    const { groupRowsForPrompt } = await import("../src/interactive.js");
+    const rows = [
+      row({ id: "z", group: "Zzz" }),
+      row({ id: "a", group: "Aaa" }),
+      row({ id: "h", group: "Hosts" }),
+    ];
+    expect(groupRowsForPrompt(rows).map((s) => s.group)).toEqual(["Hosts", "Zzz", "Aaa"]);
+  });
+
+  it("splits each group into selectable and excluded rows, keeping row order", async () => {
+    const { groupRowsForPrompt } = await import("../src/interactive.js");
+    const rows = [
+      row({ id: "h1", group: "Hosts" }),
+      row({ id: "h2", group: "Hosts", state: "unavailable" }),
+      row({ id: "h3", group: "Hosts" }),
+      row({ id: "o1", group: "Other", state: "foreign" }),
+    ];
+    const sections = groupRowsForPrompt(rows);
+    expect(sections[0]!.selectable.map((r) => r.id)).toEqual(["h1", "h3"]);
+    expect(sections[0]!.excluded.map((r) => r.id)).toEqual(["h2"]);
+    expect(sections[1]!.selectable).toEqual([]);
+    expect(sections[1]!.excluded.map((r) => r.id)).toEqual(["o1"]);
+  });
+
+  it("carries a blurb for every known group so the prompt can say what it is", async () => {
+    const { groupRowsForPrompt } = await import("../src/interactive.js");
+    const rows = [
+      row({ id: "h", group: "Hosts" }),
+      row({ id: "g", group: "Guidance" }),
+      row({ id: "s", group: "Skills" }),
+      row({ id: "o", group: "Other" }),
+    ];
+    for (const section of groupRowsForPrompt(rows)) {
+      expect(section.blurb.length).toBeGreaterThan(0);
+    }
+  });
+});

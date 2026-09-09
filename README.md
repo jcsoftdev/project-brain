@@ -283,11 +283,15 @@ One-time global setup. Detects your environment and registers project-brain with
 project-brain setup
 ```
 
-`setup` asks which parts to install and remembers the answer in
-`~/.project-brain/setup-selection.json`. Re-running it shows what is currently on
-disk beside what you are selecting, then a diff of what will change before
-anything is written. A part you deselect is removed and stays removed; a part
-that ships in a later release shows up marked `NEW` and unchecked.
+`setup` asks which parts to install — one checklist per group (Hosts, Guidance,
+Skills, Other), asked in order, so each question is about one kind of thing — and
+remembers the answer in `~/.project-brain/setup-selection.json`. Re-running it
+shows what is currently on disk beside what you are selecting, then a diff of
+what will change before anything is written. A part you deselect is removed and
+stays removed; a part that ships in a later release shows up marked `NEW` and
+unchecked. On a first run nothing is pre-ticked except what is already on disk,
+so pressing Enter through the checklist changes nothing — you install what you
+tick.
 
 Without a TTY it never prompts — it applies the saved selection, or each part's
 default if there is none.

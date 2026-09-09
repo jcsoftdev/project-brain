@@ -329,6 +329,39 @@ describe("setup command", () => {
       expect(promptCalled).toBe(false);
     });
 
+    it("seeds the checklist with nothing on a first run, then with the saved answer", async () => {
+      const { runSetup } = await import("../../src/commands/setup.js");
+      const dataDir = join(tempDir, "seed");
+
+      let firstSeed: string[] = ["unset"];
+      await runSetup({
+        dataDir,
+        skipOllama: true,
+        registrars: [makeRoutingRegistrar()],
+        skillTargetDirs: [],
+        promptUnitSelection: async (rows, seed) => {
+          firstSeed = rows.filter((r) => seed!.has(r.id)).map((r) => r.id);
+          return ["guidance:model-routing"];
+        },
+      });
+      // Nothing on disk yet, so nothing is pre-ticked — every install below is
+      // something the user actually chose, not a default that rode in on Enter.
+      expect(firstSeed).toEqual([]);
+
+      let secondSeed: string[] = ["unset"];
+      await runSetup({
+        dataDir,
+        skipOllama: true,
+        registrars: [makeRoutingRegistrar()],
+        skillTargetDirs: [],
+        promptUnitSelection: async (rows, seed) => {
+          secondSeed = rows.filter((r) => seed!.has(r.id)).map((r) => r.id);
+          return [];
+        },
+      });
+      expect(secondSeed).toEqual(["guidance:model-routing"]);
+    });
+
     it("with no explicit selection, the checklist is asked, and writes only when chosen", async () => {
       const { runSetup } = await import("../../src/commands/setup.js");
 

@@ -39,6 +39,35 @@ describe("initialChecked", () => {
   });
 });
 
+describe("promptSeed", () => {
+  it("ticks nothing on a first run beyond what is already on disk", async () => {
+    const { promptSeed } = await import("../../src/setup/plan.js");
+    // The checklist is the choice. A first run pre-ticking every default
+    // turns it back into a single Enter that installs everything.
+    expect(promptSeed("absent", "unseen", true, false)).toBe(false);
+    expect(promptSeed("absent", "unseen", false, false)).toBe(false);
+  });
+
+  it("keeps an already-installed unit ticked on a first run, so Enter removes nothing", async () => {
+    const { promptSeed } = await import("../../src/setup/plan.js");
+    expect(promptSeed("current", "unseen", false, false)).toBe(true);
+    expect(promptSeed("stale", "unseen", false, false)).toBe(true);
+  });
+
+  it("follows the saved selection exactly once one exists", async () => {
+    const { promptSeed } = await import("../../src/setup/plan.js");
+    expect(promptSeed("current", "selected", false, true)).toBe(true);
+    expect(promptSeed("current", "declined", true, true)).toBe(false);
+    expect(promptSeed("absent", "unseen", true, true)).toBe(false);
+  });
+
+  it("never ticks a unit that cannot be applied here", async () => {
+    const { promptSeed } = await import("../../src/setup/plan.js");
+    expect(promptSeed("unavailable", "selected", true, true)).toBe(false);
+    expect(promptSeed("foreign", "selected", true, false)).toBe(false);
+  });
+});
+
 describe("computePlan", () => {
   const row = (over: Record<string, unknown>) => ({
     id: "skill:x",

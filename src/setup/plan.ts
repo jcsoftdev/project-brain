@@ -53,6 +53,32 @@ export function initialChecked(
 }
 
 /**
+ * Whether a unit's checkbox starts ticked *in the interactive checklist*.
+ *
+ * Deliberately not the same answer as `initialChecked`, and the difference is
+ * the whole point: `initialChecked` decides what a run with no human applies,
+ * so on a first run it must fall through to `defaultSelected` or a scripted
+ * install would install nothing. The checklist has a human in front of it, and
+ * pre-ticking every default there turns the one question we ask into a single
+ * Enter that installs eighteen things nobody chose.
+ *
+ * So on a first run (no selection file) only what is ALREADY on disk starts
+ * ticked — Enter then changes nothing, and every install is something the user
+ * actually ticked. Once a selection file exists the two agree completely:
+ * the saved answer is the seed.
+ */
+export function promptSeed(
+  state: UnitState,
+  membership: Membership,
+  defaultSelected: boolean,
+  hasSelection: boolean
+): boolean {
+  if (state === "unavailable" || state === "foreign") return false;
+  if (!hasSelection) return state === "current" || state === "stale";
+  return initialChecked(state, membership, defaultSelected, hasSelection);
+}
+
+/**
  * Turn inspected states plus the user's ticks into the diff shown before any
  * write happens.
  *
