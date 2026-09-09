@@ -236,6 +236,23 @@ function parseValuedFlag(
  * always wins over `--all`, regardless of argument order. This matches the
  * convention elsewhere in this file (parseRoutingHookFlag): contradictory
  * flags resolve toward installing less, which is the safe direction.
+ *
+ * The positive legacy spellings do not carry over cleanly, and that is a
+ * known, accepted gap rather than an oversight:
+ * - `--skills` / `--brain-audit` still parse (see `legacyOn` below), but not
+ *   as "turn only skills on" — everything without `--with` already starts
+ *   from the full `allIds` set, so adding `skill:*` to it changes nothing.
+ *   They are effectively aliases for `--all`, not for "just the skills".
+ * - `--model-routing` and bare `--routing-hook` have no entry anywhere in
+ *   this function and are fully inert: they parse as ordinary non-flag
+ *   noise and select nothing. Giving a single unit its own "force this one
+ *   on, leave everything else as selected" flag needs an add/remove delta
+ *   this parser does not have — it always returns one complete selection,
+ *   never a patch — and that is a real feature with its own tests, not a
+ *   one-line fix here.
+ * Only the `--no-*` opt-outs (`LEGACY_OFF`) still do exactly what they used
+ * to. All four spellings above still parse without erroring, which is the
+ * actual compatibility promise: a script that passes them keeps running.
  */
 export function parseUnitFlags(
   args: string[],
