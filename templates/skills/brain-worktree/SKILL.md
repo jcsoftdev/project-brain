@@ -95,7 +95,8 @@ Fill the browser role in this order, and record which tool filled it:
 
 Sharing one browser across worktrees is not automatic, because each session runs its own
 MCP server process. Where it is worth arranging, point those servers at a single Chrome
-(`--browserUrl`, or `--autoConnect`) and give each worktree its own `isolatedContext`
+(`--browserUrl`, or `--autoConnect` — `project-brain setup` offers to add that flag, and
+prints the `chrome://inspect` toggle it depends on) and give each worktree its own `isolatedContext`
 name on `new_page`: pages in different contexts share no cookies or storage, and every
 page-scoped tool routes by `pageId`. A worktree then costs a context, not a browser.
 

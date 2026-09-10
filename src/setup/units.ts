@@ -478,7 +478,122 @@ export function otherUnits(): SetupUnit[] {
         await rm(ctx.recordConfigPath, { force: true });
       },
     },
+    {
+      id: "config:chrome-autoconnect",
+      group: "Other",
+      label: "chrome-devtools autoConnect",
+      description:
+        "browser tools drive your logged-in Chrome instead of a fresh profile; needs the chrome://inspect toggle",
+
+      // The only unit that ships unchecked. Every other one installs something
+      // of ours; this one hands an MCP server full control of the browser the
+      // user is signed into, and a default-on checkbox is how someone ends up
+      // consenting to that without reading the row.
+      defaultSelected: false,
+
+      async inspect(ctx): Promise<UnitState> {
+        const { entryAutoConnectState } = await import("./chrome-autoconnect.js");
+        const states = (await chromeDevtoolsEntries(ctx)).map(([, entry]) =>
+          entryAutoConnectState(entry)
+        );
+        const actionable = states.filter((s) => s !== "unsupported");
+
+        // No host runs the server, or every entry already answers the question
+        // some other way. Either way there is nothing here to offer.
+        if (actionable.length === 0) return "unavailable";
+        return actionable.every((s) => s === "present") ? "current" : "absent";
+      },
+
+      async apply(ctx): Promise<void> {
+        const { entryAutoConnectState, addAutoConnect, TOGGLE_URL, REMOTE_DEBUGGING_WARNING } =
+          await import("./chrome-autoconnect.js");
+        const { upsertJsonConfig } = await import("../registrars/json-config.js");
+
+        let changed = false;
+        for (const { path, containerKey, names } of await chromeDevtoolsTargets(ctx)) {
+          if (names.length === 0) continue;
+          await upsertJsonConfig(path, (config) => {
+            for (const name of names) {
+              const entry = config[containerKey]?.[name];
+              if (entry && entryAutoConnectState(entry) === "missing") {
+                addAutoConnect(entry);
+                changed = true;
+              }
+            }
+          });
+        }
+
+        // The flag is half of it. Chrome refuses the connection until the user
+        // flips the toggle themselves, so saying so here is not a nicety — it
+        // is the difference between a working setup and a silent failure later.
+        if (changed) {
+          console.log(
+            `\nchrome-devtools autoConnect: open ${TOGGLE_URL} in your Chrome and turn on ` +
+              `"Allow remote debugging for this browser instance", then reconnect the MCP server.\n` +
+              REMOTE_DEBUGGING_WARNING
+          );
+        }
+      },
+
+      async remove(ctx): Promise<void> {
+        const { removeAutoConnect } = await import("./chrome-autoconnect.js");
+        const { upsertJsonConfig } = await import("../registrars/json-config.js");
+
+        for (const { path, containerKey, names } of await chromeDevtoolsTargets(ctx)) {
+          if (names.length === 0) continue;
+          await upsertJsonConfig(path, (config) => {
+            for (const name of names) {
+              const entry = config[containerKey]?.[name];
+              if (entry) removeAutoConnect(entry);
+            }
+          });
+        }
+      },
+    },
   ];
+}
+
+/**
+ * Every chrome-devtools MCP entry across the detected hosts' JSON configs.
+ *
+ * A host with no `mcpConfigTarget` (Codex, whose server map is TOML that only
+ * its own CLI may rewrite) is skipped rather than guessed at, and an absent or
+ * unparseable config yields nothing instead of throwing: this runs during
+ * `inspect`, where the honest answer to "can't read it" is "nothing to offer".
+ */
+async function chromeDevtoolsTargets(
+  ctx: SetupContext
+): Promise<Array<{ path: string; containerKey: string; names: string[]; entries: any[] }>> {
+  const { findChromeDevtoolsEntries } = await import("./chrome-autoconnect.js");
+  const targets = [];
+
+  for (const registrar of ctx.installed) {
+    const target = registrar.mcpConfigTarget?.();
+    if (!target) continue;
+
+    let config: Record<string, any>;
+    try {
+      config = JSON.parse(await Bun.file(target.path).text());
+    } catch {
+      continue;
+    }
+
+    const found = findChromeDevtoolsEntries(config, target.containerKey);
+    targets.push({
+      path: target.path,
+      containerKey: target.containerKey,
+      names: found.map(([name]) => name),
+      entries: found.map(([, entry]) => entry),
+    });
+  }
+
+  return targets;
+}
+
+/** The [name, entry] pairs alone, for the states `inspect` reports on. */
+async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, any]>> {
+  const targets = await chromeDevtoolsTargets(ctx);
+  return targets.flatMap((t) => t.names.map((name, i) => [name, t.entries[i]] as [string, any]));
 }
 
 /**

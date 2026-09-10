@@ -2,6 +2,7 @@ import { describe, it, expect } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import type { AIToolRegistrar } from "../../src/registrars/types.js";
 import type { SetupContext } from "../../src/setup/units.js";
 
 async function context(): Promise<SetupContext> {
@@ -60,6 +61,145 @@ describe("other units", () => {
     // Must not throw and must not shell out.
     await unit.remove(ctx);
     expect(unit.description).toContain("shared");
+  });
+});
+
+/** A registrar that owns one JSON MCP config file, and nothing else. */
+function jsonHost(name: string, path: string): AIToolRegistrar {
+  return {
+    name,
+    async isInstalled() {
+      return true;
+    },
+    async register() {},
+    async writeRules() {},
+    mcpConfigTarget() {
+      return { path, containerKey: "mcpServers" };
+    },
+  };
+}
+
+const chromeEntry = (args: string[]) => ({ command: "npx", args });
+
+describe("chrome-devtools autoConnect unit", () => {
+  it("is never checked by default — it hands over the real browser", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const unit = otherUnits().find((u) => u.id === "config:chrome-autoconnect")!;
+
+    expect(unit.defaultSelected).toBe(false);
+    expect(unit.group).toBe("Other");
+  });
+
+  it("is unavailable when no detected host runs the chrome-devtools MCP", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const ctx = await context();
+    const configPath = join(ctx.dataDir, "host.json");
+    await Bun.write(
+      configPath,
+      JSON.stringify({ mcpServers: { "project-brain": { command: "project-brain", args: [] } } })
+    );
+    ctx.installed = [jsonHost("Claude Code", configPath)];
+
+    const unit = otherUnits().find((u) => u.id === "config:chrome-autoconnect")!;
+    expect(await unit.inspect(ctx)).toBe("unavailable");
+
+    await rm(ctx.dataDir, { recursive: true, force: true });
+  });
+
+  it("adds the flag to every host missing it, and strips it again on removal", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const ctx = await context();
+    const a = join(ctx.dataDir, "a.json");
+    const b = join(ctx.dataDir, "b.json");
+    await Bun.write(
+      a,
+      JSON.stringify({
+        mcpServers: { chrome: chromeEntry(["-y", "chrome-devtools-mcp@latest"]) },
+      })
+    );
+    await Bun.write(
+      b,
+      JSON.stringify({
+        mcpServers: { "chrome-devtools": chromeEntry(["chrome-devtools-mcp", "--headless"]) },
+      })
+    );
+    ctx.installed = [jsonHost("Claude Code", a), jsonHost("Cursor", b)];
+
+    const unit = otherUnits().find((u) => u.id === "config:chrome-autoconnect")!;
+    expect(await unit.inspect(ctx)).toBe("absent");
+
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("current");
+    expect(JSON.parse(await Bun.file(a).text()).mcpServers.chrome.args).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+    ]);
+    expect(JSON.parse(await Bun.file(b).text()).mcpServers["chrome-devtools"].args).toEqual([
+      "chrome-devtools-mcp",
+      "--headless",
+      "--autoConnect",
+    ]);
+
+    await unit.remove(ctx);
+    expect(await unit.inspect(ctx)).toBe("absent");
+    expect(JSON.parse(await Bun.file(b).text()).mcpServers["chrome-devtools"].args).toEqual([
+      "chrome-devtools-mcp",
+      "--headless",
+    ]);
+
+    await rm(ctx.dataDir, { recursive: true, force: true });
+  });
+
+  it("is absent while any host still lacks the flag", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const ctx = await context();
+    const a = join(ctx.dataDir, "a.json");
+    const b = join(ctx.dataDir, "b.json");
+    await Bun.write(
+      a,
+      JSON.stringify({ mcpServers: { chrome: chromeEntry(["chrome-devtools-mcp", "--autoConnect"]) } })
+    );
+    await Bun.write(
+      b,
+      JSON.stringify({ mcpServers: { chrome: chromeEntry(["chrome-devtools-mcp"]) } })
+    );
+    ctx.installed = [jsonHost("Claude Code", a), jsonHost("Cursor", b)];
+
+    const unit = otherUnits().find((u) => u.id === "config:chrome-autoconnect")!;
+    expect(await unit.inspect(ctx)).toBe("absent");
+
+    await rm(ctx.dataDir, { recursive: true, force: true });
+  });
+
+  it("leaves an entry wired to a browser another way alone", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const ctx = await context();
+    const configPath = join(ctx.dataDir, "host.json");
+    const args = ["chrome-devtools-mcp", "--browserUrl", "http://127.0.0.1:9222"];
+    await Bun.write(configPath, JSON.stringify({ mcpServers: { chrome: chromeEntry(args) } }));
+    ctx.installed = [jsonHost("Claude Code", configPath)];
+
+    const unit = otherUnits().find((u) => u.id === "config:chrome-autoconnect")!;
+    expect(await unit.inspect(ctx)).toBe("unavailable");
+
+    await unit.apply(ctx);
+    expect(JSON.parse(await Bun.file(configPath).text()).mcpServers.chrome.args).toEqual(args);
+
+    await rm(ctx.dataDir, { recursive: true, force: true });
+  });
+
+  it("survives a host whose config file is absent or unreadable", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const ctx = await context();
+    ctx.installed = [jsonHost("Claude Code", join(ctx.dataDir, "missing.json"))];
+
+    const unit = otherUnits().find((u) => u.id === "config:chrome-autoconnect")!;
+    expect(await unit.inspect(ctx)).toBe("unavailable");
+    await unit.apply(ctx);
+    await unit.remove(ctx);
+
+    await rm(ctx.dataDir, { recursive: true, force: true });
   });
 });
 

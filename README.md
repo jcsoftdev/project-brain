@@ -305,6 +305,14 @@ project-brain setup --none
 
 Run `project-brain setup --with=nope` to print the list of valid ids.
 
+#### chrome-devtools autoConnect
+
+If a detected host runs the [chrome-devtools MCP server](https://github.com/ChromeDevTools/chrome-devtools-mcp) without `--autoConnect`, setup offers to add it (`config:chrome-autoconnect`). Without the flag those browser tools launch a throwaway, logged-out Chrome profile; with it they drive the Chrome you are already signed into, which is the only way to reach a flow behind a login.
+
+It is the one unit that ships **unchecked**, on purpose. Attaching to your own browser is full control of it, and Chrome says so on the toggle the flag depends on: it "allows external apps to request full control of this browser. This includes read access to your saved data, cookies and site data, and the ability to navigate to any URL."
+
+The flag is only half of it — Chrome refuses the connection until you open `chrome://inspect/#remote-debugging` and turn on "Allow remote debugging for this browser instance" yourself. Setup never flips that toggle; it prints the step after writing the flag. Entries already wired another way (`--browserUrl`, `--wsEndpoint`) or explicitly opted out (`--no-auto-connect`) are left untouched.
+
 #### Model routing for sub-agents
 
 Setup also writes model-routing guidance into each detected host's rules file: which **tier** — `fast`, `balanced`, or `deep` — a delegated sub-agent should run at for a given kind of task, and how to set that tier *on that host*.
