@@ -40,7 +40,7 @@ See [Install](#install) for platform coverage and how upgrades work per channel.
 project-brain setup
 ```
 
-Detects and registers project-brain with Claude, Codex, Cursor, Gemini, Windsurf, Zed and VS Code, and installs the `brain-audit` and `brain-okf` host skills. Run it **once per machine**, not per project. Skip the skills with `--no-skills`.
+Detects and registers project-brain with Claude, Codex, Cursor, Gemini, Windsurf, Zed and VS Code, and installs its host skills. Run it **once per machine**, not per project. Skip the skills with `--no-skills`.
 
 ### 3. Index a project
 
@@ -192,12 +192,18 @@ These five are thin wrappers over the CLI. **project-brain does not install them
 |---|---|---|
 | `/brain-audit` | *(none — host skill)* | Whole-project audit: dead code, orphan UI, broken flows, coverage gaps, plus findings by severity across security, performance and architecture |
 | `/brain-okf` | *(none — host skill)* | Write an OKF concept: the reasoning behind code, anchored to a verified symbol and checkable by `okf audit` |
+| `/brain-commit` | *(none — host skill)* | Write a commit message in the convention the repository's own log already shows |
+| `/brain-record` | *(none — host skill)* | Record the flow a branch touches as video evidence for a PR or ticket |
+| `/brain-worktree` | *(none — host skill)* | Give an isolated worktree its own index and its own leased port |
+| `brain-style` | *(none — host skill)* | Keep written code declarative: a comment only where it says something the code cannot |
 
 Unlike the `/brain-*` commands above, these have no CLI equivalent. They are **host skills**: the logic lives in `SKILL.md` and runs inside the assistant, which calls project-brain's MCP tools to do the work. That is what lets `brain-audit` answer "is this export dead?" with `find_callers` instead of guessing from a grep, and what lets `brain-okf` verify an anchor with `find_symbol` before writing it.
 
+`brain-style` is the one that carries no command. It is a standing rule about written code rather than a task to invoke, and it claims precedence over the comment density an agent would otherwise copy from the files around it — leave it unticked at setup if your codebase wants that density kept.
+
 `project-brain setup` installs them into each registered tool's global skills directory (`~/.claude/skills/`, `~/.codex/skills/`, or the shared `~/.agents/skills/`). Opt out with `project-brain setup --no-skills` (`--no-brain-audit` still works as an alias).
 
-**Both are offered, not scheduled.** Nothing invokes them for you and nothing fires on commit — you decide when. `brain-audit` runs discovery, proposes an audit module set, and waits for you to confirm before loading anything: 51 modules exist, and loading all of them every time is what makes an audit expensive. `brain-okf` proposes the type, title, and anchor and waits before creating a file, because whether an insight deserves a permanent home is your call, not the assistant's.
+**They are offered, not scheduled.** Nothing invokes them for you and nothing fires on commit — you decide when. `brain-audit` runs discovery, proposes an audit module set, and waits for you to confirm before loading anything: 51 modules exist, and loading all of them every time is what makes an audit expensive. `brain-okf` proposes the type, title, and anchor and waits before creating a file, because whether an insight deserves a permanent home is your call, not the assistant's.
 
 Setup never overwrites a skill directory it did not create. Ownership is proven per directory, so your own hand-written `brain-okf/` is left untouched — and reported — while `brain-audit/` upgrades beside it.
 

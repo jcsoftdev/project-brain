@@ -7,6 +7,7 @@ import skillMd from "../../templates/skills/brain-audit/SKILL.md" with { type: "
 import okfSkillMd from "../../templates/skills/brain-okf/SKILL.md" with { type: "text" };
 import commitSkillMd from "../../templates/skills/brain-commit/SKILL.md" with { type: "text" };
 import worktreeSkillMd from "../../templates/skills/brain-worktree/SKILL.md" with { type: "text" };
+import styleSkillMd from "../../templates/skills/brain-style/SKILL.md" with { type: "text" };
 import recordSkillMd from "../../templates/skills/brain-record/SKILL.md" with { type: "text" };
 import recordScript from "../../templates/skills/brain-record/assets/record.mjs" with { type: "text" };
 import recordBuildVideo from "../../templates/skills/brain-record/assets/build-video.sh" with { type: "text" };
@@ -187,6 +188,21 @@ export const BRAIN_WORKTREE_FILES: Record<string, string> = {
 };
 
 /**
+ * brain-style — keep generated code declarative, and comments rare.
+ *
+ * Single file: the whole skill is one default plus the short list of cases that
+ * override it, and a reference nobody opens would defeat the point.
+ *
+ * It claims precedence over inherited style guidance, which none of the other
+ * skills do. That is deliberate. Comment density is read off surrounding files
+ * by default, so a codebase that over-comments teaches every later edit to
+ * over-comment, and no amount of per-request asking survives the next session.
+ */
+export const BRAIN_STYLE_FILES: Record<string, string> = {
+  "SKILL.md": styleSkillMd,
+};
+
+/**
  * brain-record — record the full flow a ticket/branch touches as PR/ticket evidence.
  *
  * Rewritten onto a CDP-screencast engine (v2.0) after live verification that the prior
@@ -224,6 +240,7 @@ export const SKILL_MANIFESTS: Record<string, Record<string, string>> = {
   "brain-commit": BRAIN_COMMIT_FILES,
   "brain-okf": BRAIN_OKF_FILES,
   "brain-record": BRAIN_RECORD_FILES,
+  "brain-style": BRAIN_STYLE_FILES,
   "brain-worktree": BRAIN_WORKTREE_FILES,
 };
 

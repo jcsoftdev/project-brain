@@ -64,6 +64,7 @@ const SKILL_DESCRIPTIONS: Record<string, string> = {
   "brain-commit": "writes commit messages in the convention the repository already uses",
   "brain-okf": "records the reasoning behind code as an Open Knowledge Format concept",
   "brain-record": "records a branch's flow as video evidence for a PR or ticket",
+  "brain-style": "keeps generated code declarative — comments only where the code cannot speak",
   "brain-worktree": "gives an isolated worktree its own brain and its own port",
 };
 
