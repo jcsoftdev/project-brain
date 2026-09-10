@@ -391,7 +391,7 @@ export function guidanceUnits(): SetupUnit[] {
     hookUnit({
       id: "hooks:session-title",
       label: "Session title hook",
-      description: "name the session after the work, once the agent picks a name",
+      description: "name and colour the session after the work, once the agent picks them",
       probe: "project-brain session-title apply",
       strictOf: () => false,
       load: async () => {

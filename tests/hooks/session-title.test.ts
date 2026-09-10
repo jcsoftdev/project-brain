@@ -219,3 +219,147 @@ describe("upsertSessionTitleHook", () => {
     expect(commands(stripped, "SessionStart")).toEqual([]);
   });
 });
+
+describe("normalizeColor", () => {
+  it("accepts a palette colour in any casing, with surrounding whitespace", async () => {
+    const { normalizeColor, SESSION_COLORS } = await import("../../src/hooks/session-title.js");
+    const first = SESSION_COLORS[0]!;
+    expect(normalizeColor(`  ${first.toUpperCase()} \n`)).toBe(first);
+  });
+
+  it("rejects anything outside the palette, so no dead record is written", async () => {
+    const { normalizeColor } = await import("../../src/hooks/session-title.js");
+    expect(normalizeColor("chartreuse")).toBeNull();
+    expect(normalizeColor("")).toBeNull();
+    expect(normalizeColor("blue and purple")).toBeNull();
+  });
+});
+
+describe("currentAgentColor", () => {
+  it("returns the last agent-color record", async () => {
+    const { currentAgentColor } = await import("../../src/hooks/session-title.js");
+    const transcript = [
+      '{"type":"agent-color","agentColor":"blue","sessionId":"s1"}',
+      '{"type":"custom-title","customTitle":"a name","sessionId":"s1"}',
+      '{"type":"agent-color","agentColor":"purple","sessionId":"s1"}',
+    ].join("\n");
+    expect(currentAgentColor(transcript)).toBe("purple");
+  });
+
+  it("returns null when the session never had one", async () => {
+    const { currentAgentColor } = await import("../../src/hooks/session-title.js");
+    expect(currentAgentColor('{"type":"custom-title","customTitle":"n","sessionId":"s1"}')).toBeNull();
+  });
+});
+
+describe("colorRecord", () => {
+  it("writes the record shape the app reads back", async () => {
+    const { colorRecord } = await import("../../src/hooks/session-title.js");
+    expect(JSON.parse(colorRecord("s1", "purple"))).toEqual({
+      type: "agent-color",
+      agentColor: "purple",
+      sessionId: "s1",
+    });
+  });
+});
+
+describe("decideSessionColor", () => {
+  const payload = { session_id: "s1", transcript_path: "/t/s1.jsonl", scratchpad_dir: "/scratch" };
+  const read = (name: string | null, transcript = "") => ({
+    name: () => name,
+    transcript: () => transcript,
+  });
+
+  it("returns the record when the agent chose a colour", async () => {
+    const { decideSessionColor } = await import("../../src/hooks/session-title.js");
+    const decision = decideSessionColor(payload, read("purple"));
+    expect(JSON.parse(decision!.line).agentColor).toBe("purple");
+  });
+
+  it("stays quiet when the colour is already in force", async () => {
+    const { decideSessionColor } = await import("../../src/hooks/session-title.js");
+    const transcript = '{"type":"agent-color","agentColor":"purple","sessionId":"s1"}';
+    expect(decideSessionColor(payload, read("purple", transcript))).toBeNull();
+  });
+
+  it("stays quiet on a colour the app would reject", async () => {
+    const { decideSessionColor } = await import("../../src/hooks/session-title.js");
+    expect(decideSessionColor(payload, read("chartreuse"))).toBeNull();
+  });
+});
+
+describe("applySessionColor", () => {
+  let dir: string;
+  let scratch: string;
+  let transcript: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "pb-session-color-"));
+    scratch = join(dir, "scratch");
+    transcript = join(dir, "s1.jsonl");
+    await mkdir(scratch, { recursive: true });
+    await writeFile(transcript, '{"type":"ai-title","aiTitle":"derived","sessionId":"s1"}\n');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const payload = () => ({
+    session_id: "s1",
+    transcript_path: transcript,
+    scratchpad_dir: scratch,
+  });
+
+  it("appends the record when the agent wrote a colour", async () => {
+    const { applySessionColor, COLOR_FILE } = await import("../../src/hooks/session-title.js");
+    await writeFile(join(scratch, COLOR_FILE), "purple\n");
+    await applySessionColor(payload());
+
+    const lines = (await readFile(transcript, "utf8")).trim().split("\n");
+    expect(JSON.parse(lines.at(-1)!)).toEqual({
+      type: "agent-color",
+      agentColor: "purple",
+      sessionId: "s1",
+    });
+  });
+
+  it("leaves the transcript untouched when there is no colour file", async () => {
+    const { applySessionColor } = await import("../../src/hooks/session-title.js");
+    const before = await readFile(transcript, "utf8");
+    await applySessionColor(payload());
+    expect(await readFile(transcript, "utf8")).toBe(before);
+  });
+
+  it("writes nothing for a colour outside the palette", async () => {
+    const { applySessionColor, COLOR_FILE } = await import("../../src/hooks/session-title.js");
+    await writeFile(join(scratch, COLOR_FILE), "chartreuse\n");
+    const before = await readFile(transcript, "utf8");
+    await applySessionColor(payload());
+    expect(await readFile(transcript, "utf8")).toBe(before);
+  });
+
+  it("does not append the same colour twice", async () => {
+    const { applySessionColor, COLOR_FILE } = await import("../../src/hooks/session-title.js");
+    await writeFile(join(scratch, COLOR_FILE), "blue\n");
+    await applySessionColor(payload());
+    await applySessionColor(payload());
+
+    const lines = (await readFile(transcript, "utf8")).trim().split("\n");
+    expect(lines.filter((l) => l.includes('"agent-color"'))).toHaveLength(1);
+  });
+});
+
+describe("the notice covers both records", () => {
+  it("names the colour file and every colour the agent may pick", async () => {
+    const { buildTitleNotice, COLOR_FILE, SESSION_COLORS } = await import(
+      "../../src/hooks/session-title.js"
+    );
+    const context = (
+      JSON.parse(buildTitleNotice()) as { hookSpecificOutput: { additionalContext: string } }
+    ).hookSpecificOutput.additionalContext;
+
+    expect(context).toContain(COLOR_FILE);
+    for (const colour of SESSION_COLORS) expect(context).toContain(colour);
+  });
+});
