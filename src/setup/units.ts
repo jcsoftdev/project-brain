@@ -386,6 +386,18 @@ export function guidanceUnits(): SetupUnit[] {
         return { upsert: m.upsertWorktreeHooks, remove: m.removeWorktreeHooks };
       },
     }),
+
+    hookUnit({
+      id: "hooks:session-title",
+      label: "Session title hook",
+      description: "name the session after the work, once the agent picks a name",
+      probe: "project-brain session-title apply",
+      strictOf: () => false,
+      load: async () => {
+        const m = await import("../hooks/claude-settings.js");
+        return { upsert: m.upsertSessionTitleHook, remove: m.removeSessionTitleHook };
+      },
+    }),
   ];
 }
 

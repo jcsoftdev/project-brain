@@ -265,6 +265,11 @@ switch (command) {
     await execute();
     break;
   }
+  case "session-title": {
+    const { execute } = await import("./hooks/session-title.js");
+    await execute(args);
+    break;
+  }
   case "sync": {
     const { execute } = await import("./commands/sync.js");
     await execute(args);

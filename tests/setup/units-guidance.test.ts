@@ -23,11 +23,16 @@ async function context(): Promise<SetupContext> {
 }
 
 describe("guidance units", () => {
-  it("declares all three units selected by default", async () => {
+  it("declares every unit selected by default", async () => {
     const { guidanceUnits } = await import("../../src/setup/units.js");
     const ids = guidanceUnits().map((u) => u.id).sort();
 
-    expect(ids).toEqual(["guidance:model-routing", "hooks:routing", "hooks:worktree"]);
+    expect(ids).toEqual([
+      "guidance:model-routing",
+      "hooks:routing",
+      "hooks:session-title",
+      "hooks:worktree",
+    ]);
     expect(guidanceUnits().every((u) => u.defaultSelected)).toBe(true);
   });
 });

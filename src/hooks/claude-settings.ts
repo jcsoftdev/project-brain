@@ -171,6 +171,8 @@ export function upsertRoutingHooks(
 const WORKTREE_SESSION_COMMAND = "project-brain worktree-hook session";
 const WORKTREE_CLEANUP_COMMAND = "project-brain worktree-hook cleanup";
 const WORKTREE_GUARD_COMMAND = "project-brain worktree-guard";
+const SESSION_TITLE_NOTICE_COMMAND = "project-brain session-title notice";
+const SESSION_TITLE_APPLY_COMMAND = "project-brain session-title apply";
 
 /**
  * Ensure the worktree hooks exist in a parsed settings object.
@@ -257,6 +259,69 @@ export function removeRoutingHooks(existing: object | null): object {
 
   dropGroups(hooks, "SessionStart", [ROUTING_REMINDER_COMMAND]);
   dropGroups(hooks, "PreToolUse", [ROUTING_GUARD_COMMAND]);
+
+  return { ...base, hooks };
+}
+
+/**
+ * Add the session-title hook to a parsed settings object.
+ *
+ * `Stop` rather than `SessionStart`, because a session has no subject worth naming until
+ * it has run for a while, and the name has to keep up when the subject moves. The hook
+ * itself is silent whenever the agent has not written a name, so the cost of firing on
+ * every turn is one file that is usually absent.
+ *
+ * Pure, non-mutating and idempotent, like its siblings.
+ */
+export function upsertSessionTitleHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  addGroup(hooks, "SessionStart", SESSION_TITLE_NOTICE_COMMAND, {
+    hooks: [
+      {
+        type: "command",
+        command: SESSION_TITLE_NOTICE_COMMAND,
+        timeout: 5,
+        statusMessage: "project-brain: session naming rule",
+      },
+    ],
+  });
+
+  addGroup(hooks, "Stop", SESSION_TITLE_APPLY_COMMAND, {
+    hooks: [
+      {
+        type: "command",
+        command: SESSION_TITLE_APPLY_COMMAND,
+        timeout: 5,
+        statusMessage: "project-brain: session title",
+      },
+    ],
+  });
+
+  return { ...base, hooks };
+}
+
+/**
+ * Remove the session-title hook from a parsed settings object.
+ *
+ * The inverse of {@link upsertSessionTitleHook}, narrow for
+ * {@link removeRoutingHooks}' reason.
+ */
+export function removeSessionTitleHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "SessionStart", [SESSION_TITLE_NOTICE_COMMAND]);
+  dropGroups(hooks, "Stop", [SESSION_TITLE_APPLY_COMMAND]);
 
   return { ...base, hooks };
 }
