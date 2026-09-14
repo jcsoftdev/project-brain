@@ -33,6 +33,8 @@ export interface InitOptions {
   indexDeps?: { store: VectorStore; embeddings: EmbeddingClient };
   /** Global data dir holding the project id → root registry. Defaults to DATA_DIR. */
   dataDir?: string;
+  /** Injectable for testing; defaults to DB_PATH, where the vector tables live. */
+  dbPath?: string;
   /** Progress callback forwarded to runReindex. */
   onProgress?: (p: SyncProgress) => void;
 }
@@ -189,6 +191,35 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
         const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
         store = new LanceDbStore(DB_PATH);
         embeddings = await createEmbeddingClient(process.env.BRAIN_EMBED_MODEL || undefined, { host: OLLAMA_HOST, autoPull: true });
+      }
+
+      // A linked worktree starts from its base checkout's index rather than from
+      // nothing, which turns the first pass into the incremental branch below:
+      // seeding writes the manifest, so `alreadyIndexed` becomes true and sync
+      // re-hashes instead of re-embedding. Failure here is silent on purpose —
+      // the only consequence is the full index this would have avoided.
+      if (!gitContext.isMain && !options.indexDeps) {
+        try {
+          const { seedWorktreeIndex } = await import("../store/worktree-seed.js");
+          const { DB_PATH } = await import("../constants.js");
+          const { deriveProjectId } = await import("../indexer/project-id.js");
+
+          const outcome = await seedWorktreeIndex({
+            dbPath: options.dbPath ?? DB_PATH,
+            baseRoot: gitContext.mainRoot,
+            worktreeRoot: root,
+            baseProject: await deriveProjectId(gitContext.mainRoot),
+            worktreeProject: projectId,
+            isMain: false,
+            target: { model: embeddings.model, dim: embeddings.dim },
+            verify: async (project) => (await store.countChunks(project)) > 0,
+          });
+          if (outcome.seeded) {
+            console.log(`Seeded this worktree's index from ${outcome.from} — syncing the difference.`);
+          }
+        } catch {
+          // Non-fatal: fall through to a normal index.
+        }
       }
 
       // If already indexed (manifest exists), use incremental sync — not full

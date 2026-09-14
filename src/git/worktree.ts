@@ -18,6 +18,12 @@ export interface GitContext {
   isMain: boolean;
   /** The toplevel of THIS working tree — the worktree's own, not the main checkout's. */
   root: string;
+  /**
+   * The toplevel of the MAIN checkout, which equals `root` unless this is a linked
+   * worktree. It is where a worktree's sibling artefacts live — the base index a new
+   * worktree can start from rather than rebuild.
+   */
+  mainRoot: string;
 }
 
 /** git that reports failure as null instead of throwing: absent repo is an answer here. */
@@ -44,7 +50,13 @@ function repoNameFromRemote(url: string): string {
 export function detectGitContext(cwd: string): GitContext {
   const top = git(["rev-parse", "--show-toplevel"], cwd);
   if (!top) {
-    return { project: basename(cwd).toLowerCase(), worktree: "main", isMain: true, root: cwd };
+    return {
+      project: basename(cwd).toLowerCase(),
+      worktree: "main",
+      isMain: true,
+      root: cwd,
+      mainRoot: cwd,
+    };
   }
 
   const gitDir = resolve(cwd, git(["rev-parse", "--git-dir"], cwd) ?? ".git");
@@ -65,7 +77,7 @@ export function detectGitContext(cwd: string): GitContext {
   // whatever branch it happens to have checked out.
   const worktree = isMain ? "main" : basename(top);
 
-  return { project, worktree, isMain, root: top };
+  return { project, worktree, isMain, root: top, mainRoot: isMain ? top : fallbackDir };
 }
 
 /** Ids of every live worktree of the repo at `cwd`: "main" plus each directory basename. */

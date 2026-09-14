@@ -7,12 +7,8 @@ import { ANN_INDEX_MIN_ROWS, EMBEDDING_MODEL, TABLE_SUFFIX, VECTOR_DIM } from ".
 import { readTableMeta, writeTableMeta } from "./meta.js";
 import { buildSourcePredicates } from "./batch-delete.js";
 import type { TableMeta } from "./meta.js";
+import { sanitizeProject } from "./table-name.js";
 import type { Chunk, SearchResult, VectorStore, SymbolKind } from "../types.js";
-
-/** Sanitize project name for use as table name. */
-function sanitizeProject(project: string): string {
-  return project.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 64);
-}
 
 const SYMBOL_KINDS = new Set<SymbolKind>([
   "function", "method", "class", "interface", "type",

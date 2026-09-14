@@ -1,11 +1,11 @@
 import { join } from "node:path";
 import { stat } from "node:fs/promises";
+import { metaFileName } from "./table-name.js";
 
 export interface TableMeta { model: string; dim: number; }
 
 function metaPath(dbPath: string, project: string): string {
-  const safe = project.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 64);
-  return join(dbPath, `${safe}.meta.json`);
+  return join(dbPath, metaFileName(project));
 }
 
 interface CacheEntry { value: TableMeta | null; mtimeMs: number | null; }

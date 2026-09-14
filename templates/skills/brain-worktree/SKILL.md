@@ -36,6 +36,14 @@ the MCP server refuses to boot in an uninitialized worktree instead of minting a
 graph there. Both turn a silent lie into a message that names the fix. Your job is to run
 the fix before the agent hits it.
 
+Its own brain no longer means building one from scratch. `init` in a linked worktree
+copies the main checkout's vectors, manifest and graph first, then syncs the difference —
+every path stored in those artefacts is repository-relative, so they describe any checkout
+of the repository equally well. Measured on this repository: 2m38s down to 2.1s, because
+only the files that actually differ get embedded. It copies nothing when the main checkout
+has no index, when the worktree already has one, or when the two would disagree about the
+embedding model, and a full index in those cases is the correct answer, not a failure.
+
 ## The one identifier rule
 
 `project-brain worktree status --json` returns both spellings. They are not

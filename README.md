@@ -194,7 +194,7 @@ These five are thin wrappers over the CLI. **project-brain does not install them
 | `/brain-okf` | *(none — host skill)* | Write an OKF concept: the reasoning behind code, anchored to a verified symbol and checkable by `okf audit` |
 | `/brain-commit` | *(none — host skill)* | Write a commit message in the convention the repository's own log already shows |
 | `/brain-record` | *(none — host skill)* | Record the flow a branch touches as video evidence for a PR or ticket |
-| `/brain-worktree` | *(none — host skill)* | Give an isolated worktree its own index and its own leased port |
+| `/brain-worktree` | *(none — host skill)* | Give an isolated worktree its own index (seeded from the main checkout) and its own leased port |
 | `brain-style` | *(none — host skill)* | Keep written code declarative: a comment only where it says something the code cannot |
 
 Unlike the `/brain-*` commands above, these have no CLI equivalent. They are **host skills**: the logic lives in `SKILL.md` and runs inside the assistant, which calls project-brain's MCP tools to do the work. That is what lets `brain-audit` answer "is this export dead?" with `find_callers` instead of guessing from a grep, and what lets `brain-okf` verify an anchor with `find_symbol` before writing it.
@@ -310,6 +310,14 @@ project-brain setup --none
 ```
 
 Run `project-brain setup --with=nope` to print the list of valid ids.
+
+#### Worktrees start from the main checkout's index
+
+`init` inside a linked git worktree copies the main checkout's vectors, manifest and graph before indexing, then syncs only what differs. Every path those artefacts store is repository-relative, so one checkout's index describes another equally well, and sync re-hashes each file anyway — a stale or wrong-branch base costs a few extra embeddings, never a wrong index.
+
+On this repository that took a worktree's first index from 2m38s to 2.1s.
+
+It copies nothing, and indexes normally, when the main checkout has no index, when the worktree already has one, or when the two would disagree about the embedding model. Vectors from a different model are not comparable, and that is the one case sync could not correct on its own.
 
 #### chrome-devtools autoConnect
 

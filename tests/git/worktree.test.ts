@@ -163,3 +163,40 @@ describe("listLiveWorktrees", () => {
     expect(listLiveWorktrees(dir)).toEqual([]);
   });
 });
+
+describe("mainRoot", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "pb-wt-main-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("points a linked worktree at the checkout it branched from", async () => {
+    const repo = join(dir, "myrepo");
+    await mkdir(repo);
+    await makeRepo(repo);
+    const wt = join(dir, "feature");
+    git(repo, "worktree", "add", "-q", wt, "-b", "feature");
+
+    const ctx = detectGitContext(wt);
+    expect(ctx.isMain).toBe(false);
+    expect(ctx.mainRoot).toBe(detectGitContext(repo).root);
+    expect(ctx.mainRoot).not.toBe(ctx.root);
+  });
+
+  it("is the checkout itself for a main checkout", async () => {
+    const repo = join(dir, "myrepo");
+    await mkdir(repo);
+    await makeRepo(repo);
+
+    const ctx = detectGitContext(repo);
+    expect(ctx.mainRoot).toBe(ctx.root);
+  });
+
+  it("is the directory itself outside any repository", async () => {
+    const ctx = detectGitContext(dir);
+    expect(ctx.mainRoot).toBe(dir);
+  });
+});
