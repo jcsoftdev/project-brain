@@ -139,3 +139,27 @@ describe("recovering from a server that has grown", () => {
     expect(restartCommand("systemd")).toContain("systemctl --user restart");
   });
 });
+
+describe("reading back a service someone already installed", () => {
+  it("recovers the argv of a plist and a systemd unit, spaces included", async () => {
+    const { launchdPlist, systemdUnit, serviceArgv, bridgeArgv } = await import(MOD);
+    const spaced = { ...spec, command: ["/opt/my node/bin/node", "chrome-devtools-mcp", "--autoConnect"] };
+
+    expect(serviceArgv("launchd", launchdPlist(spaced))).toEqual(bridgeArgv(spaced));
+    expect(serviceArgv("systemd", systemdUnit(spaced))).toEqual(bridgeArgv(spaced));
+  });
+
+  it("answers null for a service with no command it can read", async () => {
+    const { serviceArgv } = await import(MOD);
+    expect(serviceArgv("launchd", "<plist><dict></dict></plist>")).toBeNull();
+    expect(serviceArgv("systemd", "[Service]\nRestart=always\n")).toBeNull();
+  });
+
+  it("knows the server behind the bridge from the argv", async () => {
+    const { servedChromeArgs } = await import(MOD);
+    const argv = ["/bin/mcp-proxy", "--port", "39100", "--", "node", "/x/chrome-devtools-mcp-main.js", "--autoConnect"];
+
+    expect(servedChromeArgs(argv)).toEqual(["/x/chrome-devtools-mcp-main.js", "--autoConnect"]);
+    expect(servedChromeArgs(["/bin/some-other-daemon", "--flag"])).toBeNull();
+  });
+});

@@ -217,3 +217,45 @@ export function restartCommand(kind: "launchd" | "systemd"): string {
     ? `launchctl kickstart -k gui/$(id -u)/${SERVICE_LABEL}`
     : `systemctl --user restart ${SERVICE_LABEL}`;
 }
+
+function unxml(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * The argv a service definition runs, or null when it names none.
+ *
+ * Read back rather than trusted from our own state file because the service
+ * that matters may not be ours: a user who put chrome-devtools behind a bridge
+ * by hand already has what this unit installs, under a label of their own, and
+ * setup has to see that instead of reporting nothing there.
+ */
+export function serviceArgv(kind: "launchd" | "systemd", text: string): string[] | null {
+  if (kind === "launchd") {
+    const array = text.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+    if (!array) return null;
+    return [...array[1]!.matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => unxml(m[1]!));
+  }
+
+  const exec = text.match(/^ExecStart=(.+)$/m);
+  if (!exec) return null;
+  return [...exec[1]!.matchAll(/"((?:[^"\\]|\\.)*)"|(\S+)/g)].map((m) =>
+    m[1] !== undefined ? m[1].replace(/\\"/g, '"') : m[2]!
+  );
+}
+
+/**
+ * The chrome-devtools-mcp arguments inside a service's argv, from the package
+ * token onward, or null when the service runs something else. That tail is the
+ * shape `entryAutoConnectState` reads, so the flag question is answered the
+ * same way for a service as for a host entry.
+ */
+export function servedChromeArgs(argv: string[]): string[] | null {
+  const at = argv.findIndex((token) => token.toLowerCase().includes("chrome-devtools-mcp"));
+  return at === -1 ? null : argv.slice(at);
+}

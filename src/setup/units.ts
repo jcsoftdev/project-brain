@@ -32,6 +32,12 @@ export interface SetupContext {
    * real default" in production.
    */
   routingConfigPath?: string;
+  /**
+   * Overrides the per-user service directory (LaunchAgents or systemd user
+   * units), for the same reason as `routingConfigPath`: tests must not read or
+   * write the real one.
+   */
+  serviceDir?: string;
 }
 
 /**
@@ -589,9 +595,16 @@ export function otherUnits(): SetupUnit[] {
         );
         const actionable = states.filter((s) => s !== "unsupported");
 
-        // No host runs the server, or every entry already answers the question
-        // some other way. Either way there is nothing here to offer.
-        if (actionable.length === 0) return "unavailable";
+        // No entry left to edit. When a shared service runs the server instead,
+        // the flag lives in that service's command, so answer from there rather
+        // than claiming the machine cannot do it.
+        if (actionable.length === 0) {
+          const service = await findSharedChromeService(ctx);
+          if (!service) return "unavailable";
+          return entryAutoConnectState({ args: service.chromeArgs }) === "present"
+            ? "current"
+            : "foreign";
+        }
         return actionable.every((s) => s === "present") ? "current" : "absent";
       },
 
@@ -669,7 +682,12 @@ export function otherUnits(): SetupUnit[] {
         // that would keep spawning its own server.
         const stillSpawning = (await chromeDevtoolsEntries(ctx)).length > 0;
 
-        if (await sharedServiceInstalled()) {
+        const service = await findSharedChromeService(ctx);
+        // A bridge installed by hand does the same job under another label. It
+        // is theirs: reported so, and never uninstalled from here.
+        if (service && !service.ours) return "foreign";
+
+        if (service) {
           // The service is up but some host was never moved across, so the
           // machine is paying for both arrangements at once.
           return stillSpawning ? "stale" : "current";
@@ -818,18 +836,86 @@ function servicePath(...bins: string[]): string {
   );
 }
 
-async function sharedServiceFile(kind: "launchd" | "systemd"): Promise<string> {
-  const { SERVICE_LABEL } = await import("./chrome-shared-server.js");
+function serviceDir(kind: "launchd" | "systemd", ctx?: SetupContext): string {
+  if (ctx?.serviceDir) return ctx.serviceDir;
   return kind === "launchd"
-    ? `${process.env.HOME}/Library/LaunchAgents/${SERVICE_LABEL}.plist`
-    : `${process.env.HOME}/.config/systemd/user/${SERVICE_LABEL}.service`;
+    ? `${process.env.HOME}/Library/LaunchAgents`
+    : `${process.env.HOME}/.config/systemd/user`;
 }
 
-async function sharedServiceInstalled(): Promise<boolean> {
-  const { serviceKindFor } = await import("./chrome-shared-server.js");
+async function sharedServiceFile(
+  kind: "launchd" | "systemd",
+  ctx?: SetupContext
+): Promise<string> {
+  const { SERVICE_LABEL } = await import("./chrome-shared-server.js");
+  return `${serviceDir(kind, ctx)}/${SERVICE_LABEL}.${kind === "launchd" ? "plist" : "service"}`;
+}
+
+/**
+ * The per-user service that runs chrome-devtools-mcp, ours or anyone's.
+ *
+ * Ours is checked first, so a machine carrying both reports the one this unit
+ * can manage. A definition we cannot parse is skipped, not guessed at.
+ */
+async function findSharedChromeService(
+  ctx: SetupContext
+): Promise<{ file: string; ours: boolean; chromeArgs: string[] } | null> {
+  const { serviceKindFor, serviceArgv, servedChromeArgs } = await import(
+    "./chrome-shared-server.js"
+  );
   const kind = serviceKindFor(process.platform);
-  if (!kind) return false;
-  return await Bun.file(await sharedServiceFile(kind)).exists();
+  if (!kind) return null;
+
+  const { readdir } = await import("node:fs/promises");
+  const dir = serviceDir(kind, ctx);
+  const ours = await sharedServiceFile(kind, ctx);
+  const ext = kind === "launchd" ? ".plist" : ".service";
+
+  let names: string[];
+  try {
+    names = (await readdir(dir)).filter((n) => n.endsWith(ext));
+  } catch {
+    return null;
+  }
+  const files = names.map((n) => `${dir}/${n}`).sort((a, b) => Number(b === ours) - Number(a === ours));
+
+  for (const file of files) {
+    let text: string;
+    try {
+      text = await Bun.file(file).text();
+    } catch {
+      continue;
+    }
+    const argv = serviceArgv(kind, text);
+    const chromeArgs = argv ? servedChromeArgs(argv) : null;
+    if (!chromeArgs) continue;
+
+    // A service no host points at is not what any session uses — it may be a
+    // leftover, or somebody else's — so it answers nothing about this setup.
+    const port = argv![argv!.indexOf("--port") + 1];
+    if (port && (await hostsPointAt(ctx, port))) {
+      return { file, ours: file === ours, chromeArgs };
+    }
+  }
+  return null;
+}
+
+/** True when some detected host has an MCP entry whose URL is on `port`. */
+async function hostsPointAt(ctx: SetupContext, port: string): Promise<boolean> {
+  for (const registrar of ctx.installed) {
+    const target = registrar.mcpConfigTarget?.();
+    if (!target) continue;
+    try {
+      const config = JSON.parse(await Bun.file(target.path).text());
+      const entries = Object.values(config?.[target.containerKey] ?? {}) as any[];
+      if (entries.some((e) => typeof e?.url === "string" && e.url.includes(`:${port}/`))) {
+        return true;
+      }
+    } catch {
+      // Absent or unparseable: no evidence either way, so no evidence.
+    }
+  }
+  return false;
 }
 
 async function installSharedService(

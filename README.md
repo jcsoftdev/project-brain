@@ -353,6 +353,8 @@ The bridge is [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy), installed 
 
 The command moves across **verbatim**, so whatever flags you already answered for — `--autoConnect` included — carry over, and this unit decides none of them. Removing it restores each entry from a record written at install rather than reconstructing a command.
 
+If a host already points at a bridge you set up yourself, under any service name, setup reads that service's command instead. autoConnect then shows `current` when the flag is in that command (`foreign` when it isn't; edit it there), and this unit shows `foreign`: the service is yours, and setup never installs over it or removes it. A service counts only when some host entry's URL uses its `--port`.
+
 Two limits worth knowing. Sharing the server shares its state: one page list visible to every session, one profile, and process-level flags (`--headless`, `--viewport`, `--blockedUrlPattern`) that can no longer differ per session; `--pageIdRouting`, on by default, is what stops sessions from acting on each other's tabs. And collapsing N attachments to one does not bound how large that one grows — a single attached server was the 1.6 GB measurement — so setup prints the restart command for your platform when it finishes.
 
 #### Model routing for sub-agents

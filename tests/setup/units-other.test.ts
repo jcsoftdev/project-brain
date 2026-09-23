@@ -18,6 +18,7 @@ async function context(): Promise<SetupContext> {
     recordConnection: { mode: "fresh", cdpPort: 9222 },
     hookStrict: { routing: false, worktree: false },
     skipOllama: true,
+    serviceDir: join(dir, "services"),
   };
 }
 
@@ -324,5 +325,65 @@ describe("commit attribution unit", () => {
     await unit.apply(ctx);
     await unit.remove(ctx);
     expect(JSON.parse(await Bun.file(ctx.claudeSettingsPath).text())).toEqual(mine);
+  });
+});
+
+describe("a shared chrome-devtools service that is already running", () => {
+  // Written in whatever format this platform's service manager reads, under a
+  // label that is not ours — the case of a bridge someone set up by hand.
+  async function withService(chromeArgs: string[]) {
+    const { launchdPlist, systemdUnit, serviceKindFor, SERVICE_LABEL } = await import(
+      "../../src/setup/chrome-shared-server.js"
+    );
+    const kind = serviceKindFor(process.platform);
+    const ctx = await context();
+    ctx.serviceDir = join(ctx.dataDir, "services");
+    const spec = {
+      port: 39100,
+      bridgeBin: "/bin/mcp-proxy",
+      command: ["/bin/node", ...chromeArgs],
+      logPath: "/tmp/x.log",
+      path: "/bin",
+    };
+    const text = (kind === "launchd" ? launchdPlist(spec) : systemdUnit(spec)).replace(
+      SERVICE_LABEL,
+      "com.someone.chrome"
+    );
+    await Bun.write(join(ctx.serviceDir, `com.someone.chrome.${kind === "launchd" ? "plist" : "service"}`), text);
+
+    const hostConfig = join(ctx.dataDir, "claude.json");
+    await Bun.write(
+      hostConfig,
+      JSON.stringify({ mcpServers: { "chrome-devtools": { type: "http", url: "http://127.0.0.1:39100/mcp" } } })
+    );
+    ctx.installed = [jsonHost("Claude Code", hostConfig)];
+    return { ctx, kind };
+  }
+
+  it("reports autoConnect current when the service command carries the flag", async () => {
+    const { ctx, kind } = await withService(["chrome-devtools-mcp", "--autoConnect"]);
+    if (!kind) return;
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const unit = otherUnits().find((u) => u.id === "config:chrome-autoconnect")!;
+
+    expect(await unit.inspect(ctx)).toBe("current");
+  });
+
+  it("reports autoConnect foreign when the service lacks it — the flag lives in their file", async () => {
+    const { ctx, kind } = await withService(["chrome-devtools-mcp"]);
+    if (!kind) return;
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const unit = otherUnits().find((u) => u.id === "config:chrome-autoconnect")!;
+
+    expect(await unit.inspect(ctx)).toBe("foreign");
+  });
+
+  it("reports a shared server someone else installed as theirs, not as not available", async () => {
+    const { ctx, kind } = await withService(["chrome-devtools-mcp", "--autoConnect"]);
+    if (!kind) return;
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const unit = otherUnits().find((u) => u.id === "service:chrome-shared-server")!;
+
+    expect(await unit.inspect(ctx)).toBe("foreign");
   });
 });
