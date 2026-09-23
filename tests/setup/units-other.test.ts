@@ -227,3 +227,60 @@ describe("allUnits", () => {
     }
   });
 });
+
+describe("auto-compact window unit", () => {
+  async function unitAndContext() {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const { AUTO_COMPACT_WINDOW } = await import("../../src/setup/auto-compact.js");
+    const unit = otherUnits().find((u) => u.id === "config:auto-compact")!;
+    return { unit, ctx: await context(), window: AUTO_COMPACT_WINDOW };
+  }
+
+  it("is checked by default — the full window is the exception, not the rule", async () => {
+    const { unit } = await unitAndContext();
+    expect(unit.defaultSelected).toBe(true);
+    expect(unit.group).toBe("Other");
+  });
+
+  it("goes absent -> current -> absent without touching the rest of settings.json", async () => {
+    const { unit, ctx, window } = await unitAndContext();
+    await Bun.write(ctx.claudeSettingsPath, JSON.stringify({ model: "opus", env: { FOO: "1" } }));
+
+    expect(await unit.inspect(ctx)).toBe("absent");
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("current");
+    expect(JSON.parse(await Bun.file(ctx.claudeSettingsPath).text())).toEqual({
+      model: "opus",
+      env: { FOO: "1" },
+      autoCompactWindow: window,
+    });
+
+    await unit.remove(ctx);
+    expect(await unit.inspect(ctx)).toBe("absent");
+    expect(JSON.parse(await Bun.file(ctx.claudeSettingsPath).text())).toEqual({
+      model: "opus",
+      env: { FOO: "1" },
+    });
+  });
+
+  it("treats a window the user chose as theirs: never overwritten, never removed", async () => {
+    const { unit, ctx } = await unitAndContext();
+    await Bun.write(ctx.claudeSettingsPath, JSON.stringify({ autoCompactWindow: 700000 }));
+
+    expect(await unit.inspect(ctx)).toBe("foreign");
+    await unit.apply(ctx);
+    await unit.remove(ctx);
+    expect(JSON.parse(await Bun.file(ctx.claudeSettingsPath).text())).toEqual({
+      autoCompactWindow: 700000,
+    });
+  });
+
+  it("refuses to touch a settings.json that is not valid JSON", async () => {
+    const { unit, ctx } = await unitAndContext();
+    await Bun.write(ctx.claudeSettingsPath, "{ nope");
+
+    expect(await unit.inspect(ctx)).toBe("foreign");
+    await unit.apply(ctx);
+    expect(await Bun.file(ctx.claudeSettingsPath).text()).toBe("{ nope");
+  });
+});

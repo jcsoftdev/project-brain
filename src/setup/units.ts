@@ -480,6 +480,54 @@ export function otherUnits(): SetupUnit[] {
       },
     },
     {
+      id: "config:auto-compact",
+      group: "Other",
+      label: "Auto-compact at 400K",
+      description:
+        "compacts long Claude Code sessions near 400K tokens instead of 967K to spend less of the plan; `claude --autocompact 1000000` restores the full window for one session",
+      defaultSelected: true,
+
+      async inspect(ctx): Promise<UnitState> {
+        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+        if (settings === "unparseable") return "foreign";
+        const { autoCompactState } = await import("./auto-compact.js");
+        return autoCompactState(settings);
+      },
+
+      async apply(ctx): Promise<void> {
+        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+        if (settings === "unparseable") {
+          console.warn(
+            `Warning: ${ctx.claudeSettingsPath} is not valid JSON — auto-compact window not set.`
+          );
+          return;
+        }
+        const { autoCompactState, withAutoCompact, FULL_WINDOW_HINT } = await import(
+          "./auto-compact.js"
+        );
+        if (autoCompactState(settings) !== "absent") return;
+
+        await Bun.write(
+          ctx.claudeSettingsPath,
+          `${JSON.stringify(withAutoCompact(settings), null, 2)}\n`
+        );
+        console.log(
+          `\nAuto-compact: sessions now compact near 400K tokens. For a task that needs the ` +
+            `whole window, start it with:\n  ${FULL_WINDOW_HINT}`
+        );
+      },
+
+      async remove(ctx): Promise<void> {
+        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+        if (settings === "unparseable" || settings === null) return;
+        const { withoutAutoCompact } = await import("./auto-compact.js");
+        await Bun.write(
+          ctx.claudeSettingsPath,
+          `${JSON.stringify(withoutAutoCompact(settings), null, 2)}\n`
+        );
+      },
+    },
+    {
       id: "config:chrome-autoconnect",
       group: "Other",
       label: "chrome-devtools autoConnect",
@@ -532,6 +580,8 @@ export function otherUnits(): SetupUnit[] {
         // The flag is half of it. Chrome refuses the connection until the user
         // flips the toggle themselves, so saying so here is not a nicety — it
         // is the difference between a working setup and a silent failure later.
+        // The cost note rides along for the same reason: it is discovered as a
+        // multi-gigabyte process weeks later unless it is said here.
         if (changed) {
           console.log(
             `\nchrome-devtools autoConnect: open ${TOGGLE_URL} in your Chrome and turn on ` +
@@ -556,56 +606,6 @@ export function otherUnits(): SetupUnit[] {
         }
       },
     },
-  ];
-}
-
-/**
- * Every chrome-devtools MCP entry across the detected hosts' JSON configs.
- *
- * A host with no `mcpConfigTarget` (Codex, whose server map is TOML that only
- * its own CLI may rewrite) is skipped rather than guessed at, and an absent or
- * unparseable config yields nothing instead of throwing: this runs during
- * `inspect`, where the honest answer to "can't read it" is "nothing to offer".
- */
-async function chromeDevtoolsTargets(
-  ctx: SetupContext
-): Promise<Array<{ path: string; containerKey: string; names: string[]; entries: any[] }>> {
-  const { findChromeDevtoolsEntries } = await import("./chrome-autoconnect.js");
-  const targets = [];
-
-  for (const registrar of ctx.installed) {
-    const target = registrar.mcpConfigTarget?.();
-    if (!target) continue;
-
-    let config: Record<string, any>;
-    try {
-      config = JSON.parse(await Bun.file(target.path).text());
-        // The cost note rides along for the same reason: it is discovered as a
-        // multi-gigabyte process weeks later unless it is said here.
-    } catch {
-      continue;
-    }
-
-    const found = findChromeDevtoolsEntries(config, target.containerKey);
-    targets.push({
-      path: target.path,
-      containerKey: target.containerKey,
-      names: found.map(([name]) => name),
-      entries: found.map(([, entry]) => entry),
-    });
-  }
-
-  return targets;
-}
-
-/** The [name, entry] pairs alone, for the states `inspect` reports on. */
-async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, any]>> {
-  const targets = await chromeDevtoolsTargets(ctx);
-  return targets.flatMap((t) => t.names.map((name, i) => [name, t.entries[i]] as [string, any]));
-}
-
-/**
- * Every unit setup can offer, in display order.
     {
       id: "service:chrome-shared-server",
       group: "Other",
@@ -733,9 +733,9 @@ async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, 
         await rm(statePath, { force: true });
       },
     },
- *
- * Hosts come first because everything below them depends on a host existing:
- * a skills root comes from a detected tool, and both hook units are Claude
+  ];
+}
+
 /** The port the bridge listens on, from the recorded state or the default. */
 async function sharedServerPort(ctx: SetupContext): Promise<number> {
   const { DEFAULT_PORT } = await import("./chrome-shared-server.js");
@@ -841,6 +841,54 @@ async function uninstallSharedService(kind: "launchd" | "systemd"): Promise<void
   await rm(await sharedServiceFile(kind), { force: true });
 }
 
+/**
+ * Every chrome-devtools MCP entry across the detected hosts' JSON configs.
+ *
+ * A host with no `mcpConfigTarget` (Codex, whose server map is TOML that only
+ * its own CLI may rewrite) is skipped rather than guessed at, and an absent or
+ * unparseable config yields nothing instead of throwing: this runs during
+ * `inspect`, where the honest answer to "can't read it" is "nothing to offer".
+ */
+async function chromeDevtoolsTargets(
+  ctx: SetupContext
+): Promise<Array<{ path: string; containerKey: string; names: string[]; entries: any[] }>> {
+  const { findChromeDevtoolsEntries } = await import("./chrome-autoconnect.js");
+  const targets = [];
+
+  for (const registrar of ctx.installed) {
+    const target = registrar.mcpConfigTarget?.();
+    if (!target) continue;
+
+    let config: Record<string, any>;
+    try {
+      config = JSON.parse(await Bun.file(target.path).text());
+    } catch {
+      continue;
+    }
+
+    const found = findChromeDevtoolsEntries(config, target.containerKey);
+    targets.push({
+      path: target.path,
+      containerKey: target.containerKey,
+      names: found.map(([name]) => name),
+      entries: found.map(([, entry]) => entry),
+    });
+  }
+
+  return targets;
+}
+
+/** The [name, entry] pairs alone, for the states `inspect` reports on. */
+async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, any]>> {
+  const targets = await chromeDevtoolsTargets(ctx);
+  return targets.flatMap((t) => t.names.map((name, i) => [name, t.entries[i]] as [string, any]));
+}
+
+/**
+ * Every unit setup can offer, in display order.
+ *
+ * Hosts come first because everything below them depends on a host existing:
+ * a skills root comes from a detected tool, and both hook units are Claude
  * Code's.
  */
 export function allUnits(ctx: SetupContext): SetupUnit[] {

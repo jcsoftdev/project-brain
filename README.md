@@ -319,6 +319,12 @@ On this repository that took a worktree's first index from 2m38s to 2.1s.
 
 It copies nothing, and indexes normally, when the main checkout has no index, when the worktree already has one, or when the two would disagree about the embedding model. Vectors from a different model are not comparable, and that is the one case sync could not correct on its own.
 
+#### Auto-compact window
+
+Setup sets Claude Code's `autoCompactWindow` to 400K tokens (`config:auto-compact`, checked by default). Every request re-sends the whole conversation, and those cache reads count against your plan. A 1M-context model left on its default compacts near 967K, so a long session keeps re-reading a far larger context than the work needs. With the cap it compacts near 387K. 200K models aren't affected.
+
+If you already set `autoCompactWindow` to a value of your own, setup reports it as foreign and leaves it alone. To use the full window for one session, start it with `claude --autocompact 1000000`. The setting ranks below that flag, which is why setup doesn't write the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env var: the env var outranks the flag and would take the option away.
+
 #### chrome-devtools autoConnect
 
 If a detected host runs the [chrome-devtools MCP server](https://github.com/ChromeDevTools/chrome-devtools-mcp) without `--autoConnect`, setup offers to add it (`config:chrome-autoconnect`). Without the flag those browser tools launch a throwaway, logged-out Chrome profile; with it they drive the Chrome you are already signed into, which is the only way to reach a flow behind a login.
@@ -326,12 +332,6 @@ If a detected host runs the [chrome-devtools MCP server](https://github.com/Chro
 It is the one unit that ships **unchecked**, on purpose. Attaching to your own browser is full control of it, and Chrome says so on the toggle the flag depends on: it "allows external apps to request full control of this browser. This includes read access to your saved data, cookies and site data, and the ability to navigate to any URL."
 
 The flag is only half of it — Chrome refuses the connection until you open `chrome://inspect/#remote-debugging` and turn on "Allow remote debugging for this browser instance" yourself. Setup never flips that toggle; it prints the step after writing the flag. Entries already wired another way (`--browserUrl`, `--wsEndpoint`) or explicitly opted out (`--no-auto-connect`) are left untouched.
-
-#### Model routing for sub-agents
-
-Setup also writes model-routing guidance into each detected host's rules file: which **tier** — `fast`, `balanced`, or `deep` — a delegated sub-agent should run at for a given kind of task, and how to set that tier *on that host*.
-
-Tiers rather than model names, because four of the six supported hosts default sub-agents to inheriting the parent's model and set the model in an agent-definition file rather than at the call — so "pass the `model` param" is true on Claude Code and false almost everywhere else. Each host gets its own text:
 
 It also costs something the config file does not show, so setup prints that too. An attached server holds the CDP connection for its whole life and buffers what the browser reports on it across every tab; nothing releases it early, because your own Chrome outlives the session. Measured on one machine: two servers attached for ~2 days reached 1.6 GB and 742 MB of RSS, and kept growing after Chrome had been closed. And a host runs one MCP server **per session**, so the flag written once buys one attachment per open session — six sessions is six of them. Restarting a session is what frees its attachment.
 
@@ -348,6 +348,12 @@ The bridge is [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy), installed 
 The command moves across **verbatim**, so whatever flags you already answered for — `--autoConnect` included — carry over, and this unit decides none of them. Removing it restores each entry from a record written at install rather than reconstructing a command.
 
 Two limits worth knowing. Sharing the server shares its state: one page list visible to every session, one profile, and process-level flags (`--headless`, `--viewport`, `--blockedUrlPattern`) that can no longer differ per session; `--pageIdRouting`, on by default, is what stops sessions from acting on each other's tabs. And collapsing N attachments to one does not bound how large that one grows — a single attached server was the 1.6 GB measurement — so setup prints the restart command for your platform when it finishes.
+
+#### Model routing for sub-agents
+
+Setup also writes model-routing guidance into each detected host's rules file: which **tier** — `fast`, `balanced`, or `deep` — a delegated sub-agent should run at for a given kind of task, and how to set that tier *on that host*.
+
+Tiers rather than model names, because four of the six supported hosts default sub-agents to inheriting the parent's model and set the model in an agent-definition file rather than at the call — so "pass the `model` param" is true on Claude Code and false almost everywhere else. Each host gets its own text:
 
 | Host | Where the model is chosen |
 | --- | --- |
