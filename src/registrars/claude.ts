@@ -58,7 +58,9 @@ export class ClaudeRegistrar implements AIToolRegistrar {
     howToApply:
       "pass `model` on the Agent/Task call, or set `model:` in a sub-agent's frontmatter. " +
       "Omit it only when inheriting the session model is the deliberate choice. " +
-      "Workflow steps take the same value via `opts.model`, and `opts.effort` for the second axis.",
+      "Workflow steps take the same value via `opts.model`, and `opts.effort` for the second axis. " +
+      "`fable` sits above `deep` at about 2.5× its per-token price: use it only after `opus` " +
+      "failed on the task, or when the user asks for it.",
     labelField: "the Agent tool's `description` (and `opts.label` in Workflow scripts)",
     models: DEFAULT_HOST_MODELS.claude!,
   };

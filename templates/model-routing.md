@@ -27,9 +27,11 @@ stay there.
 
 ### Escalate, don't start deep
 
-Run the fast tier first. On a failed or empty result, retry one tier up. Two
-fast attempts plus one balanced still costs less than one deep attempt, and
-most delegations never need the escalation.
+Run the cheapest tier the task table allows. On a failed or empty result,
+retry one tier up. The escalation pays because most delegations never need it,
+not because the tiers are far apart in price — see Relative cost. A task the
+table already puts at `deep` goes there first: a wrong answer from a cheaper
+tier costs a retry plus the parent's turns spent acting on it.
 
 ### Verification must be asymmetric
 
@@ -42,8 +44,10 @@ better reader; it is a different one.
 
 Where the host exposes a reasoning-effort setting, raise it before raising the
 tier: balanced at high effort often beats deep at low effort, and costs less.
-Tier and effort are independent knobs, and only one of them is usually the
-answer.
+Current models at low or medium effort often match the previous generation at
+high, so start low for routine work and raise it only when the result falls
+short. Tier and effort are independent knobs, and only one of them is usually
+the answer.
 
 ### Run independent delegations in parallel
 
@@ -53,9 +57,11 @@ cost the same tokens as three in sequence, and a third of the wall-clock.
 
 ### Relative cost
 
-Order of magnitude, not a price list: fast ≈ 1×, balanced ≈ 5×, deep ≈ 25×.
-Enough to calibrate a decision, coarse enough to stay true after a price
-change.
+Per token, at list price: fast ≈ 1×, balanced ≈ 2×, deep ≈ 4×. The tiers are
+closer than they used to be, so the per-token price rarely settles the choice.
+What does is the tokens spent: a deeper tier at high effort thinks longer, and
+a cheap tier that gets it wrong costs a retry and the parent's turns acting on
+it. Judge by the cost of the finished task, not of one call.
 
 ### project-brain's own routing
 

@@ -89,6 +89,21 @@ describe("getModelRoutingSection", () => {
     }
   });
 
+  it("prices the tiers at today's ratios, not the 25x gap of older lineups", async () => {
+    const content = await getModelRoutingSection(registrars[0]!, mergeRoutingConfig(null));
+    expect(content).toContain("balanced ≈ 2×");
+    expect(content).not.toContain("deep ≈ 25×");
+  });
+
+  it("names Claude Code's model above deep only as an escalation", async () => {
+    const claude = eligible.find((r) => r.name === "Claude Code")!;
+    const content = await getModelRoutingSection(claude, mergeRoutingConfig(null));
+    expect(content).toContain("`fable`");
+    for (const r of eligible.filter((r) => r.name !== "Claude Code")) {
+      expect(await getModelRoutingSection(r, mergeRoutingConfig(null))).not.toContain("`fable`");
+    }
+  });
+
   it("reflects user overrides rather than the built-in table", async () => {
     const claude = eligible.find((r) => r.name === "Claude Code")!;
     const overridden = mergeRoutingConfig({
