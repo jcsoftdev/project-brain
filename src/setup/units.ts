@@ -298,6 +298,61 @@ function hookUnit(spec: {
 }
 
 /**
+ * A unit that owns one key in Claude Code's `settings.json`.
+ *
+ * A value already there that is not ours is `foreign` — the user's choice —
+ * so apply leaves it and remove never deletes it; only the exact value this
+ * unit writes is treated as ours.
+ */
+function settingsKeyUnit(spec: {
+  id: string;
+  label: string;
+  description: string;
+  defaultSelected: boolean;
+  load: () => Promise<{
+    state: (settings: Record<string, unknown> | null) => "absent" | "current" | "foreign";
+    apply: (settings: Record<string, unknown> | null) => Record<string, unknown>;
+    remove: (settings: Record<string, unknown>) => Record<string, unknown>;
+    notice?: string;
+  }>;
+}): SetupUnit {
+  return {
+    id: spec.id,
+    group: "Other",
+    label: spec.label,
+    description: spec.description,
+    defaultSelected: spec.defaultSelected,
+
+    async inspect(ctx) {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable") return "foreign";
+      return (await spec.load()).state(settings);
+    },
+
+    async apply(ctx) {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable") {
+        console.warn(
+          `Warning: ${ctx.claudeSettingsPath} is not valid JSON — ${spec.label} not applied.`
+        );
+        return;
+      }
+      const key = await spec.load();
+      if (key.state(settings) !== "absent") return;
+      await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(key.apply(settings), null, 2)}\n`);
+      if (key.notice) console.log(`\n${key.notice}`);
+    },
+
+    async remove(ctx) {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable" || settings === null) return;
+      const { remove } = await spec.load();
+      await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(remove(settings), null, 2)}\n`);
+    },
+  };
+}
+
+/**
  * The model-routing guidance and the two hook pairs.
  *
  * All three used to share one consent decision — the hooks rode on the answer
@@ -479,54 +534,41 @@ export function otherUnits(): SetupUnit[] {
         await rm(ctx.recordConfigPath, { force: true });
       },
     },
-    {
+    settingsKeyUnit({
       id: "config:auto-compact",
-      group: "Other",
       label: "Auto-compact at 400K",
       description:
         "compacts long Claude Code sessions near 400K tokens instead of 967K to spend less of the plan; `claude --autocompact 1000000` restores the full window for one session",
       defaultSelected: true,
-
-      async inspect(ctx): Promise<UnitState> {
-        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
-        if (settings === "unparseable") return "foreign";
-        const { autoCompactState } = await import("./auto-compact.js");
-        return autoCompactState(settings);
+      load: async () => {
+        const m = await import("./auto-compact.js");
+        return {
+          state: m.autoCompactState,
+          apply: m.withAutoCompact,
+          remove: m.withoutAutoCompact,
+          notice:
+            `Auto-compact: sessions now compact near 400K tokens. For a task that needs the ` +
+            `whole window, start it with:\n  ${m.FULL_WINDOW_HINT}`,
+        };
       },
-
-      async apply(ctx): Promise<void> {
-        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
-        if (settings === "unparseable") {
-          console.warn(
-            `Warning: ${ctx.claudeSettingsPath} is not valid JSON — auto-compact window not set.`
-          );
-          return;
-        }
-        const { autoCompactState, withAutoCompact, FULL_WINDOW_HINT } = await import(
-          "./auto-compact.js"
-        );
-        if (autoCompactState(settings) !== "absent") return;
-
-        await Bun.write(
-          ctx.claudeSettingsPath,
-          `${JSON.stringify(withAutoCompact(settings), null, 2)}\n`
-        );
-        console.log(
-          `\nAuto-compact: sessions now compact near 400K tokens. For a task that needs the ` +
-            `whole window, start it with:\n  ${FULL_WINDOW_HINT}`
-        );
+    }),
+    settingsKeyUnit({
+      id: "config:no-commit-attribution",
+      label: "No commit attribution",
+      description:
+        "stops Claude Code appending Co-Authored-By and Claude-Session trailers to commits and PRs",
+      // Unchecked: it changes what every commit and PR says, in every repo on
+      // the machine, and some teams want the trailer. That is theirs to decide.
+      defaultSelected: false,
+      load: async () => {
+        const m = await import("./commit-attribution.js");
+        return {
+          state: m.attributionState,
+          apply: m.withoutAttribution,
+          remove: m.withAttributionRestored,
+        };
       },
-
-      async remove(ctx): Promise<void> {
-        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
-        if (settings === "unparseable" || settings === null) return;
-        const { withoutAutoCompact } = await import("./auto-compact.js");
-        await Bun.write(
-          ctx.claudeSettingsPath,
-          `${JSON.stringify(withoutAutoCompact(settings), null, 2)}\n`
-        );
-      },
-    },
+    }),
     {
       id: "config:chrome-autoconnect",
       group: "Other",

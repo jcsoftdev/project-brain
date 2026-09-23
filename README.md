@@ -325,6 +325,12 @@ Setup sets Claude Code's `autoCompactWindow` to 400K tokens (`config:auto-compac
 
 If you already set `autoCompactWindow` to a value of your own, setup reports it as foreign and leaves it alone. To use the full window for one session, start it with `claude --autocompact 1000000`. The setting ranks below that flag, which is why setup doesn't write the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env var: the env var outranks the flag and would take the option away.
 
+#### Commit attribution
+
+Claude Code appends `Co-Authored-By` and `Claude-Session: <link>` trailers to the commits and PRs it writes. The harness adds them, not the model, so a rule in a skill can't keep them out. `config:no-commit-attribution` sets `"attribution": {"commit": "", "pr": ""}` in `~/.claude/settings.json`, and that stops them.
+
+It ships **unchecked**: it changes what every commit and PR says in every repo on the machine, and some teams want the trailer. Attribution text you already wrote is reported as foreign and left alone.
+
 #### chrome-devtools autoConnect
 
 If a detected host runs the [chrome-devtools MCP server](https://github.com/ChromeDevTools/chrome-devtools-mcp) without `--autoConnect`, setup offers to add it (`config:chrome-autoconnect`). Without the flag those browser tools launch a throwaway, logged-out Chrome profile; with it they drive the Chrome you are already signed into, which is the only way to reach a flow behind a login.

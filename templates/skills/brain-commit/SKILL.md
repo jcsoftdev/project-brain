@@ -58,7 +58,7 @@ The shape is the easy half. These are what make a message look native:
 - **Trailing period.** Copy the dominant choice. Most repos omit it.
 - **Subject length.** Match the observed median rather than a textbook 50 characters.
 - **Body presence.** If most non-trivial commits carry a body, write one. If the log is subjects-only, do not start a new tradition unprompted.
-- **Trailers.** Reuse only trailers that already appear (`Refs:`, `Closes #`, `BREAKING CHANGE:`). **Never add AI or co-author attribution unless the history already shows it** — introducing `Co-Authored-By` into a repo that has never used it is a visible, unrequested change to the project's record.
+- **Trailers.** Reuse only trailers that already appear (`Refs:`, `Closes #`, `BREAKING CHANGE:`). **Never add AI or co-author attribution unless the history already shows it** — introducing `Co-Authored-By` into a repo that has never used it is a visible, unrequested change to the project's record. A `Co-Authored-By` or `Claude-Session:` line the host appends on its own is not yours to write or strip; `project-brain setup` turns it off through the `config:no-commit-attribution` unit.
 
 ## Step 3 — Write the message about the change
 

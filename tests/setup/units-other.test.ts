@@ -284,3 +284,45 @@ describe("auto-compact window unit", () => {
     expect(await Bun.file(ctx.claudeSettingsPath).text()).toBe("{ nope");
   });
 });
+
+describe("commit attribution unit", () => {
+  async function unitAndContext() {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const unit = otherUnits().find((u) => u.id === "config:no-commit-attribution")!;
+    return { unit, ctx: await context() };
+  }
+
+  it("ships unchecked — it rewrites what every commit and PR says, in every repo", async () => {
+    const { unit } = await unitAndContext();
+    expect(unit.defaultSelected).toBe(false);
+    expect(unit.group).toBe("Other");
+  });
+
+  it("goes absent -> current -> absent without touching the rest of settings.json", async () => {
+    const { unit, ctx } = await unitAndContext();
+    await Bun.write(ctx.claudeSettingsPath, JSON.stringify({ model: "opus" }));
+
+    expect(await unit.inspect(ctx)).toBe("absent");
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("current");
+    expect(JSON.parse(await Bun.file(ctx.claudeSettingsPath).text())).toEqual({
+      model: "opus",
+      attribution: { commit: "", pr: "" },
+    });
+
+    await unit.remove(ctx);
+    expect(await unit.inspect(ctx)).toBe("absent");
+    expect(JSON.parse(await Bun.file(ctx.claudeSettingsPath).text())).toEqual({ model: "opus" });
+  });
+
+  it("treats attribution text the user wrote as theirs: never overwritten, never removed", async () => {
+    const { unit, ctx } = await unitAndContext();
+    const mine = { attribution: { commit: "Assisted-by: Claude", pr: "" } };
+    await Bun.write(ctx.claudeSettingsPath, JSON.stringify(mine));
+
+    expect(await unit.inspect(ctx)).toBe("foreign");
+    await unit.apply(ctx);
+    await unit.remove(ctx);
+    expect(JSON.parse(await Bun.file(ctx.claudeSettingsPath).text())).toEqual(mine);
+  });
+});
