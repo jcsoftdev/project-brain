@@ -333,6 +333,22 @@ Setup also writes model-routing guidance into each detected host's rules file: w
 
 Tiers rather than model names, because four of the six supported hosts default sub-agents to inheriting the parent's model and set the model in an agent-definition file rather than at the call — so "pass the `model` param" is true on Claude Code and false almost everywhere else. Each host gets its own text:
 
+It also costs something the config file does not show, so setup prints that too. An attached server holds the CDP connection for its whole life and buffers what the browser reports on it across every tab; nothing releases it early, because your own Chrome outlives the session. Measured on one machine: two servers attached for ~2 days reached 1.6 GB and 742 MB of RSS, and kept growing after Chrome had been closed. And a host runs one MCP server **per session**, so the flag written once buys one attachment per open session — six sessions is six of them. Restarting a session is what frees its attachment.
+
+If that multiplication is the problem rather than the flag itself, the next unit converts it.
+
+#### chrome-devtools shared server
+
+`service:chrome-shared-server` replaces one server per session with one server for every session. It takes the command a detected host already runs, puts it behind an HTTP bridge held open by a login service, and rewrites each host entry to point at `http://127.0.0.1:39100/mcp`. Sessions then cost a client connection each; the machine carries one process and one CDP attachment.
+
+It is **unchecked** by default, and it is the only unit that installs an OS service (launchd on macOS, a systemd user unit on Linux; elsewhere it does not appear) and a Python tool. Both are answers to give on purpose.
+
+The bridge is [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy), installed with `uv` if it is missing. It calls `stdio_client` once at startup and reuses that session for every client, so all clients genuinely share one child, and its JSON-RPC ids cannot collide because it proxies at the MCP semantic layer rather than relaying bytes. Setup pins its SDK below 2: installed without that constraint, the tool resolves an SDK where `request_ctx` no longer exists and every invocation dies at import.
+
+The command moves across **verbatim**, so whatever flags you already answered for — `--autoConnect` included — carry over, and this unit decides none of them. Removing it restores each entry from a record written at install rather than reconstructing a command.
+
+Two limits worth knowing. Sharing the server shares its state: one page list visible to every session, one profile, and process-level flags (`--headless`, `--viewport`, `--blockedUrlPattern`) that can no longer differ per session; `--pageIdRouting`, on by default, is what stops sessions from acting on each other's tabs. And collapsing N attachments to one does not bound how large that one grows — a single attached server was the 1.6 GB measurement — so setup prints the restart command for your platform when it finishes.
+
 | Host | Where the model is chosen |
 | --- | --- |
 | Claude Code | per spawn — `model` on the Agent/Task call |

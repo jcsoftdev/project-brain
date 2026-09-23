@@ -7,7 +7,9 @@
  * a flow behind a login can be driven at all, and is also full control of that
  * browser. It is the same trade `brain-record`'s "live" mode makes, so it is
  * offered on the same terms: opt-in, never a default, and always shown next to
- * Chrome's own warning rather than a paraphrase of it.
+ * Chrome's own warning rather than a paraphrase of it — and next to what the
+ * attachment costs once it is running, which is the half nobody reads about
+ * until a session has grown to gigabytes.
  *
  * The flag alone does nothing. Chrome will not accept the connection until the
  * user flips the remote-debugging toggle in their own browser, and nothing here
@@ -25,6 +27,31 @@ export const REMOTE_DEBUGGING_WARNING =
   'Chrome\'s warning on that toggle: it "allows external apps to request full control of ' +
   'this browser. This includes read access to your saved data, cookies and site data, and ' +
   'the ability to navigate to any URL."';
+
+/**
+ * The second cost, the one the flag does not advertise.
+ *
+ * An attached server holds the CDP connection for its whole life and buffers
+ * what the browser reports on it — network, console, DOM — across every tab.
+ * Nothing releases it early: the user's own Chrome outlives any single session,
+ * so the disconnect that would free those buffers never comes. Measured on one
+ * machine, two servers attached for ~2 days reached 1.6 GB and 742 MB of RSS,
+ * and kept growing after Chrome itself had been closed.
+ *
+ * It also multiplies in a way the config file does not show. A host starts one
+ * MCP server process PER SESSION, so this flag — written once — buys one
+ * attachment per open session, not one in total. Six sessions is six
+ * attachments to the same browser, each growing on its own.
+ *
+ * Neither half is a reason to withhold the flag: a logged-in flow is sometimes
+ * the only flow there is. It is a reason to say so before someone opts in, next
+ * to the security trade, instead of after they find a multi-gigabyte process.
+ */
+export const ATTACHMENT_COST_NOTE =
+  "What it costs: an attached server never releases the connection, so it grows as it " +
+  "buffers what the browser reports — measured at 1.6 GB after ~2 days. A host runs one " +
+  "server per session, so this is one attachment per open session, not one in total. " +
+  "Restarting the session is what frees it.";
 
 /** What the flag looks like when we write it. Both spellings are read back. */
 const CANONICAL_FLAG = "--autoConnect";

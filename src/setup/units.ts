@@ -484,7 +484,7 @@ export function otherUnits(): SetupUnit[] {
       group: "Other",
       label: "chrome-devtools autoConnect",
       description:
-        "browser tools drive your logged-in Chrome instead of a fresh profile; needs the chrome://inspect toggle",
+        "browser tools drive your logged-in Chrome instead of a fresh profile; needs the chrome://inspect toggle, and costs one growing attachment per open session",
 
       // The only unit that ships unchecked. Every other one installs something
       // of ours; this one hands an MCP server full control of the browser the
@@ -506,8 +506,13 @@ export function otherUnits(): SetupUnit[] {
       },
 
       async apply(ctx): Promise<void> {
-        const { entryAutoConnectState, addAutoConnect, TOGGLE_URL, REMOTE_DEBUGGING_WARNING } =
-          await import("./chrome-autoconnect.js");
+        const {
+          entryAutoConnectState,
+          addAutoConnect,
+          TOGGLE_URL,
+          REMOTE_DEBUGGING_WARNING,
+          ATTACHMENT_COST_NOTE,
+        } = await import("./chrome-autoconnect.js");
         const { upsertJsonConfig } = await import("../registrars/json-config.js");
 
         let changed = false;
@@ -531,7 +536,7 @@ export function otherUnits(): SetupUnit[] {
           console.log(
             `\nchrome-devtools autoConnect: open ${TOGGLE_URL} in your Chrome and turn on ` +
               `"Allow remote debugging for this browser instance", then reconnect the MCP server.\n` +
-              REMOTE_DEBUGGING_WARNING
+              `${REMOTE_DEBUGGING_WARNING}\n${ATTACHMENT_COST_NOTE}`
           );
         }
       },
@@ -575,6 +580,8 @@ async function chromeDevtoolsTargets(
     let config: Record<string, any>;
     try {
       config = JSON.parse(await Bun.file(target.path).text());
+        // The cost note rides along for the same reason: it is discovered as a
+        // multi-gigabyte process weeks later unless it is said here.
     } catch {
       continue;
     }
@@ -599,9 +606,241 @@ async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, 
 
 /**
  * Every unit setup can offer, in display order.
+    {
+      id: "service:chrome-shared-server",
+      group: "Other",
+      label: "chrome-devtools shared server",
+      description:
+        "one chrome-devtools MCP process for every session instead of one per session; installs a login service",
+
+      // Unchecked for the same reason as autoConnect, plus one of its own: this
+      // is the only unit that installs an OS service and a Python tool. Both
+      // are answers a person should give on purpose.
+      defaultSelected: false,
+
+      async inspect(ctx): Promise<UnitState> {
+        const { serviceKindFor } = await import("./chrome-shared-server.js");
+        if (!serviceKindFor(process.platform)) return "unavailable";
+
+        // A replaced entry is an http entry, so it no longer answers to
+        // `isChromeDevtoolsEntry` — anything still listed here is a session
+        // that would keep spawning its own server.
+        const stillSpawning = (await chromeDevtoolsEntries(ctx)).length > 0;
+
+        if (await sharedServiceInstalled()) {
+          // The service is up but some host was never moved across, so the
+          // machine is paying for both arrangements at once.
+          return stillSpawning ? "stale" : "current";
+        }
+
+        // Nothing to move means nothing to offer: this unit only ever converts
+        // an arrangement that already exists.
+        return stillSpawning ? "absent" : "unavailable";
+      },
+
+      async apply(ctx): Promise<void> {
+        const mod = await import("./chrome-shared-server.js");
+        const { upsertJsonConfig } = await import("../registrars/json-config.js");
+        const kind = mod.serviceKindFor(process.platform);
+        if (!kind) return;
+
+        const bridgeBin = await ensureBridge();
+        if (!bridgeBin) {
+          console.warn(
+            `Warning: ${mod.BRIDGE_PACKAGE} is not installed and uv is not available to ` +
+              `install it. Skipping the shared chrome-devtools server.`
+          );
+          return;
+        }
+
+        // The command to share is the one the host already runs. Taking it
+        // verbatim means every flag the user already answered for — including
+        // autoConnect — moves across without this unit deciding any of them.
+        const targets = await chromeDevtoolsTargets(ctx);
+        const source = targets.flatMap((t) => t.entries).find((e) => Array.isArray(e?.args));
+        if (!source) return;
+
+        const resolved = Bun.which(source.command) ?? source.command;
+        const warning = mod.ephemeralPathWarning(resolved);
+        if (warning) {
+          console.warn(`Warning: ${warning}`);
+          return;
+        }
+
+        const port = await sharedServerPort(ctx);
+        const spec = {
+          port,
+          bridgeBin,
+          command: [resolved, ...source.args],
+          logPath: `${ctx.dataDir}/chrome-devtools-shared.log`,
+          path: servicePath(bridgeBin, resolved),
+        };
+
+        await installSharedService(kind, spec, mod);
+
+        // Remember what each entry was, so removal restores it rather than
+        // guessing a command back into existence.
+        const before: Record<string, Record<string, any>> = {};
+        for (const { path, containerKey, names } of targets) {
+          if (names.length === 0) continue;
+          before[path] = {};
+          await upsertJsonConfig(path, (config) => {
+            for (const name of names) {
+              before[path][name] = config[containerKey][name];
+              config[containerKey][name] = mod.sharedEntry(port);
+            }
+          });
+        }
+        await Bun.write(
+          `${ctx.dataDir}/chrome-shared-server.json`,
+          `${JSON.stringify({ port, before }, null, 2)}\n`
+        );
+
+        console.log(
+          `\nchrome-devtools shared server: one process now serves every session at ` +
+            `${mod.sharedUrl(port)}. Nothing bounds how large it grows, so restart it ` +
+            `between long stretches of browser work:\n  ${mod.restartCommand(kind)}`
+        );
+      },
+
+      async remove(ctx): Promise<void> {
+        const mod = await import("./chrome-shared-server.js");
+        const { upsertJsonConfig } = await import("../registrars/json-config.js");
+        const { rm } = await import("node:fs/promises");
+        const kind = mod.serviceKindFor(process.platform);
+        if (!kind) return;
+
+        await uninstallSharedService(kind);
+
+        const statePath = `${ctx.dataDir}/chrome-shared-server.json`;
+        let state: { before?: Record<string, Record<string, any>> } = {};
+        try {
+          state = JSON.parse(await Bun.file(statePath).text());
+        } catch {
+          // No record of what was there. The service is gone either way, and
+          // inventing an stdio entry would be worse than leaving the URL.
+          return;
+        }
+
+        for (const [path, entries] of Object.entries(state.before ?? {})) {
+          await upsertJsonConfig(path, (config) => {
+            for (const [name, entry] of Object.entries(entries)) {
+              const container = Object.keys(config).find((k) => config[k]?.[name]);
+              if (container) config[container][name] = entry;
+            }
+          });
+        }
+        await rm(statePath, { force: true });
+      },
+    },
  *
  * Hosts come first because everything below them depends on a host existing:
  * a skills root comes from a detected tool, and both hook units are Claude
+/** The port the bridge listens on, from the recorded state or the default. */
+async function sharedServerPort(ctx: SetupContext): Promise<number> {
+  const { DEFAULT_PORT } = await import("./chrome-shared-server.js");
+  try {
+    const state = JSON.parse(await Bun.file(`${ctx.dataDir}/chrome-shared-server.json`).text());
+    return typeof state.port === "number" ? state.port : DEFAULT_PORT;
+  } catch {
+    return DEFAULT_PORT;
+  }
+}
+
+/**
+ * `mcp-proxy` on PATH, installing it with uv if it is missing.
+ *
+ * uv puts tools in ~/.local/bin, which is not always on the PATH of the shell
+ * that ran setup, so the freshly installed binary is looked for there too
+ * rather than reported as a failed install.
+ */
+async function ensureBridge(): Promise<string | null> {
+  const { bridgeInstallArgs, BRIDGE_PACKAGE } = await import("./chrome-shared-server.js");
+
+  const found = Bun.which(BRIDGE_PACKAGE);
+  if (found) return found;
+
+  if (!Bun.which("uv")) return null;
+  const proc = Bun.spawn(["uv", ...bridgeInstallArgs()], { stdout: "inherit", stderr: "inherit" });
+  await proc.exited;
+
+  const fallback = `${process.env.HOME}/.local/bin/${BRIDGE_PACKAGE}`;
+  return Bun.which(BRIDGE_PACKAGE) ?? ((await Bun.file(fallback).exists()) ? fallback : null);
+}
+
+/** A PATH a login service can actually run with: it inherits almost nothing. */
+function servicePath(...bins: string[]): string {
+  const dirs = bins.map((b) => b.slice(0, b.lastIndexOf("/"))).filter(Boolean);
+  return [...new Set([...dirs, "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(
+    ":"
+  );
+}
+
+async function sharedServiceFile(kind: "launchd" | "systemd"): Promise<string> {
+  const { SERVICE_LABEL } = await import("./chrome-shared-server.js");
+  return kind === "launchd"
+    ? `${process.env.HOME}/Library/LaunchAgents/${SERVICE_LABEL}.plist`
+    : `${process.env.HOME}/.config/systemd/user/${SERVICE_LABEL}.service`;
+}
+
+async function sharedServiceInstalled(): Promise<boolean> {
+  const { serviceKindFor } = await import("./chrome-shared-server.js");
+  const kind = serviceKindFor(process.platform);
+  if (!kind) return false;
+  return await Bun.file(await sharedServiceFile(kind)).exists();
+}
+
+async function installSharedService(
+  kind: "launchd" | "systemd",
+  spec: any,
+  mod: typeof import("./chrome-shared-server.js")
+): Promise<void> {
+  const { mkdir } = await import("node:fs/promises");
+  const file = await sharedServiceFile(kind);
+  await mkdir(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+  await Bun.write(file, kind === "launchd" ? mod.launchdPlist(spec) : mod.systemdUnit(spec));
+
+  const uid = process.getuid?.() ?? 0;
+  const cmds =
+    kind === "launchd"
+      ? [
+          ["launchctl", "bootout", `gui/${uid}/${mod.SERVICE_LABEL}`],
+          ["launchctl", "bootstrap", `gui/${uid}`, file],
+        ]
+      : [
+          ["systemctl", "--user", "daemon-reload"],
+          ["systemctl", "--user", "enable", "--now", `${mod.SERVICE_LABEL}.service`],
+        ];
+
+  for (const cmd of cmds) {
+    // `bootout` fails when nothing is loaded yet, which is the normal first
+    // install — the bootstrap that follows is the one whose result matters.
+    try {
+      await Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" }).exited;
+    } catch {
+      /* reported by the bootstrap/enable that follows */
+    }
+  }
+}
+
+async function uninstallSharedService(kind: "launchd" | "systemd"): Promise<void> {
+  const { SERVICE_LABEL } = await import("./chrome-shared-server.js");
+  const { rm } = await import("node:fs/promises");
+  const uid = process.getuid?.() ?? 0;
+
+  const cmd =
+    kind === "launchd"
+      ? ["launchctl", "bootout", `gui/${uid}/${SERVICE_LABEL}`]
+      : ["systemctl", "--user", "disable", "--now", `${SERVICE_LABEL}.service`];
+
+  try {
+    await Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" }).exited;
+  } catch {
+    /* already gone */
+  }
+  await rm(await sharedServiceFile(kind), { force: true });
+}
+
  * Code's.
  */
 export function allUnits(ctx: SetupContext): SetupUnit[] {

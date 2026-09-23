@@ -130,4 +130,16 @@ describe("the warning shown before this mode is used", () => {
     expect(REMOTE_DEBUGGING_WARNING).toContain("saved data, cookies and site data");
     expect(REMOTE_DEBUGGING_WARNING).toContain("navigate to any URL");
   });
+
+  it("states the running cost too, not only the security trade", async () => {
+    const { ATTACHMENT_COST_NOTE } = await import("../../src/setup/chrome-autoconnect.js");
+
+    // The two facts someone needs BEFORE opting in: the attachment grows
+    // without releasing, and it is charged per session rather than once.
+    expect(ATTACHMENT_COST_NOTE).toContain("never releases");
+    expect(ATTACHMENT_COST_NOTE).toContain("per open session, not one in total");
+
+    // A measured figure, not an adjective — "large" would not have warned anyone.
+    expect(ATTACHMENT_COST_NOTE).toMatch(/\d+(\.\d+)?\s?GB/);
+  });
 });
