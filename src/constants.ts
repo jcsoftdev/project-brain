@@ -11,6 +11,15 @@ export const VECTOR_DIM = 768;
 /** Default embedding model name. */
 export const EMBEDDING_MODEL = "nomic-embed-text";
 
+/**
+ * Context window requested for every embed call. Left unset, Ollama loads the
+ * model at its full native context: qwen3-embedding:0.6b took 4 GB of memory at
+ * 32k tokens to embed chunks that never exceed ~4000 chars. Every caller must
+ * send the same value — a request with a different num_ctx makes Ollama reload
+ * the model.
+ */
+export const EMBED_NUM_CTX = 8192;
+
 /** Anthropic model used to generate commit-time conceptual summaries. */
 export const CONCEPT_LLM_MODEL = "claude-haiku-4-5";
 

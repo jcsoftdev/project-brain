@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach, mock, spyOn } from "bun:test";
-import { VECTOR_DIM, HEALTH_COOLDOWN_MS } from "../../src/constants.js";
+import { VECTOR_DIM, HEALTH_COOLDOWN_MS, EMBEDDING_MODEL, EMBED_NUM_CTX } from "../../src/constants.js";
+import { CAST_MAX_NON_WHITESPACE_CHARS } from "../../src/indexer/cast.js";
 
 // We'll test OllamaEmbeddingClient with a mock Ollama HTTP server
-import { OllamaEmbeddingClient, embedTimeoutMs } from "../../src/embeddings/ollama.js";
+import { OllamaEmbeddingClient, embedTimeoutMs, embedRequestBody } from "../../src/embeddings/ollama.js";
 
 // ---- FIX 1: embedTimeoutMs pure helper ----
 describe("embedTimeoutMs", () => {
@@ -47,9 +48,37 @@ function stopMockServer() {
   }
 }
 
+describe("embedRequestBody", () => {
+  it("caps the context window so Ollama does not reserve the model's full 32k KV cache", () => {
+    expect(embedRequestBody("m", ["a"])).toEqual({
+      model: "m",
+      input: ["a"],
+      truncate: true,
+      options: { num_ctx: EMBED_NUM_CTX },
+    });
+  });
+
+  it("gives the context room for the largest chunk the indexer produces", () => {
+    expect(EMBED_NUM_CTX).toBeGreaterThanOrEqual(CAST_MAX_NON_WHITESPACE_CHARS * 2);
+  });
+});
+
 describe("OllamaEmbeddingClient — embed()", () => {
   afterEach(() => {
     stopMockServer();
+  });
+
+  it("sends the capped context window on every request", async () => {
+    let body: unknown;
+    const host = startMockServer(async (req) => {
+      body = await req.json();
+      return new Response(JSON.stringify({ embeddings: [new Array(VECTOR_DIM).fill(0.5)] }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await new OllamaEmbeddingClient(host).embed(["hello"]);
+    expect(body).toEqual(embedRequestBody(EMBEDDING_MODEL, ["hello"]));
   });
 
   it("returns array of vectors on success", async () => {

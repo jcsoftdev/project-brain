@@ -1,5 +1,5 @@
 import { resolveModel, DEFAULT_MODEL_KEY } from "./registry.js";
-import { OllamaEmbeddingClient } from "./ollama.js";
+import { OllamaEmbeddingClient, embedRequestBody } from "./ollama.js";
 import { NullEmbeddingClient } from "./null.js";
 import { EmbeddingPool } from "./pool.js";
 import type { EmbeddingClient } from "../types.js";
@@ -312,7 +312,7 @@ function makeDefaultEmbedFn(host: string, model: string): EmbedFn {
       const response = await fetch(`${host}/api/embed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model, input: texts }),
+        body: JSON.stringify(embedRequestBody(model, texts)),
         signal: AbortSignal.timeout(10_000),
       });
       if (!response.ok) return null;

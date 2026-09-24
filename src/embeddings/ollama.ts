@@ -1,6 +1,11 @@
-import { EMBEDDING_MODEL, HEALTH_COOLDOWN_MS, VECTOR_DIM } from "../constants.js";
+import { EMBED_NUM_CTX, EMBEDDING_MODEL, HEALTH_COOLDOWN_MS, VECTOR_DIM } from "../constants.js";
 import type { EmbeddingClient } from "../types.js";
 import { supportsMrl, truncateAndNormalize } from "./mrl.js";
+
+/** The one `/api/embed` payload shape, shared by every caller so they never disagree on num_ctx. */
+export function embedRequestBody(model: string, texts: string[]) {
+  return { model, input: texts, truncate: true, options: { num_ctx: EMBED_NUM_CTX } };
+}
 
 /**
  * Compute embed request timeout in ms, scaling with input size.
@@ -95,7 +100,7 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
         response = await fetch(`${this.host}/api/embed`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: this.model, input: texts }),
+          body: JSON.stringify(embedRequestBody(this.model, texts)),
           signal: AbortSignal.timeout(embedTimeoutMs(texts.length)),
         });
       } catch (err) {
