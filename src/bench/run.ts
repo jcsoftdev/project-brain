@@ -1,10 +1,17 @@
-import { rankOf, recallAtK, meanReciprocalRank, type Rank } from "./metrics.js";
+import { rankOfAny, recallAtK, meanReciprocalRank, type Rank } from "./metrics.js";
 
 export interface BenchQuery {
   /** The natural-language question, exactly as a user would ask it. */
   query: string;
-  /** Repo-relative path of the source that SHOULD be retrieved. */
-  expect: string;
+  /**
+   * Repo-relative path(s) of the source(s) that SHOULD be retrieved.
+   *
+   * A single string for the common case (one query, one gold file) and an
+   * array when several files legitimately answer the same query — a commit
+   * that touched more than one file, for instance. A hit is ANY of them
+   * appearing in the results; the rank used for MRR is the best of the two.
+   */
+  expect: string | string[];
 }
 
 export interface BenchResult extends BenchQuery {
@@ -46,10 +53,17 @@ export function parseQueries(text: string): BenchQuery[] {
     }
 
     const entry = parsed as Partial<BenchQuery>;
-    if (typeof entry.query !== "string" || typeof entry.expect !== "string") {
-      throw new Error(`bench: line ${i + 1} needs both "query" and "expect" strings`);
+    const expectOk =
+      typeof entry.expect === "string" ||
+      (Array.isArray(entry.expect) &&
+        entry.expect.length > 0 &&
+        entry.expect.every((e) => typeof e === "string"));
+    if (typeof entry.query !== "string" || !expectOk) {
+      throw new Error(
+        `bench: line ${i + 1} needs "query" (string) and "expect" (a non-empty string or string[])`
+      );
     }
-    out.push({ query: entry.query, expect: entry.expect });
+    out.push({ query: entry.query, expect: entry.expect as string | string[] });
   });
 
   return out;
@@ -80,7 +94,7 @@ export async function runBench(
     } catch {
       errors++;
     }
-    results.push({ ...q, rank: rankOf(sources, q.expect) });
+    results.push({ ...q, rank: rankOfAny(sources, q.expect) });
   }
 
   const ranks = results.map((r) => r.rank);

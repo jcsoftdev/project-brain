@@ -4,7 +4,15 @@ import { LanceDbStore } from "../store/lancedb.js";
 import { readTableMeta } from "../store/meta.js";
 import { createEmbeddingClient } from "../embeddings/factory.js";
 import { parseQueries, runBench, type BenchReport } from "../bench/run.js";
-import type { EmbeddingClient } from "../types.js";
+import { handleSearch } from "../tools/search.js";
+import type { EmbeddingClient, VectorStore } from "../types.js";
+
+/**
+ * "hybrid" measures `hybridSearch` alone — the retrieval signal in
+ * isolation, unaffected by threshold/MMR/budget. "full" runs the exact path
+ * `search_context` runs, so it scores what an agent actually receives.
+ */
+export type BenchPipeline = "hybrid" | "full";
 
 export interface BenchCommandOptions {
   project: string;
@@ -13,6 +21,8 @@ export interface BenchCommandOptions {
   /** Path to a JSONL ground-truth file: {"query": "...", "expect": "src/x.ts"}. */
   queriesPath: string;
   cutoffs?: number[];
+  /** Which path to measure. Defaults to "hybrid" — see BenchPipeline. */
+  pipeline?: BenchPipeline;
   /**
    * DI: embedding client to measure with. Defaults to one built from the
    * table's recorded model against OLLAMA_HOST.
@@ -26,6 +36,8 @@ export interface BenchCommandOptions {
    * was named" then passes while measuring nothing at all.
    */
   embeddings?: EmbeddingClient;
+  /** DI: vector store to measure against. Defaults to a LanceDbStore at dbPath. */
+  store?: VectorStore;
 }
 
 /**
@@ -36,16 +48,20 @@ export interface BenchCommandOptions {
  * on someone else's benchmark cannot tell you whether YOUR queries still
  * surface the right file after changing model, dimension or chunking.
  *
- * Deliberately measures hybridSearch alone, NOT the full search_context
- * pipeline: applyThreshold drops rows, MMR re-orders for diversity and the
- * token budget truncates, and all three are configuration-independent
- * post-processing. Including them would add noise to precisely the comparison
- * this exists to make.
+ * Defaults to measuring hybridSearch ALONE ("hybrid" pipeline), NOT the full
+ * search_context pipeline: applyThreshold drops rows, MMR re-orders for
+ * diversity and the token budget truncates, and all three are
+ * configuration-independent post-processing. Including them by default would
+ * add noise to precisely the comparison this exists to make when comparing
+ * embedding models or dimensions.
  *
  * That is a real coverage boundary, not a footnote: a defect confined to the
  * post-processing stage — a threshold that filters nothing, an MMR whose
- * relevance term has gone constant — cannot move these numbers, so a steady
- * recall score is NOT evidence that ranking is healthy end to end.
+ * relevance term has gone constant — cannot move the "hybrid" numbers, so a
+ * steady recall score there is NOT evidence that ranking is healthy end to
+ * end. Pass `pipeline: "full"` to measure the exact path search_context
+ * runs — what an agent actually receives — at the cost of conflating
+ * retrieval quality with post-processing behavior.
  */
 export async function benchCommand(
   options: BenchCommandOptions
@@ -56,8 +72,9 @@ export async function benchCommand(
     return { results: [], recall: {}, mrr: 0, errors: 0 };
   }
 
+  const pipeline = options.pipeline ?? "hybrid";
   const dbPath = options.dbPath ?? DB_PATH;
-  const store = new LanceDbStore(dbPath);
+  const store = options.store ?? new LanceDbStore(dbPath);
   const meta = await readTableMeta(dbPath, options.project);
   const embeddings = options.embeddings ?? await createEmbeddingClient(meta?.model, {
     host: OLLAMA_HOST,
@@ -70,20 +87,36 @@ export async function benchCommand(
     recordedDim: meta?.dim,
   });
 
-  const report = await runBench(
-    async (query, topK) => {
-      const vectors = await embeddings.embed([query]);
-      if (!vectors?.[0]) throw new Error("embedding unavailable");
-      const hits = await store.hybridSearch(options.project, vectors[0], query, topK);
-      return hits.map((h) => h.source);
-    },
-    queries,
-    { cutoffs: options.cutoffs }
-  );
+  // "full" reuses handleSearch — the SAME function search_context calls —
+  // instead of re-implementing threshold/MMR/budget here, so this can never
+  // drift from what the pipeline actually does.
+  const search =
+    pipeline === "full"
+      ? async (query: string, topK: number): Promise<string[]> => {
+          const result = await handleSearch(
+            { project: options.project, query, limit: Math.min(topK, 50) },
+            { store, embeddings }
+          );
+          if (result.isError) throw new Error("search_context pipeline errored");
+          const parsed = JSON.parse(result.content[0].text) as {
+            results?: Array<{ source: string }>;
+          };
+          return (parsed.results ?? []).map((r) => r.source);
+        }
+      : async (query: string, topK: number): Promise<string[]> => {
+          const vectors = await embeddings.embed([query]);
+          if (!vectors?.[0]) throw new Error("embedding unavailable");
+          const hits = await store.hybridSearch(options.project, vectors[0], query, topK);
+          return hits.map((h) => h.source);
+        };
 
-  // The configuration is part of the measurement — a recall number without the
-  // model and dimension that produced it cannot be compared to anything.
+  const report = await runBench(search, queries, { cutoffs: options.cutoffs });
+
+  // The configuration is part of the measurement — a recall number without
+  // the model, dimension and pipeline that produced it cannot be compared to
+  // anything.
   console.log(`project     ${options.project}`);
+  console.log(`pipeline    ${pipeline}`);
   console.log(`model       ${meta?.model ?? "(unknown)"} @ ${meta?.dim ?? "?"} dims`);
   console.log(`queries     ${queries.length}${report.errors ? ` (${report.errors} errored)` : ""}`);
   for (const k of Object.keys(report.recall).map(Number).sort((a, b) => a - b)) {
@@ -94,7 +127,10 @@ export async function benchCommand(
   const misses = report.results.filter((r) => r.rank === null);
   if (misses.length > 0) {
     console.log(`\nNot retrieved at all (${misses.length}):`);
-    for (const m of misses) console.log(`  ${m.expect}  <-  "${m.query}"`);
+    for (const m of misses) {
+      const expect = Array.isArray(m.expect) ? m.expect.join(", ") : m.expect;
+      console.log(`  ${expect}  <-  "${m.query}"`);
+    }
   }
 
   return report;

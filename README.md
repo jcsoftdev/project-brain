@@ -429,6 +429,19 @@ Check system health: Ollama availability, LanceDB status, and staleness of the i
 project-brain health
 ```
 
+### `bench` — measure retrieval quality
+
+Published embedding leaderboards score a different corpus and a different task. A percent-or-two delta on someone else's benchmark says nothing about whether YOUR queries still surface the right file after changing model, dimension or chunking — so `bench` measures against ground truth from *this* repository instead.
+
+```bash
+project-brain bench mine [--out .project-brain/bench/queries.jsonl] [--limit N]   # mine ground truth from git history
+project-brain bench .project-brain/bench/queries.jsonl [--project <id>] [--pipeline full|hybrid]
+```
+
+`bench mine` walks non-merge commits and turns each one into a query: the commit subject (plus a short first body paragraph) as the query, the files it changed as the expected source(s). It skips release/version-bump commits, mass edits (more than ~8 files), and commits that touched only non-indexed files (lockfiles, `package.json`, `CHANGELOG.md`). Deterministic — the same repo history mines the same file every time.
+
+`bench` then runs every query and reports recall@1/5/10 and MRR. `--pipeline hybrid` (default) measures `hybridSearch` alone — the retrieval signal in isolation. `--pipeline full` runs the exact path `search_context` runs (threshold + MMR + token budget), scoring what an agent actually receives, at the cost of conflating retrieval quality with post-processing behavior.
+
 ### `search`
 
 Search the indexed context and print compact results. Primarily used internally: `init` installs a `UserPromptSubmit` hook (`project-brain search --stdin`) in `.claude/settings.json` that auto-injects relevant context on every prompt, so retrieval is deterministic rather than relying on the AI to call a tool.

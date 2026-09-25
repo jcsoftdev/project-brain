@@ -30,6 +30,23 @@ export function rankOf(sources: string[], expected: string): Rank {
   return null;
 }
 
+/**
+ * Best (lowest) rank across several acceptable sources.
+ *
+ * A commit that touched several files is satisfied by retrieving ANY of
+ * them — the query was answered the moment the earliest gold file appeared,
+ * so scoring uses that rank rather than penalizing for the others.
+ */
+export function rankOfAny(sources: string[], expected: string | string[]): Rank {
+  const wants = Array.isArray(expected) ? expected : [expected];
+  let best: Rank = null;
+  for (const want of wants) {
+    const r = rankOf(sources, want);
+    if (r !== null && (best === null || r < best)) best = r;
+  }
+  return best;
+}
+
 /** Fraction of queries whose expected source appeared within the top k. */
 export function recallAtK(ranks: Rank[], k: number): number {
   if (ranks.length === 0) return 0;

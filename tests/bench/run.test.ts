@@ -27,6 +27,19 @@ describe("parseQueries", () => {
   it("rejects an entry missing query or expect", () => {
     expect(() => parseQueries('{"query":"a"}')).toThrow(/line 1/);
   });
+
+  it("accepts an array of expected sources for one query", () => {
+    const text = '{"query":"q","expect":["a.ts","b.ts"]}';
+    expect(parseQueries(text)).toEqual([{ query: "q", expect: ["a.ts", "b.ts"] }]);
+  });
+
+  it("rejects an expect array containing a non-string element", () => {
+    expect(() => parseQueries('{"query":"q","expect":["a.ts",1]}')).toThrow(/line 1/);
+  });
+
+  it("rejects an empty expect array", () => {
+    expect(() => parseQueries('{"query":"q","expect":[]}')).toThrow(/line 1/);
+  });
 });
 
 describe("runBench", () => {
@@ -69,5 +82,13 @@ describe("runBench", () => {
     const report = await runBench(flaky, queries);
     expect(report.results.map((r) => r.rank)).toEqual([1, null, null]);
     expect(report.errors).toBe(1);
+  });
+
+  it("scores a hit when ANY of several expected files ranks, not just the first", async () => {
+    // A commit that touched two files is satisfied by retrieving either one.
+    const multi = [{ query: "q", expect: ["src/missing.ts", "src/b.ts"] }];
+    const search2 = async () => ["src/z.ts", "src/b.ts"];
+    const report = await runBench(search2, multi);
+    expect(report.results[0]!.rank).toBe(2);
   });
 });

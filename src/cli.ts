@@ -105,7 +105,12 @@ Commands:
                        status [--json]   identity for project-brain and mcp-port-registry
                        prune [--dry-run] drop indexes of worktrees git no longer lists
   compact            Reclaim storage from old versions + deleted rows [--project <id>]
-  bench <file.jsonl> Measure retrieval quality (recall@k, MRR) for this index [--project <id>]
+  bench <file.jsonl> Measure retrieval quality (recall@k, MRR) for this index
+                       [--project <id>] [--pipeline full|hybrid] (default: hybrid)
+  bench mine         Mine ground truth from git history into a queries.jsonl
+                       [--out path] (default: .project-brain/bench/queries.jsonl) [--limit N]
+                       [--min-survival N] (default: 0.5 — drops gold files whose
+                         added lines mostly didn't survive to HEAD, per git blame)
   health             Check system health and staleness
   search "<query>"   Search indexed context (used by hooks); prints compact results
   update             Update project-brain to the latest published version
@@ -281,11 +286,17 @@ switch (command) {
     break;
   }
   case "bench": {
+    if (args[0] === "mine") {
+      const { execute } = await import("./commands/bench-mine.js");
+      await execute(args.slice(1));
+      break;
+    }
+
     const { benchCommand } = await import("./commands/bench.js");
     const { resolveProjectId, findProjectRoot } = await import("./commands/resolve-project.js");
     const queriesPath = args.find((a) => !a.startsWith("-"));
     if (!queriesPath) {
-      console.error("usage: project-brain bench <queries.jsonl> [--project <id>]");
+      console.error("usage: project-brain bench <queries.jsonl> [--project <id>] [--pipeline full|hybrid]");
       process.exit(1);
     }
     const flagIdx = args.indexOf("--project");
@@ -296,7 +307,13 @@ switch (command) {
       console.error("bench: not inside an indexed project — pass --project <id>");
       process.exit(1);
     }
-    await benchCommand({ project, queriesPath });
+    const pipelineIdx = args.indexOf("--pipeline");
+    const pipeline = pipelineIdx >= 0 ? args[pipelineIdx + 1] : undefined;
+    if (pipeline !== undefined && pipeline !== "full" && pipeline !== "hybrid") {
+      console.error(`bench: --pipeline must be "full" or "hybrid", got "${pipeline}"`);
+      process.exit(1);
+    }
+    await benchCommand({ project, queriesPath, pipeline });
     break;
   }
 
