@@ -8,6 +8,8 @@ import type { GraphStore } from "./graph/store.js";
 interface ServerDeps {
   store: VectorStore;
   embeddings: EmbeddingClient;
+  /** Per-project model resolver; forwarded so the watcher syncs with the table's own model. */
+  embeddingsFor?: (project: string) => Promise<EmbeddingClient>;
   /** Shared structural graph owned by the server; forwarded to runSync. */
   graph?: GraphStore;
 }
@@ -61,6 +63,7 @@ export async function maybeStartWatcher(
     projectId: config.projectId,
     store: deps.store,
     embeddings: deps.embeddings,
+    embeddingsFor: deps.embeddingsFor,
     graph: deps.graph,
   });
 

@@ -359,11 +359,35 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // writes made earlier in this same run.
     const priorPaths = new Set(manifestStore.listPaths());
 
-    // 2. Collect files to process
+    // 2. Ensure table exists (pass model+dim so metadata is stored correctly)
+    const tableMeta = embeddings.model
+      ? { model: embeddings.model, dim: embeddings.dim }
+      : undefined;
+    await store.ensureTable(projectId, tableMeta);
+
+    // The manifest records what was written, not what the table still holds. The
+    // table can be dropped or recreated underneath it — ensureTable on a dim change,
+    // delete_project, prune, a wiped data dir — and hash-gating would then skip every
+    // unchanged file forever. While the two agree, rows never undercount manifest
+    // chunks (chunk ids are unique per source; add_knowledge notes only add rows).
+    const manifestChunks = manifestStore.countChunks();
+    const storeRows = await store.countChunks(projectId);
+    const storeDesynced = storeRows < manifestChunks;
+    if (storeDesynced) {
+      process.stderr.write(
+        `[project-brain] vector store out of sync with manifest for '${projectId}' ` +
+          `(${storeRows} rows, manifest expects ${manifestChunks}); re-adding every file.\n`
+      );
+      manifestStore.clear();
+    }
+    // A repair has to see the whole tree, so it overrides the watcher's changed-file list.
+    const changedFiles = storeDesynced ? undefined : options.changedFiles;
+
+    // 3. Collect files to process
     onProgress?.({ phase: "scanning", current: 0, total: 0 });
     let filePaths: string[];
-    if (options.changedFiles && options.changedFiles.length > 0) {
-      filePaths = options.changedFiles.map((f) =>
+    if (changedFiles && changedFiles.length > 0) {
+      filePaths = changedFiles.map((f) =>
         f.startsWith("/") ? f : join(root, f)
       );
     } else {
@@ -400,12 +424,6 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
         }
       }
     }
-
-    // 3. Ensure table exists (pass model+dim so metadata is stored correctly)
-    const tableMeta = embeddings.model
-      ? { model: embeddings.model, dim: embeddings.dim }
-      : undefined;
-    await store.ensureTable(projectId, tableMeta);
 
     let ingested = 0;
     let skipped = 0;
@@ -956,7 +974,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // unprocessed file would be wiped. Keep both guards' empty-array semantics in
     // lockstep.
     let deleted = 0;
-    if (!options.changedFiles || options.changedFiles.length === 0) {
+    if (!changedFiles || changedFiles.length === 0) {
       // Normalize backslashes so these keys match the forward-slash manifest keys
       // (set during the read phase). Without this, on Windows EVERY manifest entry
       // misses currentRels and gets spuriously deleted.

@@ -173,7 +173,7 @@ switch (command) {
       const dbPath = process.env.BRAIN_DATA_DIR || undefined;
       const embedModel = process.env.BRAIN_EMBED_MODEL || undefined;
       const cwd = process.cwd();
-      const { server, store, embeddings, graph, foreignGraphs } = await createServer({ dbPath, embedModel, projectRoot: cwd });
+      const { server, store, embeddings, embeddingsFor, graph, foreignGraphs } = await createServer({ dbPath, embedModel, projectRoot: cwd });
 
       // Watch this project — but only if no other server already is. Several
       // MCP hosts open in one repo is ordinary, and each used to run its own
@@ -181,7 +181,7 @@ switch (command) {
       // Losing the election costs nothing: serving never depended on the
       // watcher, and the retry picks the root up if the winner dies.
       // Pass the server's shared graph so the watcher writes the SAME graph.db.
-      const watcher = await startWatchElection(cwd, { store, embeddings, graph });
+      const watcher = await startWatchElection(cwd, { store, embeddings, embeddingsFor, graph });
 
       // Graceful shutdown — closes the shared graph connection AND every
       // foreign project graph the structural tools opened along the way.

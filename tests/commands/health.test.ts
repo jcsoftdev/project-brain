@@ -136,4 +136,39 @@ describe("health command", () => {
       expect(result.lastError?.message).toBe("ollama unreachable");
     });
   });
+
+  describe("store vs manifest", () => {
+    let dir: string;
+    beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "pb-health-desync-")); });
+    afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+    it("flags a store holding fewer rows than the manifest says were written", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo", store: makeStore(382), embeddings: makeEmbeddings(true), dbPath: dir, manifestChunks: 1943,
+      });
+
+      expect(result.manifestChunks).toBe(1943);
+      expect(result.desynced).toBe(true);
+    });
+
+    it("does not flag extra rows, which knowledge notes legitimately add", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo", store: makeStore(3391), embeddings: makeEmbeddings(true), dbPath: dir, manifestChunks: 3389,
+      });
+
+      expect(result.desynced).toBe(false);
+    });
+
+    it("reports the model of the injected client, not a hardcoded default", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo", store: makeStore(1), dbPath: dir,
+        embeddings: { ...makeEmbeddings(true), model: "qwen3-embedding:0.6b" },
+      });
+
+      expect(result.model).toBe("qwen3-embedding:0.6b");
+    });
+  });
 });

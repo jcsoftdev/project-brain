@@ -187,5 +187,5 @@ export async function createServer(options: ServerOptions = {}) {
 
   // foreignGraphs is returned, not kept private: it holds live SQLite handles
   // the caller owns for the process lifetime and must release on shutdown.
-  return { server, store, embeddings, graph, foreignGraphs, toolNames, instructions: SERVER_INSTRUCTIONS };
+  return { server, store, embeddings, embeddingsFor, graph, foreignGraphs, toolNames, instructions: SERVER_INSTRUCTIONS };
 }

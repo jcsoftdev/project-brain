@@ -21,7 +21,7 @@ function makeMemoryStore(): VectorStore {
     },
     listModules: async () => [],
     getModuleChunks: async () => [],
-    countChunks: async () => 0,
+    countChunks: async (project: string) => (data.get(project) ?? []).length,
     optimize: async () => {},
     batchReplace: async (project: string, sources: string[], chunks: Chunk[]) => {
       const existing = (data.get(project) ?? []).filter((c) => !sources.includes(c.source));
@@ -213,13 +213,15 @@ test("unchanged file → parseFile not called on second sync", async () => {
   const { runSync } = await import("../../src/commands/sync.js");
 
   const parseFileSpy = spyOn(WasmParser.prototype, "parseFile");
+  // One store for both runs: a fresh one would no longer hold what the manifest recorded.
+  const store = makeMemoryStore();
 
   try {
     // First sync — file is new, parseFile should be called
     await runSync({
       root: tempDir,
       projectId: "test-graph-spy",
-      store: makeMemoryStore(),
+      store,
       embeddings: noopEmbeddings,
     });
 
@@ -233,7 +235,7 @@ test("unchanged file → parseFile not called on second sync", async () => {
     await runSync({
       root: tempDir,
       projectId: "test-graph-spy",
-      store: makeMemoryStore(),
+      store,
       embeddings: noopEmbeddings,
     });
 
@@ -405,13 +407,14 @@ test("incremental sync (changedFiles) does NOT call loadPatterns — that tree w
   const { runSync } = await import("../../src/commands/sync.js");
 
   const loadPatternsSpy = spyOn(gitignore, "loadPatterns");
+  const store = makeMemoryStore();
 
   try {
     // Prime the manifest with a full sync first (this legitimately calls loadPatterns).
     await runSync({
       root: tempDir,
       projectId: "test-skip-loadpatterns",
-      store: makeMemoryStore(),
+      store,
       embeddings: noopEmbeddings,
     });
     loadPatternsSpy.mockClear();
@@ -422,7 +425,7 @@ test("incremental sync (changedFiles) does NOT call loadPatterns — that tree w
     await runSync({
       root: tempDir,
       projectId: "test-skip-loadpatterns",
-      store: makeMemoryStore(),
+      store,
       embeddings: noopEmbeddings,
       changedFiles: ["one.ts"],
     });

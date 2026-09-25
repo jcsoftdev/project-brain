@@ -11,6 +11,8 @@ export interface HealthOptions {
   embeddings: EmbeddingClient;
   /** Base path to look up per-project last-error state. */
   dbPath: string;
+  /** Chunks the repo manifest says were written; omitted when the repo has no manifest. */
+  manifestChunks?: number;
 }
 
 export interface HealthResult {
@@ -18,6 +20,9 @@ export interface HealthResult {
   embeddings: "available" | "unavailable";
   model: string;
   chunks: number;
+  manifestChunks?: number;
+  /** The store holds fewer rows than the manifest recorded: sync would skip files that are not indexed. */
+  desynced: boolean;
   version: string;
   lastError?: LastError;
 }
@@ -27,7 +32,7 @@ export interface HealthResult {
  * Mirrors the check_health MCP tool but operates as a CLI command.
  */
 export async function runHealth(options: HealthOptions): Promise<HealthResult> {
-  const { projectId, store, embeddings, dbPath } = options;
+  const { projectId, store, embeddings, dbPath, manifestChunks } = options;
 
   const [embeddingsAvailable, chunks, lastError] = await Promise.all([
     embeddings.isAvailable(),
@@ -38,11 +43,30 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
   return {
     store: "connected",
     embeddings: embeddingsAvailable ? "available" : "unavailable",
-    model: EMBEDDING_MODEL,
+    model: embeddings.model ?? EMBEDDING_MODEL,
     chunks,
+    ...(manifestChunks !== undefined ? { manifestChunks } : {}),
+    desynced: manifestChunks !== undefined && chunks < manifestChunks,
     version: VERSION,
     ...(lastError ? { lastError } : {}),
   };
+}
+
+/** Read-only: health must not create a manifest in a repo that never had one. */
+async function readManifestChunks(root: string): Promise<number | undefined> {
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const path = join(root, ".project-brain", "manifest.db");
+  if (!existsSync(path)) return undefined;
+  const { Database } = await import("bun:sqlite");
+  const db = new Database(path, { readonly: true });
+  try {
+    return (db.query("SELECT COUNT(*) AS n FROM manifest_chunks").get() as { n: number }).n;
+  } catch {
+    return undefined;
+  } finally {
+    db.close();
+  }
 }
 
 /** CLI entry point for the health command. */
@@ -67,9 +91,15 @@ export async function execute(args: string[]): Promise<void> {
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
   const { createEmbeddingClient } = await import("../embeddings/factory.js");
   const store = new LanceDbStore(DB_PATH);
-  const embeddings = await createEmbeddingClient(process.env.BRAIN_EMBED_MODEL || undefined, { host: OLLAMA_HOST, autoPull: false });
+  const { readTableMeta } = await import("../store/meta.js");
+  const { resolveSyncModel } = await import("./sync.js");
+  const storedMeta = await readTableMeta(DB_PATH, projectId);
+  const embeddings = await createEmbeddingClient(
+    resolveSyncModel({ envModel: process.env.BRAIN_EMBED_MODEL || undefined, storedMeta }),
+    { host: OLLAMA_HOST, autoPull: false }
+  );
 
-  const result = await runHealth({ projectId, store, embeddings, dbPath: DB_PATH });
+  const result = await runHealth({ projectId, store, embeddings, dbPath: DB_PATH, manifestChunks: await readManifestChunks(root) });
 
   const storeIcon = result.store === "connected" ? "✓" : "✗";
   const embIcon = result.embeddings === "available" ? "✓" : "✗";
@@ -77,7 +107,10 @@ export async function execute(args: string[]): Promise<void> {
   console.log(`project-brain health`);
   console.log(`  ${storeIcon} Store:      ${result.store}`);
   console.log(`  ${embIcon} Embeddings: ${result.embeddings} (${result.model})`);
-  console.log(`  Chunks:     ${result.chunks}`);
+  console.log(`  Chunks:     ${result.chunks}${result.manifestChunks !== undefined ? ` (manifest: ${result.manifestChunks})` : ""}`);
+  if (result.desynced) {
+    console.log(`  ⚠ Store is missing chunks the manifest recorded — the next sync re-adds them, or run: project-brain reindex`);
+  }
   console.log(`  Version:    ${result.version}`);
   if (result.lastError) {
     const when = new Date(result.lastError.timestamp).toISOString();

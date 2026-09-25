@@ -19,7 +19,7 @@ function makeMemoryStore(): VectorStore {
     },
     listModules: async () => [],
     getModuleChunks: async () => [],
-    countChunks: async () => 0,
+    countChunks: async (project: string) => (data.get(project) ?? []).length,
     optimize: async () => {},
     batchReplace: async (project: string, sources: string[], chunks: Chunk[]) => {
       const existing = (data.get(project) ?? []).filter((c) => !sources.includes(c.source));

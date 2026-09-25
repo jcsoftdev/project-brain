@@ -34,7 +34,10 @@ export async function handleIngest(args: IngestArgs, deps: ToolDeps): Promise<To
   // ignores the worktree scoping — code chunks stay scoped, reasoning does not.
   const project = parseScopedProjectId(args.project).base;
 
-  const vectors = await deps.embeddings.embed([content]);
+  // The project's own model, not the server default: ensureTable drops a table whose
+  // dim differs, and the repo manifest would go on believing every file is indexed.
+  const embeddings = deps.embeddingsFor ? await deps.embeddingsFor(project) : deps.embeddings;
+  const vectors = await embeddings.embed([content]);
   if (!vectors) {
     return jsonResult({
       error: "Cannot ingest — embedding service unavailable.",
@@ -54,8 +57,8 @@ export async function handleIngest(args: IngestArgs, deps: ToolDeps): Promise<To
     updated_at: Date.now(),
   };
 
-  const tableMeta = deps.embeddings.model
-    ? { model: deps.embeddings.model, dim: deps.embeddings.dim }
+  const tableMeta = embeddings.model
+    ? { model: embeddings.model, dim: embeddings.dim }
     : undefined;
   await deps.store.ensureTable(project, tableMeta);
   await deps.store.upsert(project, [chunk]);

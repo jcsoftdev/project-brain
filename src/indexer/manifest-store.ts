@@ -22,6 +22,7 @@ export class ManifestStore {
   private insChunkStmt: ReturnType<Database["query"]>;
   private delFileStmt: ReturnType<Database["query"]>;
   private listStmt: ReturnType<Database["query"]>;
+  private countChunksStmt: ReturnType<Database["query"]>;
 
   constructor(root: string) {
     const dir = join(root, ".project-brain");
@@ -42,6 +43,7 @@ export class ManifestStore {
     );
     this.delFileStmt = this.db.query("DELETE FROM manifest_files WHERE path = $p");
     this.listStmt = this.db.query("SELECT path FROM manifest_files ORDER BY path");
+    this.countChunksStmt = this.db.query("SELECT COUNT(*) AS n FROM manifest_chunks");
 
     this.migrateJsonIfPresent(dir);
   }
@@ -101,6 +103,11 @@ export class ManifestStore {
 
   listPaths(): string[] {
     return (this.listStmt.all() as Array<{ path: string }>).map((r) => r.path);
+  }
+
+  /** Chunks the manifest claims are in the vector store. */
+  countChunks(): number {
+    return (this.countChunksStmt.get() as { n: number }).n;
   }
 
   clear(): void {

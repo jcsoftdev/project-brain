@@ -39,6 +39,12 @@ export interface WatcherOptions {
   store: VectorStore;
   /** Injected embedding client. */
   embeddings: EmbeddingClient;
+  /**
+   * The client for the model this project's table was built with, resolved per
+   * sync. Without it a server whose default model has a different dim makes
+   * ensureTable drop the project's table on the next save.
+   */
+  embeddingsFor?: (project: string) => Promise<EmbeddingClient>;
   /** Debounce delay in milliseconds. Defaults to WATCHER_DEBOUNCE_MS. */
   debounceMs?: number;
   /** Filesystem watch factory. Defaults to node:fs recursive watch. */
@@ -159,7 +165,8 @@ export function debounceSync(
  * incremental sync automatically.
  */
 export class FileWatcher {
-  private readonly options: Required<Omit<WatcherOptions, "graph">> & Pick<WatcherOptions, "graph">;
+  private readonly options: Required<Omit<WatcherOptions, "graph" | "embeddingsFor">> &
+    Pick<WatcherOptions, "graph" | "embeddingsFor">;
   private fsWatcher: WatchHandle | null = null;
   private readonly debounced: DebouncedSync;
 
@@ -228,11 +235,12 @@ export class FileWatcher {
 
   private async handleChanges(changedFiles: string[]): Promise<void> {
     try {
+      const { projectId, embeddingsFor } = this.options;
       await runSync({
         root: this.options.root,
-        projectId: this.options.projectId,
+        projectId,
         store: this.options.store,
-        embeddings: this.options.embeddings,
+        embeddings: embeddingsFor ? await embeddingsFor(projectId) : this.options.embeddings,
         changedFiles,
         graph: this.options.graph,
       });

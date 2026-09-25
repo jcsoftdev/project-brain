@@ -140,3 +140,41 @@ describe("add_knowledge — findability after removing per-note buildIndexes", (
     expect(results.some((r: any) => r.source === "auth.md")).toBe(true);
   });
 });
+
+describe("add_knowledge on a project indexed with a model other than the server default", () => {
+  let dir: string;
+  let store: LanceDbStore;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "pb-ingest-model-"));
+    store = new LanceDbStore(dir);
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const client = (model: string, dim: number): EmbeddingClient => ({
+    dim,
+    model,
+    embed: async (texts) => texts.map(() => new Array(dim).fill(0.1)),
+    isAvailable: async () => true,
+  });
+
+  it("embeds with the project's own model instead of dropping its table", async () => {
+    const projectModel = client("project-model", 16);
+    await store.ensureTable("demo", { model: "project-model", dim: 16 });
+    await store.upsert("demo", [{
+      id: "indexed-file-0", vector: new Array(16).fill(0.2), content: "indexed code",
+      source: "src/a.ts", module: "src", content_hash: "h", updated_at: 1,
+    }]);
+
+    const result = await handleIngest(
+      { project: "demo", content: "we chose X over Y", source: "decisions.md", module: "docs" },
+      { store, embeddings: client("server-default", 32), embeddingsFor: async () => projectModel }
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(await store.countChunks("demo")).toBe(2);
+  });
+});
