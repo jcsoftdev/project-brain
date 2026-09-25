@@ -32,3 +32,4 @@ someone a debugging session. It deliberately does **not** describe what the code
 * [Language.load ignores Bun's /$bunfs](/gotchas/language-load-ignores-bunfs.md) - why grammars load from bytes.
 * [new Worker() can throw synchronously](/gotchas/worker-constructor-throws.md) - why candidate fallback needs a try/catch.
 * [mockRejectedValueOnce rejects eagerly](/gotchas/mock-rejected-value-is-eager.md) - why an added await breaks the mock, not the code.
+* [Writes must embed with the table's model](/gotchas/writes-must-embed-with-the-tables-model.md) - why one knowledge note could hide most of the repo from search.
