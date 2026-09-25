@@ -154,4 +154,145 @@ describe("createGitClock", () => {
     // the dirty set was captured up front and is reused.
     expect(clock.lastChanged("src/a.ts").uncommitted).toBe(true);
   });
+
+  describe("range-scoped uncommitted", () => {
+    it("flags a ranged anchor as uncommitted only when a dirty hunk overlaps it", async () => {
+      // A large file with one unrelated edit must not mark every range-anchored
+      // concept in it stale with "uncommitted".
+      await initRepo();
+      await write("src/a.ts", numbered(20));
+      git(["add", "-A"]);
+      git(["commit", "-qm", "one"], T1);
+
+      const edited = numbered(20).split("\n");
+      edited[1] = "line 2 EDITED";
+      await write("src/a.ts", edited.join("\n"));
+
+      const clock = createGitClock(root);
+
+      expect(clock.lastChanged("src/a.ts", { start: 1, end: 5 }).uncommitted).toBe(true);
+      expect(clock.lastChanged("src/a.ts", { start: 15, end: 20 }).uncommitted).toBe(false);
+    });
+
+    it("sees a staged change via the combined diff against HEAD", async () => {
+      await initRepo();
+      await write("src/a.ts", numbered(20));
+      git(["add", "-A"]);
+      git(["commit", "-qm", "one"], T1);
+
+      const edited = numbered(20).split("\n");
+      edited[1] = "line 2 EDITED";
+      await write("src/a.ts", edited.join("\n"));
+      git(["add", "-A"]);
+
+      const change = createGitClock(root).lastChanged("src/a.ts", { start: 1, end: 5 });
+      expect(change.uncommitted).toBe(true);
+    });
+
+    it("treats an untracked file as uncommitted for a ranged anchor too", async () => {
+      // Untracked files have no HEAD blob to diff against, so hunks cannot be
+      // computed — they keep whole-file behaviour.
+      await initRepo();
+      await write("src/a.ts", numbered(5));
+      git(["add", "-A"]);
+      git(["commit", "-qm", "one"], T1);
+      await write("src/new.ts", numbered(5));
+
+      const change = createGitClock(root).lastChanged("src/new.ts", { start: 1, end: 2 });
+
+      expect(change.uncommitted).toBe(true);
+    });
+
+    it("treats a renamed file as uncommitted for a ranged anchor too", async () => {
+      await initRepo();
+      await write("src/old.ts", numbered(20));
+      git(["add", "-A"]);
+      git(["commit", "-qm", "one"], T1);
+      await rm(join(root, "src/old.ts"));
+      await write("src/renamed.ts", numbered(20));
+      git(["add", "-A"]);
+
+      const change = createGitClock(root).lastChanged("src/renamed.ts", { start: 15, end: 20 });
+
+      expect(change.uncommitted).toBe(true);
+    });
+
+    it("computes dirty hunks once per path, not once per anchor", async () => {
+      await initRepo();
+      await write("src/a.ts", numbered(20));
+      git(["add", "-A"]);
+      git(["commit", "-qm", "one"], T1);
+
+      const edited = numbered(20).split("\n");
+      edited[1] = "line 2 EDITED";
+      await write("src/a.ts", edited.join("\n"));
+
+      const clock = createGitClock(root);
+      clock.lastChanged("src/a.ts", { start: 1, end: 5 });
+      await write("src/a.ts", numbered(20));
+
+      // Restoring the file after the first call must not change the answer:
+      // the hunk list was captured on first use and is reused.
+      expect(clock.lastChanged("src/a.ts", { start: 1, end: 5 }).uncommitted).toBe(true);
+    });
+
+    it("still reports whole-file uncommitted when no range is given", async () => {
+      await initRepo();
+      await write("src/a.ts", numbered(20));
+      git(["add", "-A"]);
+      git(["commit", "-qm", "one"], T1);
+
+      const edited = numbered(20).split("\n");
+      edited[1] = "line 2 EDITED";
+      await write("src/a.ts", edited.join("\n"));
+
+      expect(createGitClock(root).lastChanged("src/a.ts").uncommitted).toBe(true);
+    });
+  });
+
+  describe("memoization by path + range", () => {
+    it("invokes git once for two anchors with identical path and range", async () => {
+      // findStale calls lastChanged() once per anchor, and a bundle routinely
+      // cites the same symbol from more than one concept — without a cache
+      // keyed on path+range, every repeat pays for its own subprocesses.
+      await initRepo();
+      await write("src/a.ts", numbered(20));
+      git(["add", "-A"]);
+      git(["commit", "-qm", "one"], T1);
+
+      let calls = 0;
+      const spawn = ((...args: Parameters<typeof spawnSync>) => {
+        calls++;
+        return spawnSync(...args);
+      }) as typeof spawnSync;
+
+      const clock = createGitClock(root, { spawn });
+      clock.lastChanged("src/a.ts", { start: 1, end: 5 });
+      const callsAfterFirst = calls;
+      const second = clock.lastChanged("src/a.ts", { start: 1, end: 5 });
+
+      expect(calls).toBe(callsAfterFirst);
+      expect(second.at).not.toBeNull();
+    });
+
+    it("still invokes git for a different range on the same path", async () => {
+      await initRepo();
+      await write("src/a.ts", numbered(20));
+      git(["add", "-A"]);
+      git(["commit", "-qm", "one"], T1);
+
+      let calls = 0;
+      const spawn = ((...args: Parameters<typeof spawnSync>) => {
+        calls++;
+        return spawnSync(...args);
+      }) as typeof spawnSync;
+
+      const clock = createGitClock(root, { spawn });
+      clock.lastChanged("src/a.ts", { start: 1, end: 5 });
+      const callsAfterFirst = calls;
+      clock.lastChanged("src/a.ts", { start: 10, end: 15 });
+
+      expect(calls).toBeGreaterThan(callsAfterFirst);
+    });
+  });
 });

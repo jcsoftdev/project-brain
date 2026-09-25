@@ -348,6 +348,71 @@ describe("auditBundle — staleness", () => {
     expect(report.unattested).toEqual(["g/a.md"]);
   });
 
+  it("flags a concept whose stale_after date has already passed", () => {
+    const report = auditBundle(
+      bundle([
+        concept("g/a.md", {
+          ...attested("2026-01-01T00:00:00Z"),
+          stale_after: "2026-03-01T00:00:00Z",
+        }),
+      ]),
+      LAYOUT,
+      {
+        graph: graphWithLoader(),
+        clock: clockOf({ "src/parser/wasm.ts": { at: "2026-01-01T00:00:00Z", uncommitted: false } }),
+        exists: onDisk("src/parser/wasm.ts"),
+        now: new Date("2026-06-01T00:00:00Z"),
+      }
+    );
+
+    expect(report.stale).toHaveLength(1);
+    expect(report.stale[0]).toMatchObject({
+      concept: "g/a.md",
+      reason: "expired",
+      expiresAt: "2026-03-01T00:00:00Z",
+    });
+  });
+
+  it("leaves a concept alone while its stale_after date is still in the future", () => {
+    const report = auditBundle(
+      bundle([
+        concept("g/a.md", {
+          ...attested("2026-01-01T00:00:00Z"),
+          stale_after: "2030-01-01T00:00:00Z",
+        }),
+      ]),
+      LAYOUT,
+      {
+        graph: graphWithLoader(),
+        clock: clockOf({ "src/parser/wasm.ts": { at: "2026-01-01T00:00:00Z", uncommitted: false } }),
+        exists: onDisk("src/parser/wasm.ts"),
+        now: new Date("2026-06-01T00:00:00Z"),
+      }
+    );
+
+    expect(report.stale).toEqual([]);
+  });
+
+  it("counts an expired concept toward the failing exit code like other stale reasons", () => {
+    const report = auditBundle(
+      bundle([
+        concept("g/a.md", {
+          ...attested("2026-01-01T00:00:00Z"),
+          stale_after: "2026-03-01T00:00:00Z",
+        }),
+      ]),
+      LAYOUT,
+      {
+        graph: graphWithLoader(),
+        clock: clockOf({ "src/parser/wasm.ts": { at: "2026-01-01T00:00:00Z", uncommitted: false } }),
+        exists: onDisk("src/parser/wasm.ts"),
+        now: new Date("2026-06-01T00:00:00Z"),
+      }
+    );
+
+    expect(report.broken.length === 0 && report.stale.length === 0).toBe(false);
+  });
+
   it("reports one concept once even when several of its anchors went stale", () => {
     const report = auditBundle(
       bundle([

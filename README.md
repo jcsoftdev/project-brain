@@ -462,7 +462,11 @@ project-brain okf validate [dir]           # conformance (SPEC §11). Offline.
 project-brain okf sync [dir]               # index the concepts so search returns them
 project-brain okf audit [dir]              # cross-check the bundle against the code graph
 project-brain okf audit --symbol <name>    # which concepts to re-read after <name> changes
+project-brain okf audit --json             # one JSON object instead of prose, for CI/tooling
+project-brain okf audit --judge            # ask Claude whether a stale finding's reasoning still holds
 ```
+
+`--judge` is opt-in and costs money: it sends `claude-opus-5` the concept's prose plus the actual code diff, for every `stale` finding where the code moved but the reasoning might not have (never for `uncommitted`, `expired`, or a broken anchor). Needs Anthropic credentials (`ANTHROPIC_API_KEY` or `ant auth login`) — without them the run aborts judging and falls back to the plain, unjudged audit. A "still holds" verdict never auto-attests; it only moves the finding into a non-failing `judged` backlog for a human to confirm with a `verified` entry.
 
 `init` writes `index.md` and `log.md` and stops — **no seeded concepts**, because a bundle shipped with examples makes the first `audit` report coverage gaps across the whole repo. Type directories appear when the first concept needs them.
 

@@ -1,8 +1,11 @@
 import { join } from "node:path";
+import Anthropic from "@anthropic-ai/sdk";
 import { OkfBundleError, readBundle } from "../okf/bundle.js";
 import { syncBundle, type SyncBundleDeps } from "../okf/sync.js";
 import type { OkfIssue } from "../okf/validate.js";
-import { auditBundle, impactedConcepts, type AuditGraph } from "../okf/audit.js";
+import { auditBundle, impactedConcepts, readSymbols, type AuditGraph, type StaleFinding } from "../okf/audit.js";
+import { applyJudgeVerdicts, judgeStaleFindings, type StaleJudge } from "../okf/judge.js";
+import { OKF_JUDGE_MODEL } from "../constants.js";
 import type { CodeClock } from "../git/last-changed.js";
 
 /**
@@ -113,7 +116,7 @@ async function refreshProjectRules(root: string): Promise<void> {
 function usage(): void {
   console.error(
     [
-      "Usage: project-brain okf <init|validate|sync|audit> [dir] [--symbol <name>]",
+      "Usage: project-brain okf <init|validate|sync|audit> [dir] [--symbol <name>] [--json] [--judge]",
       "",
       `  init       scaffold an empty bundle (index.md + log.md). Never overwrites.`,
       `  validate   check bundle conformance (SPEC v0.2 §11). Offline.`,
@@ -122,17 +125,25 @@ function usage(): void {
       `             stale knowledge, undocumented code, missing links.`,
       "",
       `  --symbol   with audit: name the concepts to re-read after <name> changes.`,
+      `  --json     with audit: print one JSON object instead of prose.`,
+      `  --judge    with audit: ask ${OKF_JUDGE_MODEL} whether each "code-changed"`,
+      `             stale finding's reasoning still holds. Opt-in — costs money,`,
+      `             needs Anthropic credentials, and never auto-attests.`,
       `  dir defaults to ./${DEFAULT_BUNDLE_DIR}`,
     ].join("\n")
   );
 }
 
 const SYMBOL_FLAG = "--symbol";
+const JSON_FLAG = "--json";
+const JUDGE_FLAG = "--judge";
 
-/** Splits positionals from `--symbol <name>` / `--symbol=<name>`, ignoring unknown flags. */
-function parseArgs(args: string[]): { positional: string[]; symbol?: string } {
+/** Splits positionals from `--symbol <name>` / `--symbol=<name>` / `--json` / `--judge`, ignoring unknown flags. */
+function parseArgs(args: string[]): { positional: string[]; symbol?: string; json: boolean; judge: boolean } {
   const positional: string[] = [];
   let symbol: string | undefined;
+  let json = false;
+  let judge = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === SYMBOL_FLAG) {
@@ -143,14 +154,22 @@ function parseArgs(args: string[]): { positional: string[]; symbol?: string } {
       symbol = arg.slice(SYMBOL_FLAG.length + 1);
       continue;
     }
+    if (arg === JSON_FLAG) {
+      json = true;
+      continue;
+    }
+    if (arg === JUDGE_FLAG) {
+      judge = true;
+      continue;
+    }
     if (!arg.startsWith("--")) positional.push(arg);
   }
-  return { positional, symbol };
+  return { positional, symbol, json, judge };
 }
 
 /** CLI entry point for the okf command. */
 export async function execute(args: string[]): Promise<void> {
-  const { positional, symbol } = parseArgs(args);
+  const { positional, symbol, json, judge } = parseArgs(args);
   const [action, dirArg] = positional;
   if (action !== "init" && action !== "validate" && action !== "sync" && action !== "audit") {
     usage();
@@ -203,12 +222,20 @@ export async function execute(args: string[]): Promise<void> {
     }
 
     try {
+      let judgeDeps: OkfAuditDeps["judge"];
+      if (judge) {
+        const { createClaudeJudge, createGitDiffFetcher } = await import("../okf/judge.js");
+        judgeDeps = { judge: createClaudeJudge(), diff: createGitDiffFetcher(root) };
+      }
+
       const { output, ok } = await runOkfAudit(dir, {
         graph,
         clock: createGitClock(root),
         exists: (relPath) => existsSync(join(root, relPath)),
         repoRoot: root,
         symbol,
+        json,
+        judge: judgeDeps,
       });
       console.log(output);
       if (!ok) process.exit(1);
@@ -249,6 +276,19 @@ export interface OkfAuditDeps {
   coverageLimit?: number;
   /** Report which concepts to re-read after this symbol changes. */
   symbol?: string;
+  /** Print one JSON object instead of prose. Exit code is unaffected. */
+  json?: boolean;
+  /**
+   * Opt-in Claude judgment of `code-changed` stale findings (`--judge`).
+   * Absent by default — judging costs money and needs live credentials.
+   */
+  judge?: {
+    judge: StaleJudge;
+    /** Diff evidence for one finding, or null when it could not be produced. */
+    diff(finding: StaleFinding): string | null;
+    concurrency?: number;
+    maxDiffChars?: number;
+  };
 }
 
 const RESOLUTION_REASON: Record<string, string> = {
@@ -278,7 +318,62 @@ export async function runOkfAudit(
   }
 
   const layout = { bundleRoot: dir, repoRoot: deps.repoRoot };
-  const report = auditBundle(bundle, layout, deps);
+  // Built once and shared with impactedConcepts below: each call otherwise ran
+  // its own graph.pageRank(), the most expensive step in an audit, over the
+  // exact same graph.
+  const symbols = readSymbols(deps.graph);
+  const report = auditBundle(bundle, layout, { ...deps, symbols });
+  const impacted =
+    deps.symbol !== undefined
+      ? impactedConcepts(deps.symbol, bundle, layout, { ...deps, symbols, anchors: report.anchors })
+      : undefined;
+
+  if (deps.judge) {
+    const eligible = report.stale.filter((f) => f.reason === "code-changed");
+    console.log(`judging ${plural(eligible.length, "stale finding")} with ${OKF_JUDGE_MODEL}`);
+    if (eligible.length > 0) {
+      try {
+        const verdicts = await judgeStaleFindings(eligible, {
+          judge: deps.judge.judge,
+          diff: deps.judge.diff,
+          conceptBody: (concept) => bundle.files.find((f) => f.path === concept)?.document.body ?? "",
+          concurrency: deps.judge.concurrency,
+          maxDiffChars: deps.judge.maxDiffChars,
+        });
+        const { stale, judged } = applyJudgeVerdicts(report.stale, verdicts);
+        report.stale = stale;
+        report.judged = judged;
+      } catch (error) {
+        if (!(error instanceof Anthropic.AuthenticationError)) throw error;
+        // Judging never got off the ground — report the plain, unjudged audit
+        // rather than failing the whole command over it.
+        console.error("--judge needs Anthropic credentials: set ANTHROPIC_API_KEY or run `ant auth login`");
+      }
+    }
+  }
+
+  const ok = report.broken.length === 0 && report.stale.length === 0;
+
+  if (deps.json) {
+    const jsonReport: Record<string, unknown> = {
+      ok,
+      broken: report.broken.map((anchor) => ({
+        concept: anchor.concept,
+        resource: anchor.resource,
+        reason: RESOLUTION_REASON[anchor.resolution],
+        ...(anchor.hint ? { hint: anchor.hint } : {}),
+      })),
+      stale: report.stale,
+      judged: report.judged,
+      ambiguous: report.ambiguous,
+      unattested: report.unattested,
+      coverage: report.coverage,
+      links: report.links,
+    };
+    if (impacted !== undefined) jsonReport.impacted = impacted;
+    return { output: JSON.stringify(jsonReport, null, 2), ok };
+  }
+
   const concepts = new Set(report.anchors.map((a) => a.concept)).size;
 
   const lines = [
@@ -289,18 +384,38 @@ export async function runOkfAudit(
   if (report.broken.length > 0) {
     lines.push("", `  ${plural(report.broken.length, "broken anchor")}:`);
     for (const anchor of report.broken) {
-      lines.push(`  ✗ ${anchor.concept} → ${anchor.resource} (${RESOLUTION_REASON[anchor.resolution]})`);
+      const hint = anchor.hint ? ` — did you mean \`${anchor.hint}\`?` : "";
+      lines.push(`  ✗ ${anchor.concept} → ${anchor.resource} (${RESOLUTION_REASON[anchor.resolution]})${hint}`);
+    }
+  }
+
+  if (report.ambiguous.length > 0) {
+    lines.push("", `  ${plural(report.ambiguous.length, "ambiguous anchor")} — same name twice in the file; anchor by #L<start>-L<end> instead:`);
+    for (const anchor of report.ambiguous) {
+      lines.push(`  ? ${anchor.concept} → ${anchor.resource} (several symbols named \`${anchor.symbol}\`)`);
     }
   }
 
   if (report.stale.length > 0) {
     lines.push("", `  ${plural(report.stale.length, "stale concept")}:`);
     for (const finding of report.stale) {
-      lines.push(
-        finding.reason === "uncommitted"
-          ? `  ! ${finding.concept} — ${finding.path} has uncommitted changes, attested ${finding.attestedAt}`
-          : `  ! ${finding.concept} — ${finding.path} changed ${finding.changedAt}, attested ${finding.attestedAt}`
-      );
+      const base =
+        finding.reason === "expired"
+          ? `  ! ${finding.concept} — ${finding.path} expired ${finding.expiresAt}`
+          : finding.reason === "uncommitted"
+            ? `  ! ${finding.concept} — ${finding.path} has uncommitted changes, attested ${finding.attestedAt}`
+            : `  ! ${finding.concept} — ${finding.path} changed ${finding.changedAt}, attested ${finding.attestedAt}`;
+      lines.push(finding.judge ? `${base} (judged ${finding.judge.verdict}: ${finding.judge.reason})` : base);
+    }
+  }
+
+  if (report.judged.length > 0) {
+    lines.push(
+      "",
+      `  ${plural(report.judged.length, "concept")} judged still valid — confirm and add a \`verified\` entry:`
+    );
+    for (const finding of report.judged) {
+      lines.push(`  ✓ ${finding.concept} — ${finding.judge?.reason}`);
     }
   }
 
@@ -321,8 +436,7 @@ export async function runOkfAudit(
     for (const gap of report.coverage) lines.push(`  · ${gap.name} (${gap.kind}) ${gap.file}`);
   }
 
-  if (deps.symbol !== undefined) {
-    const impacted = impactedConcepts(deps.symbol, bundle, layout, deps);
+  if (impacted !== undefined) {
     lines.push("");
     if (impacted.length === 0) {
       lines.push(`  no concept explains code affected by \`${deps.symbol}\``);
@@ -334,7 +448,6 @@ export async function runOkfAudit(
     }
   }
 
-  const ok = report.broken.length === 0 && report.stale.length === 0;
   if (ok) lines.push("", "  every anchor resolves, and no concept is older than the code it explains");
   return { output: lines.join("\n"), ok };
 }

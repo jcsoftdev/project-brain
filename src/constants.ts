@@ -23,6 +23,9 @@ export const EMBED_NUM_CTX = 8192;
 /** Anthropic model used to generate commit-time conceptual summaries. */
 export const CONCEPT_LLM_MODEL = "claude-haiku-4-5";
 
+/** Anthropic model used by `okf audit --judge` to judge stale findings. Opt-in — it costs money. */
+export const OKF_JUDGE_MODEL = "claude-opus-5";
+
 /** Max modules conceptualized per commit; the rest are logged as pending. */
 export const CONCEPT_MODULE_CAP = 5;
 

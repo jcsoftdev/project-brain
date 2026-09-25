@@ -28,6 +28,15 @@ export interface AuditDeps {
   exists(repoRelPath: string): boolean;
   /** How many uncovered symbols to report. Default 10. */
   coverageLimit?: number;
+  /** Injectable clock for `stale_after` comparisons. Defaults to `new Date()`. */
+  now?: Date;
+  /**
+   * A symbol table already built by `readSymbols(graph)`. When the caller runs
+   * more than one pass over the same graph in one command (audit + `--symbol`
+   * impact), passing it in here skips a second `graph.pageRank()` — the most
+   * expensive call this module makes.
+   */
+  symbols?: SymbolTable;
 }
 
 export type AnchorResolution = "ok" | "missing-file" | "missing-symbol";
@@ -36,15 +45,31 @@ export interface ResolvedAnchor extends Anchor {
   resolution: AnchorResolution;
   /** Line span this anchor points at, once a symbol anchor has been looked up. */
   range: LineRange | null;
+  /** Closest symbol name in the same file, when `resolution` is "missing-symbol". */
+  hint?: string;
+}
+
+/** A symbol anchor whose name matched more than one symbol in the file. */
+export interface AmbiguousAnchor {
+  concept: string;
+  resource: string;
+  path: string;
+  symbol: string;
 }
 
 export interface StaleFinding {
   concept: string;
   resource: string;
   path: string;
-  attestedAt: string;
+  attestedAt: string | null;
   changedAt: string | null;
-  reason: "code-changed" | "uncommitted";
+  reason: "code-changed" | "uncommitted" | "expired";
+  /** The `stale_after` threshold that passed. Present only when reason is "expired". */
+  expiresAt?: string;
+  /** Line span the anchor cited, when it named one — feeds `okf audit --judge`'s diff evidence. */
+  range: LineRange | null;
+  /** Set by `okf audit --judge`. Absent until then. */
+  judge?: { verdict: "holds" | "outdated" | "unclear"; reason: string };
 }
 
 export interface CoverageGap {
@@ -66,8 +91,19 @@ export interface AuditReport {
   anchors: ResolvedAnchor[];
   broken: ResolvedAnchor[];
   stale: StaleFinding[];
+  /**
+   * Stale findings a human confirmed still hold via `okf audit --judge` (only
+   * ever populated by that command layer — `auditBundle` itself always
+   * returns this empty, since judging needs a live LLM call). Backlog, not a
+   * failure: the audit's promise that a failing run needs a human look stays
+   * intact, so a model's "still holds" downgrades a finding rather than
+   * clearing it outright.
+   */
+  judged: StaleFinding[];
   /** Concepts that anchor code but carry no attestation to measure staleness against. */
   unattested: string[];
+  /** Symbol anchors whose name matched more than one symbol — a warning, not a failure. */
+  ambiguous: AmbiguousAnchor[];
   coverage: CoverageGap[];
   links: LinkSuggestion[];
 }
@@ -84,7 +120,7 @@ function symbolKey(file: string, name: string): string {
   return `${file}\0${name}`;
 }
 
-interface SymbolTable {
+export interface SymbolTable {
   /** All symbols, already sorted by descending PageRank. */
   ranked: RankedSymbol[];
   byFile: Map<string, RankedSymbol[]>;
@@ -96,8 +132,13 @@ interface SymbolTable {
  * `pageRank` is the only whole-graph enumeration the store exposes, and its
  * ranks are what makes the coverage backlog a priority order rather than a
  * dump — so one call feeds anchor resolution, coverage, and link inference.
+ *
+ * Exported so a caller running more than one pass over the same graph (the
+ * CLI's audit + `--symbol` impact pass) can build it once and hand it to both
+ * via `AuditDeps.symbols` / the `impactedConcepts` deps, instead of paying for
+ * a second `graph.pageRank()`.
  */
-function readSymbols(graph: AuditGraph): SymbolTable {
+export function readSymbols(graph: AuditGraph): SymbolTable {
   const ranked = graph.pageRank();
   const byFile = new Map<string, RankedSymbol[]>();
   for (const symbol of ranked) {
@@ -108,13 +149,57 @@ function readSymbols(graph: AuditGraph): SymbolTable {
   return { ranked, byFile };
 }
 
+/**
+ * Picks the symbol a `#name` anchor refers to. The anchor grammar carries no
+ * range beside a name, so same-named symbols in one file cannot be told apart:
+ * take the first and tell the caller, which surfaces it as a warning rather
+ * than silently guessing.
+ */
+function findNamedSymbol(
+  inFile: RankedSymbol[],
+  name: string
+): { hit: RankedSymbol | undefined; ambiguous: boolean } {
+  const matches = inFile.filter((s) => s.name === name);
+  return { hit: matches[0], ambiguous: matches.length > 1 };
+}
+
+/** Classic edit distance — no dependency needed for symbol-name-length strings. */
+function levenshtein(a: string, b: string): number {
+  const dp = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const temp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      prev = temp;
+    }
+  }
+  return dp[b.length];
+}
+
+/** Closest name among candidates, only when close enough to plausibly be a rename. */
+function closestName(name: string, candidates: Iterable<string>): string | undefined {
+  let best: string | undefined;
+  let bestDist = Infinity;
+  for (const candidate of candidates) {
+    const dist = levenshtein(name, candidate);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = candidate;
+    }
+  }
+  const threshold = Math.max(2, name.length * 0.3);
+  return best !== undefined && bestDist <= threshold ? best : undefined;
+}
+
 function resolveAnchor(
   anchor: Anchor,
   byFile: Map<string, RankedSymbol[]>,
   exists: (path: string) => boolean
-): ResolvedAnchor {
+): { resolved: ResolvedAnchor; ambiguous: boolean } {
   if (!exists(anchor.path)) {
-    return { ...anchor, resolution: "missing-file", range: null };
+    return { resolved: { ...anchor, resolution: "missing-file", range: null }, ambiguous: false };
   }
 
   const inFile = byFile.get(anchor.path);
@@ -123,16 +208,22 @@ function resolveAnchor(
     // that file. The parser covers a fixed set of languages, so silence means
     // "not parsed", not "not there" — and calling a live anchor broken is worse
     // than missing a dead one.
-    const hit = inFile.find((s) => s.name === anchor.symbol);
-    if (!hit) return { ...anchor, resolution: "missing-symbol", range: null };
+    const { hit, ambiguous } = findNamedSymbol(inFile, anchor.symbol);
+    if (!hit) {
+      const hint = closestName(anchor.symbol, new Set(inFile.map((s) => s.name)));
+      return { resolved: { ...anchor, resolution: "missing-symbol", range: null, hint }, ambiguous: false };
+    }
     return {
-      ...anchor,
-      resolution: "ok",
-      range: anchor.lines ?? { start: hit.start_line, end: hit.end_line },
+      resolved: {
+        ...anchor,
+        resolution: "ok",
+        range: anchor.lines ?? { start: hit.start_line, end: hit.end_line },
+      },
+      ambiguous,
     };
   }
 
-  return { ...anchor, resolution: "ok", range: anchor.lines ?? null };
+  return { resolved: { ...anchor, resolution: "ok", range: anchor.lines ?? null }, ambiguous: false };
 }
 
 interface CoveredSymbol {
@@ -180,7 +271,7 @@ function buildCoverage(
       }
       continue;
     }
-    const hit = inFile.find((s) => s.name === anchor.symbol);
+    const { hit } = findNamedSymbol(inFile, anchor.symbol);
     if (hit) cover(hit, anchor.concept);
   }
   return coverage;
@@ -208,7 +299,7 @@ function laterOf(a: string | null, b: string | null): string | null {
  * sooner or later. The file's own commit date is objective and moves whenever
  * anyone touches the note — including to re-attest it.
  */
-function findStale(anchors: ResolvedAnchor[], clock: CodeClock): {
+function findStale(anchors: ResolvedAnchor[], clock: CodeClock, now: Date): {
   stale: StaleFinding[];
   unattested: string[];
 } {
@@ -222,6 +313,27 @@ function findStale(anchors: ResolvedAnchor[], clock: CodeClock): {
     if (anchor.resolution !== "ok") continue;
     if (anchor.attestedAt === null) unattested.add(anchor.concept);
     if (reported.has(anchor.concept)) continue;
+
+    // `stale_after` is a declared shelf life, independent of whether the code
+    // moved — checked first so an expired concept is reported once even if it
+    // would also qualify as code-changed below.
+    if (anchor.staleAfter !== null) {
+      const expiry = Date.parse(anchor.staleAfter);
+      if (!Number.isNaN(expiry) && expiry <= now.getTime()) {
+        reported.add(anchor.concept);
+        stale.push({
+          concept: anchor.concept,
+          resource: anchor.resource,
+          path: anchor.path,
+          attestedAt: anchor.attestedAt,
+          changedAt: null,
+          reason: "expired",
+          expiresAt: anchor.staleAfter,
+          range: anchor.range,
+        });
+        continue;
+      }
+    }
 
     // An author mid-edit already knows: both the note and the code are in flux,
     // and this is the exact work that resolves the drift.
@@ -249,6 +361,7 @@ function findStale(anchors: ResolvedAnchor[], clock: CodeClock): {
       attestedAt: baseline,
       changedAt: change.at,
       reason,
+      range: anchor.range,
     });
   }
 
@@ -305,8 +418,11 @@ function findCoverageGaps(
  * Only anchored symbols are probed for callers, so this costs one query per
  * explained symbol rather than one per symbol in the repo. A caller is matched
  * on file AND name, so an unrelated namesake elsewhere cannot invent an edge —
- * two same-named symbols in the SAME file would still be conflated, which the
- * graph cannot distinguish either.
+ * but the `coverage` map itself is still keyed by file+name (`symbolKey`), so
+ * two same-named symbols in the SAME file are still conflated into one entry
+ * here. `resolveAnchor` now warns about this ambiguity for the anchor that
+ * named them (see `AuditReport.ambiguous`), but that warning is about which
+ * anchor resolves to which symbol, not about this map's key collision.
  */
 function inferLinks(
   bundle: Bundle,
@@ -351,16 +467,27 @@ function inferLinks(
 }
 
 export function auditBundle(bundle: Bundle, layout: BundleLayout, deps: AuditDeps): AuditReport {
-  const { ranked, byFile } = readSymbols(deps.graph);
-  const anchors = collectAnchors(bundle, layout).map((a) => resolveAnchor(a, byFile, deps.exists));
+  const { ranked, byFile } = deps.symbols ?? readSymbols(deps.graph);
+  const resolutions = collectAnchors(bundle, layout).map((a) => resolveAnchor(a, byFile, deps.exists));
+  const anchors = resolutions.map((r) => r.resolved);
+  const ambiguous: AmbiguousAnchor[] = resolutions
+    .filter((r) => r.ambiguous)
+    .map((r) => ({
+      concept: r.resolved.concept,
+      resource: r.resolved.resource,
+      path: r.resolved.path,
+      symbol: r.resolved.symbol as string,
+    }));
   const coverage = buildCoverage(anchors, byFile);
-  const { stale, unattested } = findStale(anchors, deps.clock);
+  const { stale, unattested } = findStale(anchors, deps.clock, deps.now ?? new Date());
 
   return {
     anchors,
     broken: anchors.filter((a) => a.resolution !== "ok"),
     stale,
+    judged: [],
     unattested,
+    ambiguous,
     coverage: findCoverageGaps(ranked, coverage, deps.coverageLimit ?? DEFAULT_COVERAGE_LIMIT),
     links: inferLinks(bundle, deps.graph, coverage),
   };
@@ -378,10 +505,18 @@ export function impactedConcepts(
   symbol: string,
   bundle: Bundle,
   layout: BundleLayout,
-  deps: { graph: AuditGraph; exists(repoRelPath: string): boolean }
+  deps: {
+    graph: AuditGraph;
+    exists(repoRelPath: string): boolean;
+    /** Reuse a symbol table `auditBundle` already built, instead of a second `pageRank()`. */
+    symbols?: SymbolTable;
+    /** Reuse anchors `auditBundle` already resolved (its `report.anchors`), skipping a second resolve pass. */
+    anchors?: ResolvedAnchor[];
+  }
 ): ImpactedConcept[] {
-  const { ranked, byFile } = readSymbols(deps.graph);
-  const anchors = collectAnchors(bundle, layout).map((a) => resolveAnchor(a, byFile, deps.exists));
+  const { ranked, byFile } = deps.symbols ?? readSymbols(deps.graph);
+  const anchors =
+    deps.anchors ?? collectAnchors(bundle, layout).map((a) => resolveAnchor(a, byFile, deps.exists).resolved);
   const coverage = buildCoverage(anchors, byFile);
 
   const touched: { name: string; file: string }[] = [

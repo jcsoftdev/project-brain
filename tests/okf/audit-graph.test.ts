@@ -262,6 +262,57 @@ describe("auditBundle — coverage excludes tests", () => {
   });
 });
 
+describe("auditBundle — ambiguous same-name anchors", () => {
+  function graphWithDuplicateNames(): GraphStore {
+    const store = new GraphStore(openGraphDb(":memory:"));
+    store.replaceFile("src/dup.ts", "typescript", "h", 0, [
+      { name: "process", kind: "function", signature: "", start_line: 1, end_line: 5, edges: [] },
+      { name: "process", kind: "function", signature: "", start_line: 20, end_line: 25, edges: [] },
+    ]);
+    store.resolveEdgesForFile("src/dup.ts");
+    return store;
+  }
+
+  it("resolves the anchor and warns instead of failing when its symbol name is ambiguous", () => {
+    const report = auditBundle(
+      bundle([concept("g/a.md", { type: "Gotcha", resource: "../src/dup.ts#process" })]),
+      LAYOUT,
+      { graph: graphWithDuplicateNames(), clock: silentClock, exists: allOnDisk }
+    );
+
+    expect(report.broken).toEqual([]);
+    expect(report.ambiguous).toHaveLength(1);
+    expect(report.ambiguous[0]).toMatchObject({ concept: "g/a.md", symbol: "process" });
+  });
+
+  it("does not fail the run for an ambiguous anchor", () => {
+    const report = auditBundle(
+      bundle([concept("g/a.md", { type: "Gotcha", resource: "../src/dup.ts#process" })]),
+      LAYOUT,
+      { graph: graphWithDuplicateNames(), clock: silentClock, exists: allOnDisk }
+    );
+
+    expect(report.broken).toEqual([]);
+    expect(report.stale).toEqual([]);
+  });
+
+  it("stays quiet about an unambiguous symbol anchor even when other files repeat the name", () => {
+    const graph = graphWithDuplicateNames();
+    graph.replaceFile("src/single.ts", "typescript", "h", 0, [
+      { name: "unique", kind: "function", signature: "", start_line: 1, end_line: 5, edges: [] },
+    ]);
+    graph.resolveEdgesForFile("src/single.ts");
+
+    const report = auditBundle(
+      bundle([concept("g/a.md", { type: "Gotcha", resource: "../src/single.ts#unique" })]),
+      LAYOUT,
+      { graph, clock: silentClock, exists: allOnDisk }
+    );
+
+    expect(report.ambiguous).toEqual([]);
+  });
+});
+
 describe("auditBundle — link inference", () => {
   it("suggests a link when one concept's code calls another's", () => {
     const report = auditBundle(

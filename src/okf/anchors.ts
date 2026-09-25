@@ -39,6 +39,8 @@ export interface Anchor {
   origin: "resource" | "sources";
   /** Newest attestation on the concept, or null when it has never been attested. */
   attestedAt: string | null;
+  /** §5.4 `stale_after` — the concept's own declared shelf life, or null when unset. */
+  staleAfter: string | null;
 }
 
 export interface BundleLayout {
@@ -153,6 +155,9 @@ export function collectAnchors(bundle: Bundle, layout: BundleLayout): Anchor[] {
   for (const file of bundle.files) {
     if (file.kind !== "concept") continue;
     const attestedAt = newestAttestation(file.document.frontmatter);
+    const staleAfter = typeof file.document.frontmatter.stale_after === "string"
+      ? file.document.frontmatter.stale_after
+      : null;
     const conceptPath = toRepoPath(file.path, layout);
     if (conceptPath === null) continue;
 
@@ -170,6 +175,7 @@ export function collectAnchors(bundle: Bundle, layout: BundleLayout): Anchor[] {
         lines: parsed.lines,
         origin,
         attestedAt,
+        staleAfter,
       });
     }
   }
