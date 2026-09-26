@@ -258,6 +258,20 @@ Curated knowledge (the *why* behind the code) lives in an OKF bundle rather than
 
 Routing: exact symbol → `find_symbol`; who-calls → `find_callers`; what-it-calls → `find_callees`; "what breaks if I change X" → `impact`; "how does A end up calling B" → `trace_path`; fuzzy/conceptual → `search_context` then `expand_context`; exact string/identifier you can type verbatim → `search_code`. The canonical tool list lives in `src/constants.ts` (`TOOL_CATALOG`) and is rendered into the MCP server instructions plus the global rules files for hosts not proven to surface those instructions to the model. Claude Code IS proven to surface them (they land in context on every MCP connection), so its global and per-project `CLAUDE.md` point at that live copy instead of re-embedding the catalog.
 
+## Reranking (optional)
+
+`search_context` can rerank its retrieved pool with [TypeSafe](https://typesafe.ai)'s Jev model before the usual threshold/MMR/budget steps run, scoring every candidate's relevance to the query with a single call. Measured on a bench of 332 mined queries (30 candidates each): recall@1 goes from 66.0% to 84.3%, and MRR from 0.761 to 0.894, at p50 0.60s and $0.15 for the whole bench.
+
+It is opt-in and sends data off-machine: **the query text and every candidate's code/doc snippet are sent to `api.typesafe.ai`.** Enable it only if that is acceptable for your codebase.
+
+To enable it:
+
+- Run `project-brain setup` and select the reranker unit when prompted (you'll be asked for a token), or
+- Pass `--reranker-token <token>` to `project-brain setup` for a non-interactive install, or
+- Set the `TYPESAFE_API_KEY` environment variable (checked before the file either way).
+
+With no token configured, nothing changes — zero network calls, identical result order. Any failure (timeout, non-2xx, a malformed response) falls back silently to the normal, unreranked order rather than surfacing an error. `project-brain health` reports `reranker: configured` once a token resolves.
+
 ## Recipes — get the most out of it
 
 You talk to your **AI assistant** in natural language; it picks the right tool. These prompts steer it well:
@@ -545,6 +559,7 @@ BRAIN_HTTP_TOKEN=your-secret project-brain serve --http [--port 3000]
 | `BRAIN_EMBED_MODEL` | `qwen3-embedding:0.6b` | Ollama embedding model (registry keys: `qwen3-embedding`, `nomic-text`; or any raw Ollama model name; `none` disables embeddings — lexical/keyword search only, no Ollama needed) |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL |
 | `BRAIN_NO_UPDATE_CHECK` | — | Set to `1` to disable the update-available notice |
+| `TYPESAFE_API_KEY` | — | Opt-in Jev reranker token — see [Reranking (optional)](#reranking-optional). Checked before `~/.project-brain/reranker.json`. |
 
 ## Tuning (environment variables)
 
