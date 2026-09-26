@@ -329,4 +329,47 @@ describe("runOkfAudit", () => {
       expect(result.output).toContain("d/a.md");
     });
   });
+
+  describe("--judge-compare", () => {
+    const staleDoc = doc(["type: Decision", "resource: ../src/a.ts", 'generated: { by: "human:x", at: 2026-01-01T00:00:00Z }']);
+
+    const fakeJudge = (verdict: "holds" | "outdated" | "unclear", reason = "because"): StaleJudge => ({
+      judge: async () => ({ verdict, reason }),
+    });
+
+    it("prints an agreement report comparing the primary and compare judges, without changing ok/stale", async () => {
+      await write("d/a.md", staleDoc);
+
+      const result = await runOkfAudit(
+        bundleDir,
+        deps({
+          clock: clockOf({ "src/a.ts": { at: "2026-06-01T00:00:00Z", uncommitted: false } }),
+          judge: { judge: fakeJudge("outdated"), diff: () => "some diff", compare: fakeJudge("unclear") },
+        })
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.output).toContain("agreement");
+      expect(result.output).toContain("0/1");
+      expect(result.output).toContain("outdated");
+      expect(result.output).toContain("unclear");
+    });
+
+    it("carries the comparison in --json output too", async () => {
+      await write("d/a.md", staleDoc);
+
+      const result = await runOkfAudit(
+        bundleDir,
+        deps({
+          clock: clockOf({ "src/a.ts": { at: "2026-06-01T00:00:00Z", uncommitted: false } }),
+          judge: { judge: fakeJudge("holds"), diff: () => "some diff", compare: fakeJudge("holds") },
+          json: true,
+        })
+      );
+
+      const parsed = JSON.parse(result.output);
+      expect(parsed.compare).toHaveLength(1);
+      expect(parsed.compare[0].agree).toBe(true);
+    });
+  });
 });

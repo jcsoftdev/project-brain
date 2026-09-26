@@ -232,6 +232,70 @@ export function applyJudgeVerdicts(
   return { stale: nextStale, judged };
 }
 
+export interface JudgeComparison {
+  concept: string;
+  primary: JudgeResult;
+  compare: JudgeResult;
+  agree: boolean;
+}
+
+export interface CompareJudgesDeps {
+  primary: StaleJudge;
+  compare: StaleJudge;
+  diff(finding: StaleFinding): string | null;
+  conceptBody(concept: string): string;
+  concurrency?: number;
+  maxDiffChars?: number;
+}
+
+/**
+ * Runs two judges over the same `code-changed` findings (`okf audit
+ * --judge-compare`) and pairs their verdicts per concept, for hand labelling
+ * which model to trust. Reuses `judgeStaleFindings` for both passes rather
+ * than a bespoke worker loop, so eligibility, concurrency, and the
+ * too-large-to-judge diff cutoff stay identical to a plain `--judge` run.
+ */
+export async function compareJudges(
+  findings: StaleFinding[],
+  deps: CompareJudgesDeps
+): Promise<JudgeComparison[]> {
+  const shared = {
+    diff: deps.diff,
+    conceptBody: deps.conceptBody,
+    concurrency: deps.concurrency,
+    maxDiffChars: deps.maxDiffChars,
+  };
+  const [primaryVerdicts, compareVerdicts] = await Promise.all([
+    judgeStaleFindings(findings, { judge: deps.primary, ...shared }),
+    judgeStaleFindings(findings, { judge: deps.compare, ...shared }),
+  ]);
+
+  const eligible = findings.filter((f) => f.reason === "code-changed");
+  return eligible.map((f) => {
+    const primary = primaryVerdicts.get(f.concept) ?? { verdict: "unclear" as const, reason: "not judged" };
+    const compare = compareVerdicts.get(f.concept) ?? { verdict: "unclear" as const, reason: "not judged" };
+    return { concept: f.concept, primary, compare, agree: primary.verdict === compare.verdict };
+  });
+}
+
+/** Prose report for `compareJudges`: an agreement rate, then only the rows that disagree — for hand labelling. */
+export function formatCompareReport(comparisons: JudgeComparison[]): string {
+  if (comparisons.length === 0) return "  no eligible findings to compare";
+
+  const agreeing = comparisons.filter((c) => c.agree).length;
+  const rate = Math.round((agreeing / comparisons.length) * 100);
+  const lines = [`  agreement: ${agreeing}/${comparisons.length} (${rate}%)`];
+
+  const disagreements = comparisons.filter((c) => !c.agree);
+  if (disagreements.length > 0) {
+    lines.push("", `  ${disagreements.length} disagreement${disagreements.length === 1 ? "" : "s"}:`);
+    for (const d of disagreements) {
+      lines.push(`  ? ${d.concept} — primary: ${d.primary.verdict}, compare: ${d.compare.verdict}`);
+    }
+  }
+  return lines.join("\n");
+}
+
 export interface GitDiffFetcherDeps {
   spawn?: SpawnFn;
 }

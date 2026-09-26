@@ -4,7 +4,14 @@ import { OkfBundleError, readBundle } from "../okf/bundle.js";
 import { syncBundle, type SyncBundleDeps } from "../okf/sync.js";
 import type { OkfIssue } from "../okf/validate.js";
 import { auditBundle, impactedConcepts, readSymbols, type AuditGraph, type StaleFinding } from "../okf/audit.js";
-import { applyJudgeVerdicts, judgeStaleFindings, type StaleJudge } from "../okf/judge.js";
+import {
+  applyJudgeVerdicts,
+  compareJudges,
+  formatCompareReport,
+  judgeStaleFindings,
+  type JudgeComparison,
+  type StaleJudge,
+} from "../okf/judge.js";
 import { OKF_JUDGE_MODEL } from "../constants.js";
 import type { CodeClock } from "../git/last-changed.js";
 
@@ -116,19 +123,25 @@ async function refreshProjectRules(root: string): Promise<void> {
 function usage(): void {
   console.error(
     [
-      "Usage: project-brain okf <init|validate|sync|audit> [dir] [--symbol <name>] [--json] [--judge]",
+      "Usage: project-brain okf <init|validate|sync|audit|candidates> [dir] [--symbol <name>] [--json] [--judge]",
       "",
       `  init       scaffold an empty bundle (index.md + log.md). Never overwrites.`,
       `  validate   check bundle conformance (SPEC v0.2 §11). Offline.`,
       `  sync       index the bundle's concepts into this project's brain.`,
       `  audit      compare the bundle against the code graph: broken anchors,`,
       `             stale knowledge, undocumented code, missing links.`,
+      `  candidates mine "fix:" commits and rank them for a possible OKF concept.`,
       "",
-      `  --symbol   with audit: name the concepts to re-read after <name> changes.`,
-      `  --json     with audit: print one JSON object instead of prose.`,
-      `  --judge    with audit: ask ${OKF_JUDGE_MODEL} whether each "code-changed"`,
-      `             stale finding's reasoning still holds. Opt-in — costs money,`,
-      `             needs Anthropic credentials, and never auto-attests.`,
+      `  --symbol         with audit: name the concepts to re-read after <name> changes.`,
+      `  --json           with audit|candidates: print one JSON object instead of prose.`,
+      `  --judge          with audit: ask a model whether each "code-changed"`,
+      `                   stale finding's reasoning still holds. Opt-in — costs money`,
+      `                   (or a TypeSafe token), and never auto-attests.`,
+      `  --judge-model    jev|claude (default claude) — which model judges --judge findings.`,
+      `  --judge-compare  with audit: run BOTH judges and print an agreement table`,
+      `                   plus disagreements, for hand labelling. Implies --judge.`,
+      `  --since          with candidates: only commits after this rev or date.`,
+      `  --limit          with candidates: how many ranked candidates to print (default 20).`,
       `  dir defaults to ./${DEFAULT_BUNDLE_DIR}`,
     ].join("\n")
   );
@@ -137,21 +150,67 @@ function usage(): void {
 const SYMBOL_FLAG = "--symbol";
 const JSON_FLAG = "--json";
 const JUDGE_FLAG = "--judge";
+const JUDGE_MODEL_FLAG = "--judge-model";
+const JUDGE_COMPARE_FLAG = "--judge-compare";
+const SINCE_FLAG = "--since";
+const LIMIT_FLAG = "--limit";
 
-/** Splits positionals from `--symbol <name>` / `--symbol=<name>` / `--json` / `--judge`, ignoring unknown flags. */
-function parseArgs(args: string[]): { positional: string[]; symbol?: string; json: boolean; judge: boolean } {
+export type JudgeModel = "jev" | "claude";
+
+interface ParsedArgs {
+  positional: string[];
+  symbol?: string;
+  json: boolean;
+  judge: boolean;
+  judgeModel: JudgeModel;
+  judgeCompare: boolean;
+  since?: string;
+  limit?: number;
+}
+
+/** Splits positionals from every recognized `--flag`/`--flag=value` pair, ignoring unknown flags. */
+function parseArgs(args: string[]): ParsedArgs {
   const positional: string[] = [];
   let symbol: string | undefined;
   let json = false;
   let judge = false;
+  let judgeModel: JudgeModel = "claude";
+  let judgeCompare = false;
+  let since: string | undefined;
+  let limit: number | undefined;
+
+  const valueOf = (flag: string, arg: string, i: number): { value: string; next: number } | null => {
+    if (arg === flag) return { value: args[++i] ?? "", next: i };
+    if (arg.startsWith(`${flag}=`)) return { value: arg.slice(flag.length + 1), next: i };
+    return null;
+  };
+
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === SYMBOL_FLAG) {
-      symbol = args[++i];
+    const arg = args[i]!;
+
+    const symbolMatch = valueOf(SYMBOL_FLAG, arg, i);
+    if (symbolMatch) {
+      symbol = symbolMatch.value;
+      i = symbolMatch.next;
       continue;
     }
-    if (arg.startsWith(`${SYMBOL_FLAG}=`)) {
-      symbol = arg.slice(SYMBOL_FLAG.length + 1);
+    const judgeModelMatch = valueOf(JUDGE_MODEL_FLAG, arg, i);
+    if (judgeModelMatch) {
+      if (judgeModelMatch.value === "jev" || judgeModelMatch.value === "claude") judgeModel = judgeModelMatch.value;
+      i = judgeModelMatch.next;
+      continue;
+    }
+    const sinceMatch = valueOf(SINCE_FLAG, arg, i);
+    if (sinceMatch) {
+      since = sinceMatch.value;
+      i = sinceMatch.next;
+      continue;
+    }
+    const limitMatch = valueOf(LIMIT_FLAG, arg, i);
+    if (limitMatch) {
+      const parsed = Number(limitMatch.value);
+      if (Number.isFinite(parsed) && parsed > 0) limit = parsed;
+      i = limitMatch.next;
       continue;
     }
     if (arg === JSON_FLAG) {
@@ -162,16 +221,26 @@ function parseArgs(args: string[]): { positional: string[]; symbol?: string; jso
       judge = true;
       continue;
     }
+    if (arg === JUDGE_COMPARE_FLAG) {
+      judgeCompare = true;
+      continue;
+    }
     if (!arg.startsWith("--")) positional.push(arg);
   }
-  return { positional, symbol, json, judge };
+  return { positional, symbol, json, judge, judgeModel, judgeCompare, since, limit };
 }
 
 /** CLI entry point for the okf command. */
 export async function execute(args: string[]): Promise<void> {
-  const { positional, symbol, json, judge } = parseArgs(args);
+  const { positional, symbol, json, judge, judgeModel, judgeCompare, since, limit } = parseArgs(args);
   const [action, dirArg] = positional;
-  if (action !== "init" && action !== "validate" && action !== "sync" && action !== "audit") {
+  if (
+    action !== "init" &&
+    action !== "validate" &&
+    action !== "sync" &&
+    action !== "audit" &&
+    action !== "candidates"
+  ) {
     usage();
     process.exit(1);
     return;
@@ -223,9 +292,38 @@ export async function execute(args: string[]): Promise<void> {
 
     try {
       let judgeDeps: OkfAuditDeps["judge"];
-      if (judge) {
+      // --judge-compare needs both judges regardless of --judge; asking for
+      // it implies judging is on, so the user never has to pass both flags.
+      if (judge || judgeCompare) {
         const { createClaudeJudge, createGitDiffFetcher } = await import("../okf/judge.js");
-        judgeDeps = { judge: createClaudeJudge(), diff: createGitDiffFetcher(root) };
+        const { createJevJudge } = await import("../okf/jev-judge.js");
+        const { resolveRerankerToken } = await import("../rerank/token.js");
+
+        const buildJudge = async (model: JudgeModel): Promise<StaleJudge | null> => {
+          if (model === "claude") return createClaudeJudge();
+          const token = await resolveRerankerToken();
+          return token ? createJevJudge(token) : null;
+        };
+
+        const primary = await buildJudge(judgeModel);
+        if (!primary) {
+          console.error(
+            "--judge-model jev needs a TypeSafe token: set TYPESAFE_API_KEY, or configure one via `project-brain setup` — skipping --judge"
+          );
+        } else {
+          let compare: StaleJudge | undefined;
+          if (judgeCompare) {
+            const otherModel: JudgeModel = judgeModel === "claude" ? "jev" : "claude";
+            compare = (await buildJudge(otherModel)) ?? undefined;
+            if (!compare) {
+              console.error(
+                "--judge-compare needs a TypeSafe token too: set TYPESAFE_API_KEY — comparing skipped, judging with " +
+                  `${judgeModel} alone`
+              );
+            }
+          }
+          judgeDeps = { judge: primary, diff: createGitDiffFetcher(root), compare };
+        }
       }
 
       const { output, ok } = await runOkfAudit(dir, {
@@ -288,6 +386,13 @@ export interface OkfAuditDeps {
     diff(finding: StaleFinding): string | null;
     concurrency?: number;
     maxDiffChars?: number;
+    /**
+     * `--judge-compare`: run this SECOND judge over the same eligible
+     * findings and report agreement/disagreement against the primary one.
+     * Purely diagnostic — never affects `stale`/`judged`/`ok`, which are
+     * always driven by the primary judge alone.
+     */
+    compare?: StaleJudge;
   };
 }
 
@@ -328,21 +433,36 @@ export async function runOkfAudit(
       ? impactedConcepts(deps.symbol, bundle, layout, { ...deps, symbols, anchors: report.anchors })
       : undefined;
 
+  let compare: JudgeComparison[] | undefined;
+
   if (deps.judge) {
     const eligible = report.stale.filter((f) => f.reason === "code-changed");
     console.log(`judging ${plural(eligible.length, "stale finding")} with ${OKF_JUDGE_MODEL}`);
     if (eligible.length > 0) {
+      const conceptBody = (concept: string) => bundle.files.find((f) => f.path === concept)?.document.body ?? "";
       try {
         const verdicts = await judgeStaleFindings(eligible, {
           judge: deps.judge.judge,
           diff: deps.judge.diff,
-          conceptBody: (concept) => bundle.files.find((f) => f.path === concept)?.document.body ?? "",
+          conceptBody,
           concurrency: deps.judge.concurrency,
           maxDiffChars: deps.judge.maxDiffChars,
         });
         const { stale, judged } = applyJudgeVerdicts(report.stale, verdicts);
         report.stale = stale;
         report.judged = judged;
+
+        if (deps.judge.compare) {
+          // --judge-compare: diagnostic only, never touches stale/judged/ok.
+          compare = await compareJudges(eligible, {
+            primary: deps.judge.judge,
+            compare: deps.judge.compare,
+            diff: deps.judge.diff,
+            conceptBody,
+            concurrency: deps.judge.concurrency,
+            maxDiffChars: deps.judge.maxDiffChars,
+          });
+        }
       } catch (error) {
         if (!(error instanceof Anthropic.AuthenticationError)) throw error;
         // Judging never got off the ground — report the plain, unjudged audit
@@ -371,6 +491,7 @@ export async function runOkfAudit(
       links: report.links,
     };
     if (impacted !== undefined) jsonReport.impacted = impacted;
+    if (compare !== undefined) jsonReport.compare = compare;
     return { output: JSON.stringify(jsonReport, null, 2), ok };
   }
 
@@ -446,6 +567,10 @@ export async function runOkfAudit(
         lines.push(`  → ${item.concept} (via ${item.via.name} in ${item.via.file})`);
       }
     }
+  }
+
+  if (compare !== undefined) {
+    lines.push("", "  --judge-compare:", formatCompareReport(compare));
   }
 
   if (ok) lines.push("", "  every anchor resolves, and no concept is older than the code it explains");

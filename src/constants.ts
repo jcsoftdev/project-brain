@@ -26,6 +26,17 @@ export const CONCEPT_LLM_MODEL = "claude-haiku-4-5";
 /** Anthropic model used by `okf audit --judge` to judge stale findings. Opt-in — it costs money. */
 export const OKF_JUDGE_MODEL = "claude-opus-5";
 
+/**
+ * Below this confidence, a Jev `choice` verdict (`okf audit --judge-model jev`)
+ * is downgraded to "unclear" rather than trusted outright. Chosen as the point
+ * past which the model's own probability distribution says it is more likely
+ * right than wrong, but not by enough to skip a human's second look — the same
+ * bar `--judge`'s Claude path effectively applies by asking for its OWN
+ * "unclear" verdict when it isn't sure, since Jev's `choice` answer has no
+ * built-in third option for "I don't know" beyond picking `unclear` itself.
+ */
+export const JEV_JUDGE_MIN_CONFIDENCE = 0.6;
+
 /** Max modules conceptualized per commit; the rest are logged as pending. */
 export const CONCEPT_MODULE_CAP = 5;
 
