@@ -1,4 +1,5 @@
 import type { EmbeddingClient, VectorStore } from "../types.js";
+import type { Reranker } from "../rerank/jev.js";
 import { handleSearch } from "../tools/search.js";
 import { isTrivialPrompt } from "./trivial-prompt.js";
 
@@ -48,6 +49,8 @@ export interface SearchDeps {
   embeddings: EmbeddingClient;
   /** When present, infra-level failures are recorded for `project-brain health`. */
   dbPath?: string;
+  /** Optional Jev reranker — absent means opt-out (no token configured), never an error. */
+  reranker?: Reranker;
 }
 
 /**
@@ -208,6 +211,7 @@ export async function execute(
       const { LanceDbStore } = await import("../store/lancedb.js");
       const { createEmbeddingClient } = await import("../embeddings/factory.js");
       const { readTableMeta } = await import("../store/meta.js");
+      const { createReranker } = await import("../rerank/factory.js");
 
       const store = new LanceDbStore(DB_PATH);
       // Read the project's actual indexed model — the registry default
@@ -237,7 +241,12 @@ export async function execute(
       const { clearLastError } = await import("../store/error-state.js");
       await clearLastError(DB_PATH, project, "search-setup");
 
-      await runSearch({ query, project, limit }, { store, embeddings, dbPath: DB_PATH });
+      // Resolving a token is a cheap env/file read (no network); the reranker's
+      // own POST, if any, is bounded by RERANK_TIMEOUT_MS well inside the
+      // HOOK_TIMEOUT_MS race this whole execute() runs under.
+      const reranker = (await createReranker()) ?? undefined;
+
+      await runSearch({ query, project, limit }, { store, embeddings, dbPath: DB_PATH, reranker });
     } catch (err) {
       // Any setup error → print nothing
       if (project) {

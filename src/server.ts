@@ -27,7 +27,9 @@ import { GraphCache } from "./graph/cache.js";
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import { detectGitContext } from "./git/worktree.js";
+import { createReranker } from "./rerank/factory.js";
 import type { EmbeddingClient, ToolDeps } from "./types.js";
+import type { Reranker } from "./rerank/jev.js";
 
 interface ServerOptions {
   dbPath?: string;
@@ -46,6 +48,12 @@ interface ServerOptions {
    * OTHER projects' structural graphs. Defaults to DATA_DIR.
    */
   dataDir?: string;
+  /**
+   * Injectable Jev reranker — when omitted, resolved from a token
+   * (TYPESAFE_API_KEY or <dataDir>/reranker.json); null/absent means opt-out
+   * (zero network calls from search).
+   */
+  reranker?: Reranker;
 }
 
 /** Create and configure the MCP server with all tools registered. */
@@ -69,6 +77,11 @@ export async function createServer(options: ServerOptions = {}) {
     host: ollamaHost,
     defaultClient: embeddings,
   });
+
+  // Opt-in: resolves to undefined (no network, ever) unless a token is
+  // configured via TYPESAFE_API_KEY or <dataDir>/reranker.json.
+  const rerankerDataDir = options.dataDir ?? DATA_DIR;
+  const reranker = options.reranker ?? (await createReranker({ dataDir: rerankerDataDir })) ?? undefined;
 
   mkdirSync(dbPath, { recursive: true });
   // Structural graph lives at the PROJECT-LOCAL path (not the global data dir)
@@ -142,7 +155,7 @@ export async function createServer(options: ServerOptions = {}) {
 
   const deps: ToolDeps = {
     store, embeddings, embeddingsFor, graph, confirmDestructive, projectRoot, dbPath,
-    projectId: ownProjectId, graphFor,
+    projectId: ownProjectId, graphFor, reranker,
   };
 
   // Register all tools
