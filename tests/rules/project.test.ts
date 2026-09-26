@@ -208,6 +208,67 @@ describe("writeProjectRules", () => {
 });
 
 /**
+ * `isProjectRulesCurrent` is the read-only half of the same self-healing
+ * story `writeProjectRules` already provides: `init` rewrites the section
+ * unconditionally on every run, but nothing could previously tell a caller
+ * (e.g. `health`) whether the block on disk still matched the template
+ * before that next run happens.
+ */
+describe("isProjectRulesCurrent", () => {
+  let tempDir: string;
+  const info = {
+    projectId: "stale-check",
+    stack: { languages: ["TypeScript"], frameworks: [], packageManager: "bun", manifest: "package.json" },
+  };
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "brain-project-rules-stale-"));
+  });
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("is false when CLAUDE.md does not exist yet", async () => {
+    const { isProjectRulesCurrent } = await import("../../src/rules/project.js");
+    expect(await isProjectRulesCurrent(tempDir, info)).toBe(false);
+  });
+
+  it("is true immediately after writeProjectRules", async () => {
+    const { writeProjectRules, isProjectRulesCurrent } = await import("../../src/rules/project.js");
+    await writeProjectRules(tempDir, info);
+    expect(await isProjectRulesCurrent(tempDir, info)).toBe(true);
+  });
+
+  it("is false when the written block came from an old template", async () => {
+    const { writeSection } = await import("../../src/rules/section-marker.js");
+    const { isProjectRulesCurrent } = await import("../../src/rules/project.js");
+
+    await writeSection(join(tempDir, "CLAUDE.md"), "## project-brain MCP\n\nan old full tool catalog\n");
+    expect(await isProjectRulesCurrent(tempDir, info)).toBe(false);
+  });
+
+  it("is false when info changed (e.g. a newly detected module) even though the block was once current", async () => {
+    const { writeProjectRules, isProjectRulesCurrent } = await import("../../src/rules/project.js");
+    await writeProjectRules(tempDir, info);
+    expect(await isProjectRulesCurrent(tempDir, { ...info, modules: ["newly-added"] })).toBe(false);
+  });
+
+  it("preserves human-authored content outside the markers when the stale block is rewritten", async () => {
+    const { writeProjectRules, isProjectRulesCurrent } = await import("../../src/rules/project.js");
+    await Bun.write(join(tempDir, "CLAUDE.md"), "# Team notes\n\nKeep this.\n");
+    const { writeSection } = await import("../../src/rules/section-marker.js");
+    await writeSection(join(tempDir, "CLAUDE.md"), "## project-brain MCP\n\nold\n");
+    expect(await isProjectRulesCurrent(tempDir, info)).toBe(false);
+
+    await writeProjectRules(tempDir, info);
+    const content = await readFile(join(tempDir, "CLAUDE.md"), "utf-8");
+    expect(content).toContain("# Team notes");
+    expect(content).toContain("Keep this.");
+    expect(await isProjectRulesCurrent(tempDir, info)).toBe(true);
+  });
+});
+
+/**
  * The OKF block is conditional on the bundle EXISTING.
  *
  * A project with no `okf/` must not be told to maintain one — the instruction

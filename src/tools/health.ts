@@ -4,7 +4,7 @@ import { EMBEDDING_MODEL, VERSION, toolAnnotations } from "../constants.js";
 import type { ToolDeps } from "../types.js";
 import { jsonResult, type ToolResult } from "./format.js";
 import { readLastError } from "../store/error-state.js";
-import { measureEmbedLatency, readManifestChunks } from "../commands/health.js";
+import { measureEmbedLatency, readManifestChunks, readProjectRulesState } from "../commands/health.js";
 import { readSyncStatus } from "../commands/sync-status.js";
 import { HOOK_TIMEOUT_MS } from "../commands/search.js";
 
@@ -15,14 +15,16 @@ export async function handleHealth(
 ): Promise<ToolResult> {
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(args.project) : deps.embeddings;
 
-  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, manifestChunks, lastSync] = await Promise.all([
-    emb.isAvailable(),
-    deps.store.countChunks(args.project),
-    deps.dbPath ? readLastError(deps.dbPath, args.project) : Promise.resolve(null),
-    measureEmbedLatency(emb),
-    deps.projectRoot ? readManifestChunks(deps.projectRoot) : Promise.resolve(undefined),
-    deps.projectRoot ? readSyncStatus(deps.projectRoot) : Promise.resolve(null),
-  ]);
+  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, manifestChunks, lastSync, projectRules] =
+    await Promise.all([
+      emb.isAvailable(),
+      deps.store.countChunks(args.project),
+      deps.dbPath ? readLastError(deps.dbPath, args.project) : Promise.resolve(null),
+      measureEmbedLatency(emb),
+      deps.projectRoot ? readManifestChunks(deps.projectRoot) : Promise.resolve(undefined),
+      deps.projectRoot ? readSyncStatus(deps.projectRoot) : Promise.resolve(null),
+      deps.projectRoot ? readProjectRulesState(deps.projectRoot) : Promise.resolve(undefined),
+    ]);
 
   const report = {
     store: "connected",
@@ -42,6 +44,7 @@ export async function handleHealth(
       ? { manifestChunks, desynced: chunks < manifestChunks }
       : {}),
     ...(lastSync ? { lastSync } : {}),
+    ...(projectRules !== undefined ? { projectRules } : {}),
   };
 
   return jsonResult(report);
@@ -85,6 +88,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
             error: z.string().optional(),
           })
           .optional(),
+        projectRules: z.enum(["current", "stale", "missing"]).optional(),
       },
       annotations: toolAnnotations("check_health"),
     },

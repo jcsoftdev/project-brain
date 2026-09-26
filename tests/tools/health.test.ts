@@ -326,4 +326,49 @@ describe("check_health tool", () => {
     const data = JSON.parse(result.content[0].text);
     expect(data.token).toBeUndefined();
   });
+
+  it("omits projectRules when no projectRoot is provided", async () => {
+    const result = await handleHealth(
+      { project: "demo" },
+      { store: makeMockStore(1), embeddings: makeMockEmbeddings(true) }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.projectRules).toBeUndefined();
+  });
+
+  it("reports projectRules: missing when projectRoot has no .project-brain/project.json", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pb-tool-health-rules-"));
+    try {
+      const result = await handleHealth(
+        { project: "demo" },
+        { store: makeMockStore(1), embeddings: makeMockEmbeddings(true), projectRoot: dir }
+      );
+      const data = JSON.parse(result.content[0].text);
+      expect(data.projectRules).toBe("missing");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports projectRules: current when the CLAUDE.md block matches the current template", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pb-tool-health-rules-"));
+    try {
+      const { writeProjectRules } = await import("../../src/rules/project.js");
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const stack = { languages: ["TypeScript"], frameworks: [], packageManager: "bun", manifest: "package.json" };
+
+      await mkdir(join(dir, ".project-brain"), { recursive: true });
+      await writeFile(join(dir, ".project-brain", "project.json"), JSON.stringify({ projectId: "p", stack }));
+      await writeProjectRules(dir, { projectId: "p", stack });
+
+      const result = await handleHealth(
+        { project: "demo" },
+        { store: makeMockStore(1), embeddings: makeMockEmbeddings(true), projectRoot: dir }
+      );
+      const data = JSON.parse(result.content[0].text);
+      expect(data.projectRules).toBe("current");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -94,4 +94,44 @@ describe("host units", () => {
 
     await rm(dir, { recursive: true, force: true });
   });
+
+  it("reports stale when registered but the rules file holds an old block, and apply heals it", async () => {
+    const { hostUnits } = await import("../../src/setup/units.js");
+    const { writeSection } = await import("../../src/rules/section-marker.js");
+    const { isGlobalRulesCurrent } = await import("../../src/rules/global.js");
+    const dir = await mkdtemp(join(tmpdir(), "pb-hosts-stale-"));
+    const configPath = join(dir, "mcp.json");
+    const rulesPath = join(dir, "CLAUDE.md");
+
+    await Bun.write(configPath, JSON.stringify({ mcpServers: { "project-brain": {} } }));
+    await Bun.write(rulesPath, "# Human notes\n\nKeep this.\n");
+    await writeSection(rulesPath, "## project-brain MCP\n\nan old full tool catalog\n");
+
+    const registrar: AIToolRegistrar = {
+      name: "Claude Code",
+      async isInstalled() {
+        return true;
+      },
+      async register() {},
+      async writeRules(content: string) {
+        await writeSection(rulesPath, content);
+      },
+      mcpConfigTarget: () => ({ path: configPath, containerKey: "mcpServers" }),
+      rulesFilePath: () => rulesPath,
+    };
+    const ctx = await context([registrar]);
+    const unit = hostUnits([registrar])[0]!;
+
+    expect(await unit.inspect(ctx)).toBe("stale");
+
+    await unit.apply(ctx);
+
+    expect(await unit.inspect(ctx)).toBe("current");
+    expect(await isGlobalRulesCurrent(rulesPath, "claude")).toBe(true);
+    const text = await Bun.file(rulesPath).text();
+    expect(text).toContain("# Human notes");
+    expect(text).toContain("Keep this.");
+
+    await rm(dir, { recursive: true, force: true });
+  });
 });

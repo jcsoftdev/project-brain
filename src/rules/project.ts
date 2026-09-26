@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import template from "../../templates/project.claude.md" with { type: "text" };
 import { writeSection, type SectionWriteSummary } from "./section-marker.js";
+import { extractSection } from "../markers.js";
 import { listLiveWorktrees } from "../git/worktree.js";
 import type { StackInfo } from "../indexer/stack.js";
 
@@ -137,17 +138,14 @@ Read-only work needs none of this.
 }
 
 /**
- * Write project-specific rules into <root>/CLAUDE.md using the project template.
- * Substitutes {{projectId}} and {{stack}} placeholders.
- * Uses writeSection for idempotent marker-based insertion.
+ * Render the project rules section content for `writeProjectRules` and for
+ * `isProjectRulesCurrent`'s staleness check — kept as one function so the two
+ * can never drift into rendering different content for the same info.
  */
-export async function writeProjectRules(
-  root: string,
-  info: ProjectRulesInfo
-): Promise<SectionWriteSummary> {
+export function renderProjectRules(root: string, info: ProjectRulesInfo): string {
   const modulesSection = renderModulesSection(info.modules ?? []);
 
-  const rendered = template
+  return template
     .replace(/\{\{projectId\}\}/g, info.projectId)
     .replace(/\{\{stack\}\}/g, formatStack(info.stack))
     .replace(/\{\{modules\}\}/g, modulesSection)
@@ -156,7 +154,38 @@ export async function writeProjectRules(
     // places that are not repositories, and a wrong answer here writes an instruction
     // the project can never follow.
     .replace(/\{\{worktree\}\}/g, renderWorktreeSection(listLiveWorktrees(root).length > 0));
+}
 
+/**
+ * Write project-specific rules into <root>/CLAUDE.md using the project template.
+ * Substitutes {{projectId}} and {{stack}} placeholders.
+ * Uses writeSection for idempotent marker-based insertion.
+ */
+export async function writeProjectRules(
+  root: string,
+  info: ProjectRulesInfo
+): Promise<SectionWriteSummary> {
   const claudeMdPath = join(root, "CLAUDE.md");
-  return writeSection(claudeMdPath, rendered);
+  return writeSection(claudeMdPath, renderProjectRules(root, info));
+}
+
+/**
+ * Whether <root>/CLAUDE.md's project-brain section already matches what
+ * `writeProjectRules` would write today.
+ *
+ * `init` already rewrites this section unconditionally on every run, so a
+ * stale block heals the moment `init` runs again — but nothing told anyone
+ * it HAD gone stale, so a project that stopped re-running `init` (or ran it
+ * only with `--skip-index` before a template change) kept an old block
+ * indefinitely. This is the read-only half: the check `health` surfaces so
+ * staleness is visible without a manual diff against the template.
+ */
+export async function isProjectRulesCurrent(root: string, info: ProjectRulesInfo): Promise<boolean> {
+  let text: string;
+  try {
+    text = await Bun.file(join(root, "CLAUDE.md")).text();
+  } catch {
+    return false;
+  }
+  return extractSection(text) === renderProjectRules(root, info);
 }

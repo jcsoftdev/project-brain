@@ -2,6 +2,7 @@ import claudeTemplate from "../../templates/rules.claude.md" with { type: "text"
 import codexTemplate from "../../templates/rules.codex.md" with { type: "text" };
 import geminiTemplate from "../../templates/rules.gemini.md" with { type: "text" };
 import { renderToolDocs } from "../constants.js";
+import { extractSection } from "../markers.js";
 
 const FALLBACK = `## project-brain MCP
 
@@ -31,4 +32,25 @@ const TEMPLATES: Record<string, string> = {
 export async function getGlobalRules(tool: string): Promise<string> {
   const template = TEMPLATES[tool] ?? FALLBACK;
   return template.replace(/\{\{tools\}\}/g, renderToolDocs());
+}
+
+/**
+ * Whether the project-brain section already written at `rulesPath` matches
+ * what `getGlobalRules(tool)` would render today.
+ *
+ * `inspect()` used to only ask the MCP config "are we registered" and never
+ * looked at the rules file at all, so a block written by an older release
+ * (or an older template) stayed "current" forever — `apply()` never had a
+ * reason to touch it again. This is the missing half: a byte-for-byte
+ * comparison of the managed section, so a stale block is reported and healed
+ * through the normal setup path instead of a manual edit.
+ */
+export async function isGlobalRulesCurrent(rulesPath: string, tool: string): Promise<boolean> {
+  let text: string;
+  try {
+    text = await Bun.file(rulesPath).text();
+  } catch {
+    return false;
+  }
+  return extractSection(text) === (await getGlobalRules(tool));
 }
