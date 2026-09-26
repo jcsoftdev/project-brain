@@ -1,9 +1,10 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, spyOn } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleHealth } from "../../src/tools/health.js";
 import { VECTOR_DIM } from "../../src/constants.js";
+import { HOOK_TIMEOUT_MS } from "../../src/commands/search.js";
 import type { VectorStore, EmbeddingClient } from "../../src/types.js";
 import { writeLastError } from "../../src/store/error-state.js";
 
@@ -129,5 +130,80 @@ describe("check_health tool", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("times a real embed and reports embedLatencyMs + slowEmbeddings", async () => {
+    const slowEmbeddings: EmbeddingClient = {
+      dim: VECTOR_DIM,
+      embed: async (texts) => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return texts.map(() => [0.1]);
+      },
+      isAvailable: async () => true,
+    };
+
+    const result = await handleHealth(
+      { project: "demo" },
+      { store: makeMockStore(1), embeddings: slowEmbeddings }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.embedLatencyMs).toBeGreaterThanOrEqual(20);
+    expect(data.slowEmbeddings).toBe(false);
+  });
+
+  it("flags slowEmbeddings when embed latency exceeds the hook's timeout budget", async () => {
+    const verySlowEmbeddings: EmbeddingClient = {
+      dim: VECTOR_DIM,
+      embed: async (texts) => texts.map(() => [0.1]),
+      isAvailable: async () => true,
+    };
+
+    // Fake the clock instead of sleeping past HOOK_TIMEOUT_MS: measureEmbedLatency
+    // reads performance.now() exactly twice (start, then after the embed resolves).
+    const nowSpy = spyOn(performance, "now")
+      .mockImplementationOnce(() => 0)
+      .mockImplementationOnce(() => HOOK_TIMEOUT_MS + 5);
+    try {
+      const result = await handleHealth(
+        { project: "demo" },
+        { store: makeMockStore(1), embeddings: verySlowEmbeddings }
+      );
+      const data = JSON.parse(result.content[0].text);
+      expect(data.embedLatencyMs).toBe(HOOK_TIMEOUT_MS + 5);
+      expect(data.slowEmbeddings).toBe(true);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("reports manifest desync when projectRoot is provided and the store lags the manifest", async () => {
+    const { ManifestStore } = await import("../../src/indexer/manifest-store.js");
+    const dir = await mkdtemp(join(tmpdir(), "pb-tool-health-manifest-"));
+    try {
+      const manifest = new ManifestStore(dir);
+      manifest.upsertFile("a.ts", "hash-a", 1, { c1: "h1", c2: "h2" });
+      manifest.upsertFile("b.ts", "hash-b", 1, { c3: "h3" });
+      manifest.close();
+
+      const result = await handleHealth(
+        { project: "demo" },
+        { store: makeMockStore(1), embeddings: makeMockEmbeddings(true), projectRoot: dir }
+      );
+      const data = JSON.parse(result.content[0].text);
+      expect(data.manifestChunks).toBe(3);
+      expect(data.desynced).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits manifest fields when projectRoot has no manifest", async () => {
+    const result = await handleHealth(
+      { project: "demo" },
+      { store: makeMockStore(1), embeddings: makeMockEmbeddings(true) }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.manifestChunks).toBeUndefined();
+    expect(data.desynced).toBeUndefined();
   });
 });

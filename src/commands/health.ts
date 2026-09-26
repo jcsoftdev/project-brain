@@ -1,6 +1,7 @@
 import { EMBEDDING_MODEL, VERSION } from "../constants.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
 import { readLastError, type LastError } from "../store/error-state.js";
+import { HOOK_TIMEOUT_MS } from "./search.js";
 
 export interface HealthOptions {
   /** Project identifier for chunk count lookup. */
@@ -25,6 +26,31 @@ export interface HealthResult {
   desynced: boolean;
   version: string;
   lastError?: LastError;
+  /** Wall-clock time of one real embed of a short query, in ms. Undefined when the embed call itself threw. */
+  embedLatencyMs?: number;
+  /**
+   * True when embedLatencyMs alone would exceed the hook's race budget
+   * ({@link HOOK_TIMEOUT_MS}) — `isAvailable()` can say "available" from a
+   * cheap probe while the real embed is this slow, and the prompt hook then
+   * injects nothing every time, silently.
+   */
+  slowEmbeddings: boolean;
+}
+
+/**
+ * Times one real embed of a short query — `isAvailable()` alone can be a
+ * cheap probe that says "available" while an overloaded embedding backend
+ * takes seconds per call, which is exactly what the hook budget guards
+ * against. Returns undefined if the embed call itself throws.
+ */
+export async function measureEmbedLatency(embeddings: EmbeddingClient): Promise<number | undefined> {
+  const start = performance.now();
+  try {
+    await embeddings.embed(["hello"]);
+  } catch {
+    return undefined;
+  }
+  return performance.now() - start;
 }
 
 /**
@@ -34,10 +60,11 @@ export interface HealthResult {
 export async function runHealth(options: HealthOptions): Promise<HealthResult> {
   const { projectId, store, embeddings, dbPath, manifestChunks } = options;
 
-  const [embeddingsAvailable, chunks, lastError] = await Promise.all([
+  const [embeddingsAvailable, chunks, lastError, embedLatencyMs] = await Promise.all([
     embeddings.isAvailable(),
     store.countChunks(projectId),
     readLastError(dbPath, projectId),
+    measureEmbedLatency(embeddings),
   ]);
 
   return {
@@ -49,11 +76,13 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
     desynced: manifestChunks !== undefined && chunks < manifestChunks,
     version: VERSION,
     ...(lastError ? { lastError } : {}),
+    ...(embedLatencyMs !== undefined ? { embedLatencyMs } : {}),
+    slowEmbeddings: embedLatencyMs !== undefined && embedLatencyMs > HOOK_TIMEOUT_MS,
   };
 }
 
 /** Read-only: health must not create a manifest in a repo that never had one. */
-async function readManifestChunks(root: string): Promise<number | undefined> {
+export async function readManifestChunks(root: string): Promise<number | undefined> {
   const { existsSync } = await import("node:fs");
   const { join } = await import("node:path");
   const path = join(root, ".project-brain", "manifest.db");
@@ -110,6 +139,14 @@ export async function execute(args: string[]): Promise<void> {
   console.log(`  Chunks:     ${result.chunks}${result.manifestChunks !== undefined ? ` (manifest: ${result.manifestChunks})` : ""}`);
   if (result.desynced) {
     console.log(`  ⚠ Store is missing chunks the manifest recorded — the next sync re-adds them, or run: project-brain reindex`);
+  }
+  if (result.embedLatencyMs !== undefined) {
+    console.log(`  Embed latency: ${Math.round(result.embedLatencyMs)}ms`);
+  }
+  if (result.slowEmbeddings) {
+    console.log(
+      `  ⚠ Embedding latency (${Math.round(result.embedLatencyMs ?? 0)}ms) exceeds the prompt hook's ${HOOK_TIMEOUT_MS}ms budget — the hook will inject nothing while this persists. Check system load or Ollama.`
+    );
   }
   console.log(`  Version:    ${result.version}`);
   if (result.lastError) {

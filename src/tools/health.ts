@@ -4,6 +4,8 @@ import { EMBEDDING_MODEL, VERSION, toolAnnotations } from "../constants.js";
 import type { ToolDeps } from "../types.js";
 import { jsonResult, type ToolResult } from "./format.js";
 import { readLastError } from "../store/error-state.js";
+import { measureEmbedLatency, readManifestChunks } from "../commands/health.js";
+import { HOOK_TIMEOUT_MS } from "../commands/search.js";
 
 /** Handle check_health logic (exported for testing). */
 export async function handleHealth(
@@ -12,10 +14,12 @@ export async function handleHealth(
 ): Promise<ToolResult> {
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(args.project) : deps.embeddings;
 
-  const [embeddingsAvailable, chunks, lastError] = await Promise.all([
+  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, manifestChunks] = await Promise.all([
     emb.isAvailable(),
     deps.store.countChunks(args.project),
     deps.dbPath ? readLastError(deps.dbPath, args.project) : Promise.resolve(null),
+    measureEmbedLatency(emb),
+    deps.projectRoot ? readManifestChunks(deps.projectRoot) : Promise.resolve(undefined),
   ]);
 
   const report = {
@@ -25,6 +29,11 @@ export async function handleHealth(
     chunks,
     version: VERSION,
     ...(lastError ? { lastError } : {}),
+    ...(embedLatencyMs !== undefined ? { embedLatencyMs } : {}),
+    slowEmbeddings: embedLatencyMs !== undefined && embedLatencyMs > HOOK_TIMEOUT_MS,
+    ...(manifestChunks !== undefined
+      ? { manifestChunks, desynced: chunks < manifestChunks }
+      : {}),
   };
 
   return jsonResult(report);
@@ -48,6 +57,10 @@ export function register(server: McpServer, deps: ToolDeps): void {
         lastError: z
           .object({ phase: z.string(), message: z.string(), timestamp: z.number() })
           .optional(),
+        embedLatencyMs: z.number().optional(),
+        slowEmbeddings: z.boolean(),
+        manifestChunks: z.number().optional(),
+        desynced: z.boolean().optional(),
       },
       annotations: toolAnnotations("check_health"),
     },

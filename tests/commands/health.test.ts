@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { VECTOR_DIM } from "../../src/constants.js";
+import { HOOK_TIMEOUT_MS } from "../../src/commands/search.js";
 import type { VectorStore, EmbeddingClient, Chunk, SearchResult } from "../../src/types.js";
 
 function makeStore(count: number): VectorStore {
@@ -169,6 +170,73 @@ describe("health command", () => {
       });
 
       expect(result.model).toBe("qwen3-embedding:0.6b");
+    });
+  });
+
+  describe("embedding latency", () => {
+    let dir: string;
+    beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "pb-health-latency-")); });
+    afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+    function makeSlowEmbeddings(delayMs: number): EmbeddingClient {
+      return {
+        dim: VECTOR_DIM,
+        embed: async (texts) => {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          return texts.map(() => [0.1]);
+        },
+        isAvailable: async () => true,
+      };
+    }
+
+    it("times a real embed of a short query and reports the latency", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo", store: makeStore(0), embeddings: makeSlowEmbeddings(20), dbPath: dir,
+      });
+
+      expect(result.embedLatencyMs).toBeGreaterThanOrEqual(20);
+      expect(result.slowEmbeddings).toBe(false);
+    });
+
+    it("warns when embed latency exceeds the hook's timeout budget", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      // Fake the clock instead of sleeping past HOOK_TIMEOUT_MS: measureEmbedLatency
+      // reads performance.now() exactly twice (start, then after the embed resolves).
+      const nowSpy = spyOn(performance, "now")
+        .mockImplementationOnce(() => 0)
+        .mockImplementationOnce(() => HOOK_TIMEOUT_MS + 5);
+      try {
+        const result = await runHealth({
+          projectId: "demo",
+          store: makeStore(0),
+          embeddings: makeSlowEmbeddings(0),
+          dbPath: dir,
+        });
+
+        expect(result.embedLatencyMs).toBe(HOOK_TIMEOUT_MS + 5);
+        expect(result.slowEmbeddings).toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("does not flag slowEmbeddings when the embed call fails outright", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const throwingEmbeddings: EmbeddingClient = {
+        dim: VECTOR_DIM,
+        embed: async () => {
+          throw new Error("ollama unreachable");
+        },
+        isAvailable: async () => false,
+      };
+
+      const result = await runHealth({
+        projectId: "demo", store: makeStore(0), embeddings: throwingEmbeddings, dbPath: dir,
+      });
+
+      expect(result.embedLatencyMs).toBeUndefined();
+      expect(result.slowEmbeddings).toBe(false);
     });
   });
 });
