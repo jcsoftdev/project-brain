@@ -17,6 +17,13 @@ name: Promote dist-tag
 # This job re-runs the completeness check rather than trusting the operator.
 # A one-click way to point `latest` at an incomplete release would defeat the
 # guard it exists to recover from.
+#
+# Known limitation (0.34.0): npm now requires interactive 2FA for dist-tag
+# changes, and the CI token no longer bypasses it, so the Promote step fails
+# after the completeness check passes. Until trusted publishing covers
+# dist-tags, promote from a maintainer machine after this check is green:
+#   npm dist-tag add project-brain@<version> latest
+# release.yml waits 18 minutes for platform packages so this path is rare.
 
 on:
   workflow_dispatch:

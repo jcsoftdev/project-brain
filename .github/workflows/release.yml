@@ -413,7 +413,7 @@ jobs:
     # a real version. Publish only when a build actually ran.
     if: always() && startsWith(github.ref, 'refs/tags/') && needs.build.result != 'skipped'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
 
@@ -477,15 +477,22 @@ jobs:
       # the wait a wait rather than a delay.
       #
       # The deadline is real: a genuinely failed platform build must still fall
-      # through to `next` rather than hanging the job to its 10-minute timeout,
-      # which would withhold the release from every platform that did build.
+      # through to `next` rather than hanging the job to its timeout, which
+      # would withhold the release from every platform that did build.
+      #
+      # 18 minutes, not 6: darwin-arm64 (the largest tarball) took ~9 minutes
+      # to become visible for 0.33.0 and 0.34.0, so a 6-minute wait sent both
+      # to `next`. Recovering from `next` is no longer hands-off: npm now
+      # demands interactive 2FA for dist-tag changes, so promote.yml's CI token
+      # cannot move `latest`. Waiting long enough here is the only automatic
+      # path to `latest`.
       - name: Decide dist-tag
         id: disttag
         shell: bash
         run: |
           VERSION="${VERSION#v}"
           PKGS="$(node -e "console.log(Object.keys(require('./package.json').optionalDependencies||{}).join(' '))")"
-          DEADLINE=$(( SECONDS + 360 ))
+          DEADLINE=$(( SECONDS + 1080 ))
           while :; do
             MISSING=""
             for pkg in ${PKGS}; do
@@ -503,7 +510,7 @@ jobs:
             echo "All platform packages present at ${VERSION} — publishing to latest."
           else
             echo "tag=next" >> "$GITHUB_OUTPUT"
-            echo "::warning::Missing platform packages at ${VERSION} after waiting 6 minutes:${MISSING} — publishing under 'next', leaving 'latest' untouched. Re-run the failed build job, then promote with: npm dist-tag add project-brain@${VERSION} latest"
+            echo "::warning::Missing platform packages at ${VERSION} after waiting 18 minutes:${MISSING} — publishing under 'next', leaving 'latest' untouched. Re-run the failed build job, then promote with: npm dist-tag add project-brain@${VERSION} latest"
           fi
         env:
           VERSION: ${{ github.ref_name }}
