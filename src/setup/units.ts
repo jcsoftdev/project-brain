@@ -38,6 +38,18 @@ export interface SetupContext {
    * write the real one.
    */
   serviceDir?: string;
+  /**
+   * Non-interactive token for `config:reranker`, from `--reranker-token`.
+   * When absent, `apply()` falls back to `TYPESAFE_API_KEY`, then an
+   * interactive prompt.
+   */
+  rerankerToken?: string;
+  /**
+   * Injectable for testing; defaults to the real `promptRerankerToken` from
+   * `src/interactive.js`, which itself only prompts in a genuine interactive
+   * session (see `isInteractive`).
+   */
+  promptRerankerToken?: () => Promise<string | null>;
 }
 
 /**
@@ -538,6 +550,48 @@ export function otherUnits(): SetupUnit[] {
       async remove(ctx): Promise<void> {
         const { rm } = await import("node:fs/promises");
         await rm(ctx.recordConfigPath, { force: true });
+      },
+    },
+    {
+      id: "config:reranker",
+      group: "Other",
+      label: "Jev reranker",
+      description:
+        "reorders search results with TypeSafe's Jev model — sends the query and candidate code/doc snippets to api.typesafe.ai",
+      // Ships unchecked: unlike every other unit here, this one sends the
+      // content of every search — the query AND candidate code/doc snippets —
+      // to a third-party API. That is a real disclosure decision, not a
+      // convenience default.
+      defaultSelected: false,
+
+      async inspect(ctx): Promise<UnitState> {
+        const { resolveRerankerToken } = await import("../rerank/token.js");
+        const token = await resolveRerankerToken({ dataDir: ctx.dataDir });
+        return token ? "current" : "absent";
+      },
+
+      async apply(ctx): Promise<void> {
+        const { writeRerankerToken } = await import("../rerank/token.js");
+
+        let token = ctx.rerankerToken ?? process.env.TYPESAFE_API_KEY;
+        if (!token) {
+          const prompt =
+            ctx.promptRerankerToken ?? (await import("../interactive.js")).promptRerankerToken;
+          token = (await prompt()) ?? undefined;
+        }
+        if (!token) {
+          throw new Error(
+            "Jev reranker requires a token: pass --reranker-token <token>, set TYPESAFE_API_KEY, " +
+              "or run setup interactively to be prompted."
+          );
+        }
+
+        await writeRerankerToken(ctx.dataDir, token);
+      },
+
+      async remove(ctx): Promise<void> {
+        const { removeRerankerToken } = await import("../rerank/token.js");
+        await removeRerankerToken(ctx.dataDir);
       },
     },
     settingsKeyUnit({

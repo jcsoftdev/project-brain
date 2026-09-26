@@ -6,6 +6,7 @@ import { getRegistrars, type AIToolRegistrar } from "../registrars/types.js";
 import { UnparseableConfigError, standardServerEntry } from "../registrars/json-config.js";
 import {
   parseRecordConnectionFlag,
+  parseRerankerTokenFlag,
   parseRoutingHookFlag,
   parseUnitFlags,
   parseWorktreeHookFlag,
@@ -44,6 +45,16 @@ export interface SetupOptions {
    * "live" — see `parseRecordConnectionFlag`'s doc comment for why.
    */
   recordConnection?: { mode: "fresh" | "live"; cdpPort: number };
+  /**
+   * Non-interactive token for the `config:reranker` unit, from
+   * `--reranker-token`. See `SetupContext.rerankerToken`.
+   */
+  rerankerToken?: string;
+  /**
+   * Injectable for testing; defaults to the real `promptRerankerToken` from
+   * `src/interactive.js`. See `SetupContext.promptRerankerToken`.
+   */
+  promptRerankerToken?: () => Promise<string | null>;
   /**
    * Injectable for testing; defaults to `<dataDir>/record-config.json`, NOT a
    * fixed homedir() constant — tying it to the already-injected `dataDir` is
@@ -260,6 +271,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     },
     skipOllama: options.skipOllama ?? false,
     routingConfigPath: options.routingConfigPath,
+    rerankerToken: options.rerankerToken,
+    promptRerankerToken: options.promptRerankerToken,
   };
 
   // Preserved from the previous implementation: UnparseableConfigError from a
@@ -442,6 +455,7 @@ export async function execute(args: string[]): Promise<void> {
   const recordConnection = parseRecordConnectionFlag(args);
   const routingHook = parseRoutingHookFlag(args);
   const worktreeHook = parseWorktreeHookFlag(args);
+  const rerankerToken = parseRerankerTokenFlag(args);
 
   // The id list needs a context, and a context needs detection — so this runs
   // a detection-only pass first. Cheap: `isInstalled()` is a file stat per host.
@@ -473,7 +487,7 @@ export async function execute(args: string[]): Promise<void> {
         : "")
   );
 
-  const result = await runSetup({ recordConnection, routingHook, worktreeHook, units });
+  const result = await runSetup({ recordConnection, routingHook, worktreeHook, units, rerankerToken });
 
   console.log(`Environment:`);
   console.log(`  Bun: ${result.env.bun}`);

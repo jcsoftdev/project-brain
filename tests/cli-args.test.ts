@@ -7,6 +7,7 @@ import {
   parseListFlag,
   parseWorktreeHookFlag,
   parseRecordConnectionFlag,
+  parseRerankerTokenFlag,
 } from "../src/cli-args.js";
 
 describe("parsePort", () => {
@@ -335,5 +336,23 @@ describe("parseUnitFlags", () => {
     };
 
     expect(result.error).toContain("--with=");
+  });
+});
+
+describe("parseRerankerTokenFlag", () => {
+  it("returns undefined when the flag is absent", () => {
+    expect(parseRerankerTokenFlag([])).toBeUndefined();
+  });
+
+  it("returns the value after --reranker-token", () => {
+    expect(parseRerankerTokenFlag(["--reranker-token", "sk-abc123"])).toBe("sk-abc123");
+  });
+
+  it("returns undefined when the flag has no following value", () => {
+    expect(parseRerankerTokenFlag(["--reranker-token"])).toBeUndefined();
+  });
+
+  it("returns undefined when the flag is immediately followed by another flag", () => {
+    expect(parseRerankerTokenFlag(["--reranker-token", "--all"])).toBeUndefined();
   });
 });

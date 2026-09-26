@@ -80,6 +80,15 @@ export function parseRecordConnectionFlag(args: string[]): {
 }
 
 /**
+ * Resolve the `--reranker-token <token>` flag for non-interactive setup runs.
+ * Undefined when absent (falls back to `TYPESAFE_API_KEY`, then an
+ * interactive prompt, then failing the unit — see `config:reranker`).
+ */
+export function parseRerankerTokenFlag(args: string[]): string | undefined {
+  return parseStringFlag(args, "--reranker-token");
+}
+
+/**
  * Collect positional (non-flag) arguments, skipping both a valued flag AND
  * its following value. Flags not listed in `valuedFlags` are simply excluded
  * from the positionals themselves — they are not treated as consuming a

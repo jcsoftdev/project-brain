@@ -85,6 +85,26 @@ export async function promptUnitSelection(
   return rows.filter((r) => chosen.has(r.id)).map((r) => r.id);
 }
 
+/**
+ * Prompt for the TypeSafe API token via a masked password prompt, for the
+ * `config:reranker` setup unit.
+ *
+ * Real prompts only happen in a genuine interactive session: a non-interactive
+ * run (CI, piped, scripted) returns null immediately rather than hanging on
+ * input, and the unit's `apply()` treats that the same as a cancelled prompt —
+ * it fails with a message naming `--reranker-token` and `TYPESAFE_API_KEY` as
+ * the non-interactive alternatives.
+ */
+export async function promptRerankerToken(): Promise<string | null> {
+  if (!isInteractive()) return null;
+  const clack = await import("@clack/prompts");
+  const answer = await clack.password({
+    message: "TypeSafe API token — queries and candidate code/doc snippets are sent to api.typesafe.ai:",
+  });
+  if (clack.isCancel(answer) || !answer) return null;
+  return answer;
+}
+
 /** One prompt's worth of rows: the group, what it is, and what can be ticked. */
 export interface PromptSection {
   group: string;

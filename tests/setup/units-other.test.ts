@@ -65,6 +65,127 @@ describe("other units", () => {
   });
 });
 
+describe("Jev reranker unit", () => {
+  it("ships unchecked and describes what it sends to TypeSafe", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const u = otherUnits().find((x) => x.id === "config:reranker")!;
+    expect(u.defaultSelected).toBe(false);
+    expect(u.group).toBe("Other");
+    expect(u.description).toContain("TypeSafe");
+  });
+
+  it("is absent until a token is written, then current, then absent again on remove", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const u = otherUnits().find((x) => x.id === "config:reranker")!;
+    const ctx = await context();
+    ctx.rerankerToken = "sk-explicit-token";
+
+    expect(await u.inspect(ctx)).toBe("absent");
+    await u.apply(ctx);
+    expect(await u.inspect(ctx)).toBe("current");
+
+    const { rerankerTokenPath } = await import("../../src/rerank/token.js");
+    expect(JSON.parse(await Bun.file(rerankerTokenPath(ctx.dataDir)).text())).toEqual({
+      token: "sk-explicit-token",
+    });
+
+    await u.remove(ctx);
+    expect(await u.inspect(ctx)).toBe("absent");
+
+    await rm(ctx.dataDir, { recursive: true, force: true });
+  });
+
+  it("falls back to TYPESAFE_API_KEY when no explicit token was passed", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const u = otherUnits().find((x) => x.id === "config:reranker")!;
+    const ctx = await context();
+    const prev = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = "env-token";
+    try {
+      await u.apply(ctx);
+      const { rerankerTokenPath } = await import("../../src/rerank/token.js");
+      expect(JSON.parse(await Bun.file(rerankerTokenPath(ctx.dataDir)).text())).toEqual({
+        token: "env-token",
+      });
+    } finally {
+      if (prev === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = prev;
+      await rm(ctx.dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prompts interactively when injected and no token/flag/env is available", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const u = otherUnits().find((x) => x.id === "config:reranker")!;
+    const ctx = await context();
+    const prev = process.env.TYPESAFE_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    ctx.promptRerankerToken = async () => "typed-token";
+    try {
+      await u.apply(ctx);
+      const { rerankerTokenPath } = await import("../../src/rerank/token.js");
+      expect(JSON.parse(await Bun.file(rerankerTokenPath(ctx.dataDir)).text())).toEqual({
+        token: "typed-token",
+      });
+    } finally {
+      if (prev !== undefined) process.env.TYPESAFE_API_KEY = prev;
+      await rm(ctx.dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails the unit with a clear message naming both non-interactive options when no token is available", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const u = otherUnits().find((x) => x.id === "config:reranker")!;
+    const ctx = await context();
+    const prev = process.env.TYPESAFE_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    // No ctx.rerankerToken, no ctx.promptRerankerToken injected — the real
+    // interactive.js prompt runs, and under `bun test` (no TTY) it returns
+    // null immediately, exercising the non-interactive failure path.
+    try {
+      await expect(u.apply(ctx)).rejects.toThrow(/--reranker-token/);
+      await expect(u.apply(ctx)).rejects.toThrow(/TYPESAFE_API_KEY/);
+      expect(await u.inspect(ctx)).toBe("absent");
+    } finally {
+      if (prev !== undefined) process.env.TYPESAFE_API_KEY = prev;
+      await rm(ctx.dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cancelling the interactive prompt also fails the unit, writing nothing", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const u = otherUnits().find((x) => x.id === "config:reranker")!;
+    const ctx = await context();
+    const prev = process.env.TYPESAFE_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    ctx.promptRerankerToken = async () => null;
+    try {
+      await expect(u.apply(ctx)).rejects.toThrow();
+      expect(await u.inspect(ctx)).toBe("absent");
+    } finally {
+      if (prev !== undefined) process.env.TYPESAFE_API_KEY = prev;
+      await rm(ctx.dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("never logs or throws the token itself", async () => {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const u = otherUnits().find((x) => x.id === "config:reranker")!;
+    const ctx = await context();
+    ctx.rerankerToken = "super-secret-token";
+    const logs: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => logs.push(args.map(String).join(" "));
+    try {
+      await u.apply(ctx);
+      expect(logs.join("\n")).not.toContain("super-secret-token");
+    } finally {
+      console.warn = originalWarn;
+      await rm(ctx.dataDir, { recursive: true, force: true });
+    }
+  });
+});
+
 /** A registrar that owns one JSON MCP config file, and nothing else. */
 function jsonHost(name: string, path: string): AIToolRegistrar {
   return {
