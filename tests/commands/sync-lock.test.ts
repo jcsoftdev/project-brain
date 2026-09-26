@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   acquireSyncLock,
+  readLockHolder,
   syncLockPath,
   SYNC_LOCK_STALE_MS,
 } from "../../src/commands/sync-lock.js";
@@ -103,5 +104,26 @@ describe("acquireSyncLock", () => {
     await lock!.release();
     await lock!.release();
     expect(existsSync(syncLockPath(root))).toBe(false);
+  });
+});
+
+describe("readLockHolder", () => {
+  it("returns null when no lock is held", async () => {
+    expect(await readLockHolder(root)).toBeNull();
+  });
+
+  it("returns the current holder's pid and timestamp for display", async () => {
+    await acquireSyncLock(root, { pid: 14982, now: () => 60_000 });
+
+    const holder = await readLockHolder(root);
+    expect(holder).toEqual({ pid: 14982, at: 60_000 });
+  });
+
+  it("never decides staleness — it just reads, even for a dead or ancient holder", async () => {
+    await acquireSyncLock(root, { pid: 1, isAlive: () => false, now: () => 0 });
+
+    // A liveness-blind read: still reports the record as-is.
+    const holder = await readLockHolder(root);
+    expect(holder).toEqual({ pid: 1, at: 0 });
   });
 });

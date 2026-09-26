@@ -63,6 +63,15 @@ async function readRecord(path: string): Promise<LockRecord | null> {
 }
 
 /**
+ * Read the current lock holder for display purposes (e.g. the "sync already
+ * running" skip message). Never use this to decide whether to take the lock
+ * over — that staleness/liveness judgment belongs to acquireSyncLock alone.
+ */
+export async function readLockHolder(root: string): Promise<LockRecord | null> {
+  return readRecord(syncLockPath(root));
+}
+
+/**
  * Cross-process single-flight lock for a project's sync, held as a file under
  * `.project-brain/`.
  *

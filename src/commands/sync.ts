@@ -1216,11 +1216,17 @@ export async function execute(args: string[]): Promise<void> {
   // machine ran out of swap and the OS started killing unrelated processes.
   // Skipping (not queueing) is the right answer: the holder is about to index
   // the same working tree.
-  const { acquireSyncLock } = await import("./sync-lock.js");
-  const { writeSyncStatus, writeSyncStatusSync } = await import("./sync-status.js");
+  const { acquireSyncLock, readLockHolder } = await import("./sync-lock.js");
+  const { writeSyncStatus, writeSyncStatusSync, formatSkipMessage } = await import(
+    "./sync-status.js"
+  );
   const lock = await acquireSyncLock(root);
   if (lock === null) {
-    console.log(`A sync is already running for ${projectId} — skipping this one.`);
+    // Best-effort holder lookup for the message only — a race here (the
+    // holder just released) just means a slightly stale pid/age, never a
+    // wrong decision about whether to skip.
+    const holder = await readLockHolder(root);
+    console.log(formatSkipMessage(projectId, holder));
     return;
   }
 
