@@ -368,19 +368,27 @@ function findStale(anchors: ResolvedAnchor[], clock: CodeClock, now: Date): {
   return { stale, unattested: [...unattested] };
 }
 
-/** Directory names that mark a test tree. Matched as whole segments, never as substrings. */
-const TEST_DIRS = new Set(["test", "tests", "__tests__", "spec", "specs"]);
-/** Filename infixes every mainstream runner uses to mark a test file. */
-const TEST_INFIXES = [".test.", ".spec.", "_test.", "_spec."];
+/**
+ * Directory names that mark a test/fake tree. Matched as whole segments,
+ * never as substrings. `__mocks__` and `fixtures` are fake-data trees, not
+ * test-runner trees, but they carry the same "no *why* worth a concept"
+ * property test helpers do — a PageRank-favorited mock factory is still noise
+ * in the documentation backlog.
+ */
+const TEST_DIRS = new Set(["test", "tests", "__tests__", "spec", "specs", "__mocks__", "fixtures"]);
+/** Filename infixes every mainstream runner (or fake/mock convention) uses to mark such a file. */
+const TEST_INFIXES = [".test.", ".spec.", "_test.", "_spec.", ".fake.", ".mock."];
 
 /**
- * Whether a path belongs to the test tree.
+ * Whether a path belongs to a test or fake/mock tree.
  *
  * Segment-exact, because substring matching would quietly swallow real code:
  * `src/latest/release.ts` contains "test" and would vanish from the backlog with
- * nobody the wiser.
+ * nobody the wiser. Exported: this is the one place coverage-gap ranking
+ * decides "no *why* worth a concept", so it is tested directly rather than
+ * only observed through `auditBundle`'s output.
  */
-function looksLikeTest(path: string): boolean {
+export function looksLikeTest(path: string): boolean {
   const segments = path.split("/");
   const name = segments[segments.length - 1] ?? "";
   if (TEST_INFIXES.some((infix) => name.includes(infix))) return true;

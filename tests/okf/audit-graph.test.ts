@@ -219,6 +219,12 @@ describe("auditBundle — coverage excludes tests", () => {
     store.replaceFile("__tests__/legacy.ts", "typescript", "h", 0, [fn("legacyHelper")]);
     store.replaceFile("spec/thing.ts", "typescript", "h", 0, [fn("specHelper")]);
     store.replaceFile("pkg/thing_test.go", "go", "h", 0, [fn("goHelper")]);
+    // T7 — fakes/mocks carry no *why* either, so they belong out of the
+    // backlog for the same reason test helpers do.
+    store.replaceFile("__mocks__/store.ts", "typescript", "h", 0, [fn("mockStore")]);
+    store.replaceFile("fixtures/seed.ts", "typescript", "h", 0, [fn("seedData")]);
+    store.replaceFile("src/thing.fake.ts", "typescript", "h", 0, [fn("fakeThing")]);
+    store.replaceFile("src/thing.mock.ts", "typescript", "h", 0, [fn("mockThing")]);
     store.replaceFile("src/latest/release.ts", "typescript", "h", 0, [fn("publish")]);
     store.resolveEdgesForFiles([
       "tests/integration/cli.test.ts",
@@ -226,6 +232,10 @@ describe("auditBundle — coverage excludes tests", () => {
       "__tests__/legacy.ts",
       "spec/thing.ts",
       "pkg/thing_test.go",
+      "__mocks__/store.ts",
+      "fixtures/seed.ts",
+      "src/thing.fake.ts",
+      "src/thing.mock.ts",
       "src/latest/release.ts",
     ]);
     return store;
