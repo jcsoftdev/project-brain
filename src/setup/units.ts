@@ -183,16 +183,31 @@ export function hostUnits(installed: AIToolRegistrar[]): SetupUnit[] {
       const target = registrar.mcpConfigTarget?.();
       if (!target) return "absent";
 
+      let registered: boolean;
       try {
         const parsed = JSON.parse(await Bun.file(target.path).text()) as Record<string, unknown>;
         const container = parsed[target.containerKey] as Record<string, unknown> | undefined;
-        return container && "project-brain" in container ? "current" : "absent";
+        registered = Boolean(container && "project-brain" in container);
       } catch {
         // Missing file, or JSONC we refuse to parse. Both mean "not registered
         // as far as we can prove", and apply() handles the JSONC case by
         // raising UnparseableConfigError, which setup already reports.
-        return "absent";
+        registered = false;
       }
+      if (!registered) return "absent";
+
+      // Registration alone does not prove the rules file is still what the
+      // current template would write — a stale block from an older release
+      // survives here forever otherwise. A host with no rules file (VS Code,
+      // Zed) has nothing to go stale.
+      const rulesPath = registrar.rulesFilePath?.();
+      if (!rulesPath) return "current";
+
+      const { isGlobalRulesCurrent } = await import("../rules/global.js");
+      const toolKey = hostKeyOf(registrar.name)
+        .replace("claudecode", "claude")
+        .replace("geminicli", "gemini");
+      return (await isGlobalRulesCurrent(rulesPath, toolKey)) ? "current" : "stale";
     },
 
     async apply(ctx: SetupContext): Promise<void> {

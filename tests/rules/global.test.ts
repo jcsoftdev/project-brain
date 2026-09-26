@@ -1,5 +1,9 @@
 import { describe, it, expect } from "bun:test";
-import { getGlobalRules } from "../../src/rules/global.js";
+import { join } from "node:path";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { getGlobalRules, isGlobalRulesCurrent } from "../../src/rules/global.js";
+import { writeSection } from "../../src/rules/section-marker.js";
 
 describe("Global rules loader", () => {
   it("returns content for 'claude' tool", async () => {
@@ -47,5 +51,52 @@ describe("Global rules loader", () => {
       const content = await getGlobalRules(tool);
       expect(content).toContain("delete_knowledge");
     }
+  });
+
+  describe("isGlobalRulesCurrent", () => {
+    let dir: string;
+
+    async function withTempFile<T>(run: (path: string) => Promise<T>): Promise<T> {
+      dir = await mkdtemp(join(tmpdir(), "pb-global-rules-"));
+      try {
+        return await run(join(dir, "RULES.md"));
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    it("is false when the file does not exist", async () => {
+      await withTempFile(async (path) => {
+        expect(await isGlobalRulesCurrent(path, "claude")).toBe(false);
+      });
+    });
+
+    it("is true right after writing the current template", async () => {
+      await withTempFile(async (path) => {
+        await writeSection(path, await getGlobalRules("claude"));
+        expect(await isGlobalRulesCurrent(path, "claude")).toBe(true);
+      });
+    });
+
+    it("is false when the written block is an old/stale catalog", async () => {
+      await withTempFile(async (path) => {
+        await writeSection(path, "## project-brain MCP\n\nsome outdated full tool catalog\n");
+        expect(await isGlobalRulesCurrent(path, "claude")).toBe(false);
+      });
+    });
+
+    it("preserves human-authored content outside the markers on rewrite", async () => {
+      await withTempFile(async (path) => {
+        await Bun.write(path, "# My notes\n\nDo not touch this.\n");
+        await writeSection(path, "## project-brain MCP\n\nold\n");
+        expect(await isGlobalRulesCurrent(path, "claude")).toBe(false);
+
+        await writeSection(path, await getGlobalRules("claude"));
+        const text = await Bun.file(path).text();
+        expect(text).toContain("# My notes");
+        expect(text).toContain("Do not touch this.");
+        expect(await isGlobalRulesCurrent(path, "claude")).toBe(true);
+      });
+    });
   });
 });
