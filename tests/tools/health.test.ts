@@ -197,6 +197,56 @@ describe("check_health tool", () => {
     }
   });
 
+  it("reports lastSync when projectRoot has a sync-status file", async () => {
+    const { writeSyncStatus } = await import("../../src/commands/sync-status.js");
+    const dir = await mkdtemp(join(tmpdir(), "pb-tool-health-syncstatus-"));
+    try {
+      await writeSyncStatus(dir, {
+        outcome: "ok",
+        pid: process.pid,
+        startedAt: 0,
+        finishedAt: 1000,
+        changedOnly: true,
+        files: 12,
+        chunks: 340,
+      });
+
+      const result = await handleHealth(
+        { project: "demo" },
+        { store: makeMockStore(1), embeddings: makeMockEmbeddings(true), projectRoot: dir }
+      );
+      const data = JSON.parse(result.content[0].text);
+      expect(data.lastSync.outcome).toBe("ok");
+      expect(data.lastSync.files).toBe(12);
+      expect(data.lastSync.chunks).toBe(340);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits lastSync when projectRoot has no sync-status file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pb-tool-health-nosyncstatus-"));
+    try {
+      const result = await handleHealth(
+        { project: "demo" },
+        { store: makeMockStore(1), embeddings: makeMockEmbeddings(true), projectRoot: dir }
+      );
+      const data = JSON.parse(result.content[0].text);
+      expect(data.lastSync).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits lastSync when projectRoot is not provided", async () => {
+    const result = await handleHealth(
+      { project: "demo" },
+      { store: makeMockStore(1), embeddings: makeMockEmbeddings(true) }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.lastSync).toBeUndefined();
+  });
+
   it("omits manifest fields when projectRoot has no manifest", async () => {
     const result = await handleHealth(
       { project: "demo" },

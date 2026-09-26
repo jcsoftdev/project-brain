@@ -145,6 +145,42 @@ describe("health command", () => {
       expect("lastError" in result).toBe(false);
     });
 
+    it("omits lastSync when the caller did not resolve one", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo",
+        store: makeStore(0),
+        embeddings: makeEmbeddings(true),
+        dbPath: dir,
+      });
+
+      expect(result.lastSync).toBeUndefined();
+      expect("lastSync" in result).toBe(false);
+    });
+
+    it("includes lastSync when the caller resolved one", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const lastSync = {
+        outcome: "ok" as const,
+        pid: 123,
+        startedAt: 0,
+        finishedAt: 1000,
+        changedOnly: true,
+        files: 12,
+        chunks: 340,
+      };
+
+      const result = await runHealth({
+        projectId: "demo",
+        store: makeStore(0),
+        embeddings: makeEmbeddings(true),
+        dbPath: dir,
+        lastSync,
+      });
+
+      expect(result.lastSync).toEqual(lastSync);
+    });
+
     it("includes lastError when one is recorded for the project", async () => {
       const { runHealth } = await import("../../src/commands/health.js");
       const { writeLastError } = await import("../../src/store/error-state.js");

@@ -443,6 +443,8 @@ Check system health: Ollama availability, LanceDB status, and staleness of the i
 project-brain health
 ```
 
+Also reports the outcome of the last background sync (`.project-brain/sync-status.json`) as a `Last sync:` line — `ok`, `aborted` (the watchdog gave up on a wedged job), `failed`, or `crashed` (the process died mid-run without ever writing a terminal outcome). Anything short of a clean `ok` points at `.project-brain/sync.log`, where the post-commit hook's `sync`/`conceptualize` output actually lands (overwritten on each run, so it always reflects the last one). The `check_health` MCP tool surfaces the same data as a `lastSync` field.
+
 ### `bench` — measure retrieval quality
 
 Published embedding leaderboards score a different corpus and a different task. A percent-or-two delta on someone else's benchmark says nothing about whether YOUR queries still surface the right file after changing model, dimension or chunking — so `bench` measures against ground truth from *this* repository instead.

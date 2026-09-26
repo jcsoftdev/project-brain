@@ -2,6 +2,7 @@ import { EMBEDDING_MODEL, VERSION } from "../constants.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
 import { readLastError, type LastError } from "../store/error-state.js";
 import { HOOK_TIMEOUT_MS } from "./search.js";
+import { formatLastSyncLine, readSyncStatus, type SyncStatusReport } from "./sync-status.js";
 
 export interface HealthOptions {
   /** Project identifier for chunk count lookup. */
@@ -14,6 +15,8 @@ export interface HealthOptions {
   dbPath: string;
   /** Chunks the repo manifest says were written; omitted when the repo has no manifest. */
   manifestChunks?: number;
+  /** The last recorded sync outcome (see sync-status.ts), resolved by the caller. Omitted when none was found. */
+  lastSync?: SyncStatusReport;
   /**
    * Whether a reranker token resolved (env or file) — resolved by the caller,
    * no network call. Defaults to "off" when omitted.
@@ -29,6 +32,7 @@ export interface HealthResult {
   manifestChunks?: number;
   /** The store holds fewer rows than the manifest recorded: sync would skip files that are not indexed. */
   desynced: boolean;
+  lastSync?: SyncStatusReport;
   version: string;
   lastError?: LastError;
   /** Wall-clock time of one real embed of a short query, in ms. Undefined when the embed call itself threw. */
@@ -65,7 +69,7 @@ export async function measureEmbedLatency(embeddings: EmbeddingClient): Promise<
  * Mirrors the check_health MCP tool but operates as a CLI command.
  */
 export async function runHealth(options: HealthOptions): Promise<HealthResult> {
-  const { projectId, store, embeddings, dbPath, manifestChunks } = options;
+  const { projectId, store, embeddings, dbPath, manifestChunks, lastSync } = options;
 
   const [embeddingsAvailable, chunks, lastError, embedLatencyMs] = await Promise.all([
     embeddings.isAvailable(),
@@ -86,6 +90,7 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
     ...(embedLatencyMs !== undefined ? { embedLatencyMs } : {}),
     slowEmbeddings: embedLatencyMs !== undefined && embedLatencyMs > HOOK_TIMEOUT_MS,
     reranker: options.reranker ?? "off",
+    ...(lastSync ? { lastSync } : {}),
   };
 }
 
@@ -145,6 +150,7 @@ export async function execute(args: string[]): Promise<void> {
     embeddings,
     dbPath: DB_PATH,
     manifestChunks: await readManifestChunks(root),
+    lastSync: (await readSyncStatus(root)) ?? undefined,
     reranker,
   });
 
@@ -168,6 +174,9 @@ export async function execute(args: string[]): Promise<void> {
   }
   console.log(`  Reranker:   ${result.reranker}`);
   console.log(`  Version:    ${result.version}`);
+  if (result.lastSync) {
+    console.log(`  Last sync:  ${formatLastSyncLine(result.lastSync)}`);
+  }
   if (result.lastError) {
     const when = new Date(result.lastError.timestamp).toISOString();
     console.log(`  ⚠ Last error: [${result.lastError.phase}] ${result.lastError.message} (${when})`);

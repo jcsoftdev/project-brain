@@ -5,6 +5,7 @@ import type { ToolDeps } from "../types.js";
 import { jsonResult, type ToolResult } from "./format.js";
 import { readLastError } from "../store/error-state.js";
 import { measureEmbedLatency, readManifestChunks } from "../commands/health.js";
+import { readSyncStatus } from "../commands/sync-status.js";
 import { HOOK_TIMEOUT_MS } from "../commands/search.js";
 
 /** Handle check_health logic (exported for testing). */
@@ -14,12 +15,13 @@ export async function handleHealth(
 ): Promise<ToolResult> {
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(args.project) : deps.embeddings;
 
-  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, manifestChunks] = await Promise.all([
+  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, manifestChunks, lastSync] = await Promise.all([
     emb.isAvailable(),
     deps.store.countChunks(args.project),
     deps.dbPath ? readLastError(deps.dbPath, args.project) : Promise.resolve(null),
     measureEmbedLatency(emb),
     deps.projectRoot ? readManifestChunks(deps.projectRoot) : Promise.resolve(undefined),
+    deps.projectRoot ? readSyncStatus(deps.projectRoot) : Promise.resolve(null),
   ]);
 
   const report = {
@@ -37,6 +39,7 @@ export async function handleHealth(
     ...(manifestChunks !== undefined
       ? { manifestChunks, desynced: chunks < manifestChunks }
       : {}),
+    ...(lastSync ? { lastSync } : {}),
   };
 
   return jsonResult(report);
@@ -65,6 +68,19 @@ export function register(server: McpServer, deps: ToolDeps): void {
         slowEmbeddings: z.boolean(),
         manifestChunks: z.number().optional(),
         desynced: z.boolean().optional(),
+        lastSync: z
+          .object({
+            outcome: z.enum(["running", "ok", "aborted", "failed", "crashed"]),
+            pid: z.number(),
+            startedAt: z.number(),
+            changedOnly: z.boolean(),
+            trigger: z.string().optional(),
+            finishedAt: z.number().optional(),
+            files: z.number().optional(),
+            chunks: z.number().optional(),
+            error: z.string().optional(),
+          })
+          .optional(),
       },
       annotations: toolAnnotations("check_health"),
     },
