@@ -21,7 +21,11 @@ export interface HealthOptions {
    * Whether a reranker token resolved (env or file) — resolved by the caller,
    * no network call. Defaults to "off" when omitted.
    */
-  reranker?: "off" | "configured";
+  reranker?: "off" | "on";
+  /** Where the reranker's token came from — set only when reranker is "on". */
+  rerankerTokenSource?: "env" | "file";
+  /** File path the token was read from — set only when rerankerTokenSource is "file". */
+  rerankerTokenPath?: string;
 }
 
 export interface HealthResult {
@@ -44,8 +48,12 @@ export interface HealthResult {
    * injects nothing every time, silently.
    */
   slowEmbeddings: boolean;
-  /** "configured" when a reranker token resolves (env or file); "off" otherwise. */
-  reranker: "off" | "configured";
+  /** "on" when a reranker token resolves (env or file); "off" otherwise. */
+  reranker: "off" | "on";
+  /** Where the reranker's token came from — present only when reranker is "on". */
+  rerankerTokenSource?: "env" | "file";
+  /** File path the token was read from — present only when rerankerTokenSource is "file". */
+  rerankerTokenPath?: string;
 }
 
 /**
@@ -90,8 +98,22 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
     ...(embedLatencyMs !== undefined ? { embedLatencyMs } : {}),
     slowEmbeddings: embedLatencyMs !== undefined && embedLatencyMs > HOOK_TIMEOUT_MS,
     reranker: options.reranker ?? "off",
+    ...(options.rerankerTokenSource ? { rerankerTokenSource: options.rerankerTokenSource } : {}),
+    ...(options.rerankerTokenPath ? { rerankerTokenPath: options.rerankerTokenPath } : {}),
     ...(lastSync ? { lastSync } : {}),
   };
+}
+
+/**
+ * Formats the CLI's one-line reranker status — never the token itself, only
+ * where it came from, so an agent that finds "off" knows exactly what to run.
+ */
+export function formatRerankerLine(result: Pick<HealthResult, "reranker" | "rerankerTokenSource" | "rerankerTokenPath">): string {
+  if (result.reranker !== "on") {
+    return "Reranker: off — set TYPESAFE_API_KEY or run project-brain setup";
+  }
+  const source = result.rerankerTokenSource === "file" ? result.rerankerTokenPath : "TYPESAFE_API_KEY";
+  return `Reranker: on (token from ${source})`;
 }
 
 /** Read-only: health must not create a manifest in a repo that never had one. */
@@ -135,14 +157,14 @@ export async function execute(args: string[]): Promise<void> {
   const store = new LanceDbStore(DB_PATH);
   const { readTableMeta } = await import("../store/meta.js");
   const { resolveSyncModel } = await import("./sync.js");
-  const { resolveRerankerToken } = await import("../rerank/token.js");
+  const { resolveRerankerTokenWithSource } = await import("../rerank/token.js");
   const storedMeta = await readTableMeta(DB_PATH, projectId);
   const embeddings = await createEmbeddingClient(
     resolveSyncModel({ envModel: process.env.BRAIN_EMBED_MODEL || undefined, storedMeta }),
     { host: OLLAMA_HOST, autoPull: false }
   );
   // Env/file read only — never a network call, per the health contract.
-  const reranker = (await resolveRerankerToken()) ? "configured" : "off";
+  const resolvedToken = await resolveRerankerTokenWithSource();
 
   const result = await runHealth({
     projectId,
@@ -151,7 +173,9 @@ export async function execute(args: string[]): Promise<void> {
     dbPath: DB_PATH,
     manifestChunks: await readManifestChunks(root),
     lastSync: (await readSyncStatus(root)) ?? undefined,
-    reranker,
+    reranker: resolvedToken ? "on" : "off",
+    rerankerTokenSource: resolvedToken?.source,
+    rerankerTokenPath: resolvedToken?.path,
   });
 
   const storeIcon = result.store === "connected" ? "✓" : "✗";
@@ -172,7 +196,7 @@ export async function execute(args: string[]): Promise<void> {
       `  ⚠ Embedding latency (${Math.round(result.embedLatencyMs ?? 0)}ms) exceeds the prompt hook's ${HOOK_TIMEOUT_MS}ms budget — the hook will inject nothing while this persists. Check system load or Ollama.`
     );
   }
-  console.log(`  Reranker:   ${result.reranker}`);
+  console.log(`  ${formatRerankerLine(result)}`);
   console.log(`  Version:    ${result.version}`);
   if (result.lastSync) {
     console.log(`  Last sync:  ${formatLastSyncLine(result.lastSync)}`);

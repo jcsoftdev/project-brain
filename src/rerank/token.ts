@@ -13,23 +13,48 @@ export function rerankerTokenPath(dataDir: string = DATA_DIR): string {
   return join(dataDir, "reranker.json");
 }
 
-/**
- * Resolve the TypeSafe API token: `TYPESAFE_API_KEY` env var first, then
- * `<dataDir>/reranker.json` (`{ "token": "..." }`). Never logs or throws —
- * any failure (file absent, unparseable, empty token) resolves to null,
- * which callers treat as "reranking is off".
- */
-export async function resolveRerankerToken(opts: TokenResolveOptions = {}): Promise<string | null> {
-  const env = opts.env ?? process.env;
-  if (env.TYPESAFE_API_KEY) return env.TYPESAFE_API_KEY;
+/** Where a resolved TypeSafe token came from — surfaced by health/help so an agent can find it without grepping source. */
+export type RerankerTokenSource = "env" | "file";
 
+export interface ResolvedRerankerToken {
+  token: string;
+  source: RerankerTokenSource;
+  /** Set only when source is "file" — the path the token was read from. Never the token itself. */
+  path?: string;
+}
+
+/**
+ * Resolve the TypeSafe API token AND where it came from: `TYPESAFE_API_KEY`
+ * env var first, then `<dataDir>/reranker.json` (`{ "token": "..." }`).
+ * Never logs or throws — any failure (file absent, unparseable, empty token)
+ * resolves to null, which callers treat as "reranking is off".
+ */
+export async function resolveRerankerTokenWithSource(
+  opts: TokenResolveOptions = {}
+): Promise<ResolvedRerankerToken | null> {
+  const env = opts.env ?? process.env;
+  if (env.TYPESAFE_API_KEY) return { token: env.TYPESAFE_API_KEY, source: "env" };
+
+  const path = rerankerTokenPath(opts.dataDir);
   try {
-    const raw = await Bun.file(rerankerTokenPath(opts.dataDir)).text();
+    const raw = await Bun.file(path).text();
     const parsed = JSON.parse(raw) as { token?: unknown };
-    return typeof parsed.token === "string" && parsed.token.length > 0 ? parsed.token : null;
+    if (typeof parsed.token === "string" && parsed.token.length > 0) {
+      return { token: parsed.token, source: "file", path };
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve just the token — a thin wrapper over {@link resolveRerankerTokenWithSource}
+ * for the many callers that only need the value, not its provenance.
+ */
+export async function resolveRerankerToken(opts: TokenResolveOptions = {}): Promise<string | null> {
+  const resolved = await resolveRerankerTokenWithSource(opts);
+  return resolved?.token ?? null;
 }
 
 /**

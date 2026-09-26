@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -370,6 +370,53 @@ describe("runOkfAudit", () => {
       const parsed = JSON.parse(result.output);
       expect(parsed.compare).toHaveLength(1);
       expect(parsed.compare[0].agree).toBe(true);
+    });
+  });
+
+  describe("judge progress line", () => {
+    const staleDoc = doc(["type: Decision", "resource: ../src/a.ts", 'generated: { by: "human:x", at: 2026-01-01T00:00:00Z }']);
+
+    const fakeJudge = (verdict: "holds" | "outdated" | "unclear", reason = "because"): StaleJudge => ({
+      judge: async () => ({ verdict, reason }),
+    });
+
+    it("names the default (claude) model when no modelName override is given", async () => {
+      await write("d/a.md", staleDoc);
+      const logSpy = spyOn(console, "log");
+      try {
+        await runOkfAudit(
+          bundleDir,
+          deps({
+            clock: clockOf({ "src/a.ts": { at: "2026-06-01T00:00:00Z", uncommitted: false } }),
+            judge: { judge: fakeJudge("holds"), diff: () => "some diff" },
+          })
+        );
+        const progressLine = logSpy.mock.calls.map((c) => c[0]).find((line) => String(line).includes("judging"));
+        expect(progressLine).toContain("claude-opus-5");
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    // T5 small fix: --judge-model jev must name the judge actually used, not
+    // the hardcoded default — the progress line lied about which model ran.
+    it("names the actual judge (e.g. jev-latest) when modelName overrides the default", async () => {
+      await write("d/a.md", staleDoc);
+      const logSpy = spyOn(console, "log");
+      try {
+        await runOkfAudit(
+          bundleDir,
+          deps({
+            clock: clockOf({ "src/a.ts": { at: "2026-06-01T00:00:00Z", uncommitted: false } }),
+            judge: { judge: fakeJudge("holds"), diff: () => "some diff", modelName: "jev-latest" },
+          })
+        );
+        const progressLine = logSpy.mock.calls.map((c) => c[0]).find((line) => String(line).includes("judging"));
+        expect(progressLine).toContain("jev-latest");
+        expect(progressLine).not.toContain("claude-opus-5");
+      } finally {
+        logSpy.mockRestore();
+      }
     });
   });
 });

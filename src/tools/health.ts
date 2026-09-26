@@ -31,8 +31,10 @@ export async function handleHealth(
     chunks,
     version: VERSION,
     // `deps.reranker` is only ever set when a token resolved at startup
-    // (see createServer) — its presence IS "configured", no separate lookup.
-    reranker: deps.reranker ? "configured" : "off",
+    // (see createServer) — its presence IS "on", no separate lookup.
+    reranker: deps.reranker ? "on" : "off",
+    ...(deps.rerankerTokenSource ? { tokenSource: deps.rerankerTokenSource } : {}),
+    ...(deps.rerankerTokenPath ? { tokenPath: deps.rerankerTokenPath } : {}),
     ...(lastError ? { lastError } : {}),
     ...(embedLatencyMs !== undefined ? { embedLatencyMs } : {}),
     slowEmbeddings: embedLatencyMs !== undefined && embedLatencyMs > HOOK_TIMEOUT_MS,
@@ -60,7 +62,9 @@ export function register(server: McpServer, deps: ToolDeps): void {
         model: z.string(),
         chunks: z.number(),
         version: z.string(),
-        reranker: z.enum(["off", "configured"]),
+        reranker: z.enum(["off", "on"]),
+        tokenSource: z.enum(["env", "file"]).optional(),
+        tokenPath: z.string().optional(),
         lastError: z
           .object({ phase: z.string(), message: z.string(), timestamp: z.number() })
           .optional(),

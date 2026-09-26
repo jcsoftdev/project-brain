@@ -133,4 +133,23 @@ describe("CLI entry point", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("--http");
   });
+
+  /**
+   * T5 — an agent hit "the Jev token location was undiscoverable" while doing
+   * OKF work by hand. `--help` is where a first-time reader looks for how to
+   * turn the reranker/judge on, so it must name the env var, the token file,
+   * and the OKF commands that use it.
+   */
+  it("help output mentions TypeSafe/Jev discoverability: env var, token file, and OKF commands", async () => {
+    const proc = spawnCli(["--help"]);
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("TYPESAFE_API_KEY");
+    expect(stdout).toContain("reranker.json");
+    expect(stdout).toContain("Jev");
+    expect(stdout).toContain("okf candidates");
+    expect(stdout).toContain("--judge-model jev");
+  });
 });

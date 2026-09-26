@@ -137,6 +137,14 @@ Knowledge bundles (Open Knowledge Format v0.2 — the *why*, not the *what*):
     --limit <n>            How many ranked candidates to print (default 20)
     --json                 With audit|candidates: print one JSON object
 
+TypeSafe / Jev (opt-in — reranker + "okf audit --judge-model jev"):
+  Set TYPESAFE_API_KEY, or run 'project-brain setup' to write the token to
+  ~/.project-brain/reranker.json. Used by search reranking and by
+  "okf candidates"/"okf audit --judge-model jev" when a token resolves;
+  falls back to a heuristic (no network call) when it doesn't.
+  Run 'project-brain health' to see whether it is on and where the token
+  came from — never the token value itself.
+
 Structural (offline — no Ollama probe, reads the local graph.db directly):
   find <name>              Exact symbol lookup by name
   callers <name>           Every symbol that calls <name>

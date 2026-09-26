@@ -12,7 +12,7 @@ import {
   type JudgeComparison,
   type StaleJudge,
 } from "../okf/judge.js";
-import { OKF_JUDGE_MODEL } from "../constants.js";
+import { JEV_JUDGE_MODEL_NAME, OKF_JUDGE_MODEL } from "../constants.js";
 import type { CodeClock } from "../git/last-changed.js";
 
 /**
@@ -322,7 +322,12 @@ export async function execute(args: string[]): Promise<void> {
               );
             }
           }
-          judgeDeps = { judge: primary, diff: createGitDiffFetcher(root), compare };
+          judgeDeps = {
+            judge: primary,
+            diff: createGitDiffFetcher(root),
+            compare,
+            modelName: judgeModel === "jev" ? JEV_JUDGE_MODEL_NAME : undefined,
+          };
         }
       }
 
@@ -440,6 +445,12 @@ export interface OkfAuditDeps {
      * always driven by the primary judge alone.
      */
     compare?: StaleJudge;
+    /**
+     * Name of the judge actually running, for the progress line. Defaults to
+     * OKF_JUDGE_MODEL (claude) — set this when `--judge-model jev` is
+     * selected so the line does not claim claude ran when jev did.
+     */
+    modelName?: string;
   };
 }
 
@@ -484,7 +495,7 @@ export async function runOkfAudit(
 
   if (deps.judge) {
     const eligible = report.stale.filter((f) => f.reason === "code-changed");
-    console.log(`judging ${plural(eligible.length, "stale finding")} with ${OKF_JUDGE_MODEL}`);
+    console.log(`judging ${plural(eligible.length, "stale finding")} with ${deps.judge.modelName ?? OKF_JUDGE_MODEL}`);
     if (eligible.length > 0) {
       const conceptBody = (concept: string) => bundle.files.find((f) => f.path === concept)?.document.body ?? "";
       try {

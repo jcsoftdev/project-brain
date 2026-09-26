@@ -101,19 +101,77 @@ describe("health command", () => {
       });
 
       expect(result.reranker).toBe("off");
+      expect(result.rerankerTokenSource).toBeUndefined();
     });
 
-    it("reports reranker: configured when the caller resolved a token", async () => {
+    it("reports reranker: on when the caller resolved a token", async () => {
       const { runHealth } = await import("../../src/commands/health.js");
       const result = await runHealth({
         projectId: "demo",
         store: makeStore(0),
         embeddings: makeEmbeddings(true),
         dbPath: dir,
-        reranker: "configured",
+        reranker: "on",
       });
 
-      expect(result.reranker).toBe("configured");
+      expect(result.reranker).toBe("on");
+    });
+
+    it("reports rerankerTokenSource: env when the caller resolved the token from TYPESAFE_API_KEY", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo",
+        store: makeStore(0),
+        embeddings: makeEmbeddings(true),
+        dbPath: dir,
+        reranker: "on",
+        rerankerTokenSource: "env",
+      });
+
+      expect(result.reranker).toBe("on");
+      expect(result.rerankerTokenSource).toBe("env");
+      expect(result.rerankerTokenPath).toBeUndefined();
+    });
+
+    it("reports rerankerTokenSource: file plus rerankerTokenPath when the caller resolved the token from the file", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo",
+        store: makeStore(0),
+        embeddings: makeEmbeddings(true),
+        dbPath: dir,
+        reranker: "on",
+        rerankerTokenSource: "file",
+        rerankerTokenPath: "/home/user/.project-brain/reranker.json",
+      });
+
+      expect(result.rerankerTokenSource).toBe("file");
+      expect(result.rerankerTokenPath).toBe("/home/user/.project-brain/reranker.json");
+    });
+
+    it("formatRerankerLine names TYPESAFE_API_KEY as the source when tokenSource is env", async () => {
+      const { formatRerankerLine } = await import("../../src/commands/health.js");
+      expect(formatRerankerLine({ reranker: "on", rerankerTokenSource: "env" } as any)).toBe(
+        "Reranker: on (token from TYPESAFE_API_KEY)"
+      );
+    });
+
+    it("formatRerankerLine names the file path as the source when tokenSource is file", async () => {
+      const { formatRerankerLine } = await import("../../src/commands/health.js");
+      expect(
+        formatRerankerLine({
+          reranker: "on",
+          rerankerTokenSource: "file",
+          rerankerTokenPath: "/home/user/.project-brain/reranker.json",
+        } as any)
+      ).toBe("Reranker: on (token from /home/user/.project-brain/reranker.json)");
+    });
+
+    it("formatRerankerLine tells the operator how to turn it on when off", async () => {
+      const { formatRerankerLine } = await import("../../src/commands/health.js");
+      expect(formatRerankerLine({ reranker: "off" } as any)).toBe(
+        "Reranker: off — set TYPESAFE_API_KEY or run project-brain setup"
+      );
     });
 
     it("reports the version from package.json, not a hardcoded literal", async () => {

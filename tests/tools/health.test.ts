@@ -264,9 +264,10 @@ describe("check_health tool", () => {
     );
     const data = JSON.parse(result.content[0].text);
     expect(data.reranker).toBe("off");
+    expect(data.tokenSource).toBeUndefined();
   });
 
-  it("reports reranker: configured when a reranker is injected", async () => {
+  it("reports reranker: on when a reranker is injected", async () => {
     const result = await handleHealth(
       { project: "demo" },
       {
@@ -276,6 +277,53 @@ describe("check_health tool", () => {
       }
     );
     const data = JSON.parse(result.content[0].text);
-    expect(data.reranker).toBe("configured");
+    expect(data.reranker).toBe("on");
+  });
+
+  it("reports tokenSource: env when the token resolved from TYPESAFE_API_KEY", async () => {
+    const result = await handleHealth(
+      { project: "demo" },
+      {
+        store: makeMockStore(1),
+        embeddings: makeMockEmbeddings(true),
+        reranker: { rerank: async () => [] },
+        rerankerTokenSource: "env",
+      }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.reranker).toBe("on");
+    expect(data.tokenSource).toBe("env");
+    expect(data.tokenPath).toBeUndefined();
+  });
+
+  it("reports tokenSource: file plus the file path when the token resolved from the file", async () => {
+    const result = await handleHealth(
+      { project: "demo" },
+      {
+        store: makeMockStore(1),
+        embeddings: makeMockEmbeddings(true),
+        reranker: { rerank: async () => [] },
+        rerankerTokenSource: "file",
+        rerankerTokenPath: "/home/user/.project-brain/reranker.json",
+      }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.reranker).toBe("on");
+    expect(data.tokenSource).toBe("file");
+    expect(data.tokenPath).toBe("/home/user/.project-brain/reranker.json");
+  });
+
+  it("never includes a raw token field, only its source and (for file) path", async () => {
+    const result = await handleHealth(
+      { project: "demo" },
+      {
+        store: makeMockStore(1),
+        embeddings: makeMockEmbeddings(true),
+        reranker: { rerank: async () => [] },
+        rerankerTokenSource: "env",
+      }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.token).toBeUndefined();
   });
 });

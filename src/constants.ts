@@ -26,6 +26,9 @@ export const CONCEPT_LLM_MODEL = "claude-haiku-4-5";
 /** Anthropic model used by `okf audit --judge` to judge stale findings. Opt-in — it costs money. */
 export const OKF_JUDGE_MODEL = "claude-opus-5";
 
+/** Name shown for `okf audit --judge-model jev`'s progress line — never claim claude ran when jev did. */
+export const JEV_JUDGE_MODEL_NAME = "jev-latest";
+
 /**
  * Below this confidence, a Jev `choice` verdict (`okf audit --judge-model jev`)
  * is downgraded to "unclear" rather than trusted outright. Chosen as the point

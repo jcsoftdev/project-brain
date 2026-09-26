@@ -113,6 +113,7 @@ export interface VectorStore {
 
 import type { GraphStore } from "./graph/store.js";
 import type { Reranker } from "./rerank/jev.js";
+import type { RerankerTokenSource } from "./rerank/token.js";
 
 /**
  * Narrow dependency shape for the 6 structural-graph handlers (find_symbol,
@@ -177,4 +178,13 @@ export interface ToolDeps extends GraphDeps {
    * check_health both treat a missing reranker as "off", never as an error.
    */
   reranker?: Reranker;
+  /**
+   * Where `reranker`'s token was resolved from (env or file) — set only when
+   * server.ts resolved it via {@link resolveRerankerTokenWithSource}, absent
+   * when a reranker was injected directly (tests) or none resolved.
+   * check_health surfaces this for Jev status discoverability; never the token.
+   */
+  rerankerTokenSource?: RerankerTokenSource;
+  /** File path the token was read from, set only when rerankerTokenSource is "file". */
+  rerankerTokenPath?: string;
 }

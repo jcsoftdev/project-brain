@@ -29,7 +29,7 @@ import { GraphCache } from "./graph/cache.js";
 import { join } from "node:path";
 import { mkdirSync, existsSync } from "node:fs";
 import { detectGitContext } from "./git/worktree.js";
-import { createReranker } from "./rerank/factory.js";
+import { createRerankerWithSource } from "./rerank/factory.js";
 import type { EmbeddingClient, ToolDeps } from "./types.js";
 import type { Reranker } from "./rerank/jev.js";
 
@@ -81,9 +81,14 @@ export async function createServer(options: ServerOptions = {}) {
   });
 
   // Opt-in: resolves to undefined (no network, ever) unless a token is
-  // configured via TYPESAFE_API_KEY or <dataDir>/reranker.json.
+  // configured via TYPESAFE_API_KEY or <dataDir>/reranker.json. The
+  // source/path are threaded through for check_health's Jev status
+  // discoverability rather than re-reading the token file there.
   const rerankerDataDir = options.dataDir ?? DATA_DIR;
-  const reranker = options.reranker ?? (await createReranker({ dataDir: rerankerDataDir })) ?? undefined;
+  const rerankerResolution = options.reranker ? undefined : await createRerankerWithSource({ dataDir: rerankerDataDir });
+  const reranker = options.reranker ?? rerankerResolution?.reranker ?? undefined;
+  const rerankerTokenSource = rerankerResolution?.source;
+  const rerankerTokenPath = rerankerResolution?.path;
 
   mkdirSync(dbPath, { recursive: true });
   // Structural graph lives at the PROJECT-LOCAL path (not the global data dir)
@@ -157,7 +162,7 @@ export async function createServer(options: ServerOptions = {}) {
 
   const deps: ToolDeps = {
     store, embeddings, embeddingsFor, graph, confirmDestructive, projectRoot, dbPath,
-    projectId: ownProjectId, graphFor, reranker,
+    projectId: ownProjectId, graphFor, reranker, rerankerTokenSource, rerankerTokenPath,
   };
 
   // Register all tools
