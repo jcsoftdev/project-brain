@@ -138,6 +138,24 @@ describe("proposeAnchor", () => {
     expect(anchor.resolved).toBe(true);
   });
 
+  it("prefers the most-changed source file over a larger test change", () => {
+    const anchor = proposeAnchor(
+      commit([
+        { path: "src/serve.ts", lines: 12 },
+        { path: "tests/integration/serve-lifecycle.test.ts", lines: 90 },
+        { path: "tests/fakes/client.fake.ts", lines: 60 },
+      ]),
+      table({ "src/serve.ts": [symbol("watchClient", "src/serve.ts")] }),
+      () => true
+    );
+    expect(anchor.proposed).toBe("src/serve.ts#watchClient");
+  });
+
+  it("still anchors a test file when the commit touched nothing else", () => {
+    const anchor = proposeAnchor(commit([{ path: "tests/a.test.ts", lines: 5 }]), table({}), () => true);
+    expect(anchor.proposed).toBe("tests/a.test.ts");
+  });
+
   it("falls back to a whole-file anchor when the file has no parsed symbols", () => {
     const anchor = proposeAnchor(commit([{ path: "src/unparsed.md", lines: 10 }]), table({}), () => true);
     expect(anchor.symbol).toBeNull();

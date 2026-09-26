@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { isNoisePath, type SpawnFn } from "../bench/mine.js";
+import { looksLikeTest } from "./audit.js";
 import { ask, type TypesafeFetchFn } from "../typesafe/client.js";
 import { collectAnchors } from "./anchors.js";
 import type { AuditGraph, SymbolTable } from "./audit.js";
@@ -143,7 +144,9 @@ export interface AnchorProposal {
 
 /**
  * Proposes an anchor for a candidate commit: the file it changed the most
- * (excluding lockfiles/manifests, via `isNoisePath`), at that file's
+ * (excluding lockfiles/manifests, via `isNoisePath`, and preferring source
+ * over tests — a fix usually adds a larger regression test than the change it
+ * guards, and a concept anchored on the test explains the wrong thing), at that file's
  * highest-ranked symbol — `SymbolTable.byFile` is already sorted by
  * descending PageRank, so `[0]` is exactly that without a second sort. Falls
  * back to a whole-file anchor when the file has no parsed symbols, and never
@@ -153,7 +156,8 @@ export interface AnchorProposal {
  */
 export function proposeAnchor(commit: FixCommit, symbols: SymbolTable, exists: (path: string) => boolean): AnchorProposal {
   const candidates = commit.changes.filter((c) => !isNoisePath(c.path));
-  const pool = candidates.length > 0 ? candidates : commit.changes;
+  const source = candidates.filter((c) => !looksLikeTest(c.path));
+  const pool = source.length > 0 ? source : candidates.length > 0 ? candidates : commit.changes;
   if (pool.length === 0) return { proposed: "", path: "", symbol: null, resolved: false };
 
   const top = pool.reduce((best, c) => (c.lines > best.lines ? c : best));
