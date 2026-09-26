@@ -5,6 +5,7 @@ import {
   mineFixCommits,
   mineOkfCandidates,
   proposeAnchor,
+  parseHunkHeaders,
   scoreCommit,
   type FixCommit,
 } from "../../src/okf/candidates.js";
@@ -151,6 +152,36 @@ describe("proposeAnchor", () => {
     expect(anchor.proposed).toBe("src/serve.ts#watchClient");
   });
 
+  it("anchors the symbol the diff's hunks sit in, not the file's top-ranked one", () => {
+    const anchor = proposeAnchor(
+      commit([{ path: "src/cli.ts", lines: 20 }]),
+      table({ "src/cli.ts": [symbol("printHelp", "src/cli.ts"), symbol("watchParent", "src/cli.ts")] }),
+      () => true,
+      () => ["function watchParent(pid: number) {", "export function watchParent(pid: number) {", "const HELP = `"]
+    );
+    expect(anchor.proposed).toBe("src/cli.ts#watchParent");
+  });
+
+  it("matches hunk headers on whole identifiers only", () => {
+    const anchor = proposeAnchor(
+      commit([{ path: "src/a.ts", lines: 5 }]),
+      table({ "src/a.ts": [symbol("run", "src/a.ts"), symbol("runSync", "src/a.ts")] }),
+      () => true,
+      () => ["export async function runSync(args: string[]) {"]
+    );
+    expect(anchor.symbol).toBe("runSync");
+  });
+
+  it("keeps the top-ranked symbol when no hunk header names a symbol", () => {
+    const anchor = proposeAnchor(
+      commit([{ path: "src/a.ts", lines: 5 }]),
+      table({ "src/a.ts": [symbol("alpha", "src/a.ts"), symbol("beta", "src/a.ts")] }),
+      () => true,
+      () => ["", "import { x } from './x';"]
+    );
+    expect(anchor.symbol).toBe("alpha");
+  });
+
   it("still anchors a test file when the commit touched nothing else", () => {
     const anchor = proposeAnchor(commit([{ path: "tests/a.test.ts", lines: 5 }]), table({}), () => true);
     expect(anchor.proposed).toBe("tests/a.test.ts");
@@ -166,6 +197,22 @@ describe("proposeAnchor", () => {
   it("marks the anchor unresolved when the file no longer exists on disk", () => {
     const anchor = proposeAnchor(commit([{ path: "src/gone.ts", lines: 10 }]), table({}), () => false);
     expect(anchor.resolved).toBe(false);
+  });
+});
+
+describe("parseHunkHeaders", () => {
+  it("returns the function context git prints after each hunk range", () => {
+    const diff = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -10,2 +10,3 @@ export function watchParent(pid: number) {",
+      "+  check();",
+      "@@ -40 +41 @@",
+      "-x",
+      "+y",
+    ].join("\n");
+    expect(parseHunkHeaders(diff)).toEqual(["export function watchParent(pid: number) {", ""]);
   });
 });
 
