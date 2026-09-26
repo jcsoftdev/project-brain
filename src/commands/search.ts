@@ -1,5 +1,13 @@
 import type { EmbeddingClient, VectorStore } from "../types.js";
 import { handleSearch } from "../tools/search.js";
+import { isTrivialPrompt } from "./trivial-prompt.js";
+
+/**
+ * Hook budget: the UserPromptSubmit race in {@link execute} below gives up
+ * after this many ms so a hung Ollama never blocks a prompt. `project-brain
+ * health` reuses it to warn when embedding latency alone would blow it.
+ */
+export const HOOK_TIMEOUT_MS = 4000;
 
 /**
  * Parses the `prompt` field out of a raw JSON string from stdin.
@@ -124,9 +132,9 @@ export async function execute(
   /** Optional DI seam for reading stdin — defaults to Bun.stdin.text(). */
   readStdin: () => Promise<string> = () => Bun.stdin.text()
 ): Promise<void> {
-  // Hard self-timeout: race against 4000ms so a hung ollama never blocks a prompt
+  // Hard self-timeout: race against HOOK_TIMEOUT_MS so a hung ollama never blocks a prompt
   const timeoutPromise = new Promise<void>((resolve) => {
-    setTimeout(resolve, 4000);
+    setTimeout(resolve, HOOK_TIMEOUT_MS);
   });
 
   const workPromise = (async (): Promise<void> => {
@@ -166,6 +174,12 @@ export async function execute(
         } catch {
           return;
         }
+
+        // Hook-only gate: an acknowledgement or continuation ("si", "ok",
+        // "you sure?") carries no code question, so skip retrieval entirely.
+        // The MCP search_context tool and the CLI `search "<q>"` never take
+        // this branch — only stdin, i.e. the UserPromptSubmit hook, does.
+        if (isTrivialPrompt(query)) return;
       } else {
         query = queryParts.join(" ");
       }

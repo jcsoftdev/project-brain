@@ -360,6 +360,16 @@ describe("execute --stdin flag", () => {
     ).resolves.toBeUndefined();
     expect(output).toHaveLength(0);
   });
+
+  it("short-circuits a trivial acknowledgement before touching real infra (fast, no output)", async () => {
+    const { execute } = await import("../../src/commands/search.js");
+    const start = Date.now();
+    await execute(["--stdin"], async () => JSON.stringify({ prompt: "yes" }));
+    // The trivial gate returns before resolving a project or building a
+    // store/embeddings client — well under the 4000ms hook race.
+    expect(Date.now() - start).toBeLessThan(200);
+    expect(output).toHaveLength(0);
+  });
 });
 
 // ── parsePromptFromStdin unit tests ───────────────────────────────────────
