@@ -133,6 +133,14 @@ export const SNIPPET_MAX_LINES = 5;
 /** When true, fail fast on vector dim mismatches instead of silently degrading. */
 export const HARDNESS = process.env.PROJECT_BRAIN_HARDNESS === "1";
 
+/**
+ * Timeout for one Jev rerank call (POST to api.typesafe.ai). The prompt hook's
+ * total budget is 4000ms (HOOK_TIMEOUT_MS in commands/search.ts); this leaves
+ * headroom for embedding + retrieval around it. On timeout the reranker
+ * returns null and callers fall back to the unreranked pool untouched.
+ */
+export const RERANK_TIMEOUT_MS = 1500;
+
 /** Filename for the structural graph SQLite database (resolved under the .project-brain data dir). */
 export const GRAPH_DB_FILE = "graph.db";
 
