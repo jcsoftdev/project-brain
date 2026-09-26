@@ -4,11 +4,7 @@ This project is indexed with [project-brain](https://github.com/jcsoftdev/projec
 
 ## project-brain MCP
 
-You have access to the `project-brain` MCP server for codebase knowledge retrieval.
-
-{{tools}}
-
-When answering questions about this codebase, run `search_context` first to find semantically relevant context before reading files directly — and reach for the structural tools when you know the exact symbol, caller, or want the impact of a change.
+You have access to the `project-brain` MCP server for codebase knowledge retrieval. Once connected, the server's own instructions describe the full tool catalog, routing (`search_context` for fuzzy/conceptual questions vs. the structural tools for exact symbols, callers, and change impact), and workflow — that copy always matches the tools actually registered, so it is not repeated here.
 
 ### Project Context
 

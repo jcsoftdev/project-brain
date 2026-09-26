@@ -118,7 +118,18 @@ describe("writeProjectRules", () => {
     expect(content).toContain("project-brain");
   });
 
-  it("generated rules advertise ALL tools incl. the structural layer (no stale list)", async () => {
+  /**
+   * Was "generated rules advertise ALL tools incl. the structural layer (no
+   * stale list)" — it asserted the project CLAUDE.md re-embedded the entire
+   * TOOL_CATALOG. That guard now lives on SERVER_INSTRUCTIONS itself
+   * (tests/constants.test.ts), which is the one copy Claude Code is proven to
+   * receive live on every MCP connection. Duplicating it a second time here,
+   * in a file baked into the repo, meant re-running `init` was the only way
+   * to pick up a newly added tool — worse than the single source of truth it
+   * was meant to guarantee. This project's CLAUDE.md now points at that live
+   * copy instead.
+   */
+  it("points at the MCP server's own instructions instead of re-embedding the tool catalog", async () => {
     const { writeProjectRules } = await import("../../src/rules/project.js");
 
     await writeProjectRules(tempDir, {
@@ -127,21 +138,19 @@ describe("writeProjectRules", () => {
     });
 
     const content = await readFile(join(tempDir, "CLAUDE.md"), "utf-8");
+    expect(content).toContain("search_context");
+    expect(content).toContain("project-brain");
+    // The rest of the catalog is no longer duplicated here.
     for (const t of [
-      "search_context",
-      "search_code",
-      "expand_context",
-      "find_symbol",
       "find_callers",
       "find_callees",
-      "impact",
       "list_modules",
       "get_module",
       "add_knowledge",
       "delete_knowledge",
       "check_health",
     ]) {
-      expect(content).toContain(t);
+      expect(content).not.toContain(t);
     }
   });
 

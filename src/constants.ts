@@ -165,9 +165,19 @@ export const WASM_MAX_PAGES = 4096;             // advisory page count; real bac
 /**
  * SINGLE SOURCE OF TRUTH for the project-brain tool catalog + routing.
  *
- * Both the MCP `SERVER_INSTRUCTIONS` (sent to clients over the protocol) and the
- * per-project CLAUDE.md rules (written by `init`) are rendered from these — so a
- * new tool can never be advertised in one place and forgotten in the others.
+ * The MCP `SERVER_INSTRUCTIONS` (sent to clients over the protocol on every
+ * connection) and the global rules files for hosts NOT proven to surface those
+ * instructions to the model (Codex, Gemini CLI, and the FALLBACK template for
+ * Cursor/Windsurf/Opencode/…) are both rendered from these — so a new tool can
+ * never be advertised in one place and forgotten in the others.
+ *
+ * Claude Code IS proven to surface `SERVER_INSTRUCTIONS` (it lands in the
+ * model's context as soon as the server connects), so its global rules
+ * (`templates/rules.claude.md`) and the per-project CLAUDE.md rules (written
+ * by `init`, `templates/project.claude.md`) deliberately do NOT re-render this
+ * catalog — they point at the live copy instead, which is what keeps a newly
+ * added tool from requiring a re-run of `setup`/`init` to be seen.
+ *
  * Keep this list in lockstep with the tools registered in src/server.ts.
  */
 export interface ToolAnnotations {
@@ -229,7 +239,7 @@ export function renderToolList(): string {
   return TOOL_CATALOG.map((t) => `- ${t.name} — ${t.summary}`).join("\n");
 }
 
-/** Markdown doc block (tools + routing + workflow) — used in the project CLAUDE.md. */
+/** Markdown doc block (tools + routing + workflow) — used by hosts not proven to surface `SERVER_INSTRUCTIONS` (Codex, Gemini CLI, FALLBACK). Claude Code's rules point at that live copy instead. */
 export function renderToolDocs(): string {
   const tools = TOOL_CATALOG.map((t) => `- \`${t.name}\` — ${t.summary}`).join("\n");
   const routing = TOOL_ROUTING.map((r) => `- ${r.when} → \`${r.tool}\``).join("\n");

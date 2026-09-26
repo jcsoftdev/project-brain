@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import template from "../../templates/project.claude.md" with { type: "text" };
 import { writeSection } from "./section-marker.js";
-import { renderToolDocs } from "../constants.js";
 import { listLiveWorktrees } from "../git/worktree.js";
 import type { StackInfo } from "../indexer/stack.js";
 
@@ -151,7 +150,6 @@ export async function writeProjectRules(
   const rendered = template
     .replace(/\{\{projectId\}\}/g, info.projectId)
     .replace(/\{\{stack\}\}/g, formatStack(info.stack))
-    .replace(/\{\{tools\}\}/g, renderToolDocs())
     .replace(/\{\{modules\}\}/g, modulesSection)
     .replace(/\{\{okf\}\}/g, renderOkfSection(info.hasOkfBundle ?? false))
     // git is asked directly rather than trusting a flag from the caller: `init` runs in
