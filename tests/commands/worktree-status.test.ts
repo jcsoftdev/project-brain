@@ -99,4 +99,56 @@ describe("worktreeStatus", () => {
 
     expect((await worktreeStatus(wt)).projectId).toBe("renamed-by-hand@wt-e");
   });
+
+  // T8 — warn when the default branch is not an ancestor of HEAD, so a worktree
+  // created on a stale base does not silently run against outdated code.
+  describe("base freshness (T8)", () => {
+    it("reports no staleness when HEAD is on the default branch itself", async () => {
+      const status = await worktreeStatus(repo);
+      expect(status.baseStale).toBeUndefined();
+      expect(status.mergeBase).toBeUndefined();
+      expect(status.defaultBranch).toBeUndefined();
+      expect(status.behindBy).toBeUndefined();
+    });
+
+    it("reports no staleness when the worktree's branch already contains every commit on main", async () => {
+      const wt = join(repo, "wt-fresh");
+      git(repo, "worktree", "add", "-q", "-b", "t/fresh", wt);
+
+      const status = await worktreeStatus(wt);
+      expect(status.baseStale).toBeUndefined();
+    });
+
+    it("reports baseStale, defaultBranch, mergeBase, and behindBy when main has moved ahead", async () => {
+      const wt = join(repo, "wt-stale");
+      git(repo, "worktree", "add", "-q", "-b", "t/stale", wt);
+      const divergedAt = git(repo, "rev-parse", "HEAD");
+
+      // Advance main with two commits the worktree's branch never gets.
+      for (const name of ["a.txt", "b.txt"]) {
+        await writeFile(join(repo, name), "x\n");
+        git(repo, "add", name);
+        git(repo, "commit", "-q", "-m", `add ${name}`);
+      }
+
+      const status = await worktreeStatus(wt);
+      expect(status.baseStale).toBe(true);
+      expect(status.defaultBranch).toBe("main");
+      expect(status.behindBy).toBe(2);
+      expect(status.mergeBase).toBe(divergedAt.slice(0, 7));
+    });
+
+    it("skips silently (no crash, no baseStale) when no main/master/origin-HEAD can be resolved", async () => {
+      const trunkDir = join(dir, "trunk-repo");
+      await mkdir(trunkDir);
+      git(trunkDir, "init", "-q", "-b", "trunk");
+      await writeFile(join(trunkDir, "f.txt"), "x\n");
+      git(trunkDir, "add", "f.txt");
+      git(trunkDir, "commit", "-q", "-m", "init");
+
+      await expect(worktreeStatus(trunkDir)).resolves.toBeDefined();
+      const status = await worktreeStatus(trunkDir);
+      expect(status.baseStale).toBeUndefined();
+    });
+  });
 });

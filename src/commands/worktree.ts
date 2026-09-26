@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { DATA_DIR, DB_PATH } from "../constants.js";
 import { readRegistry, unregisterProjects } from "../store/project-registry.js";
@@ -10,6 +11,7 @@ import {
   deriveProjectId,
 } from "../indexer/project-id.js";
 import { listLiveWorktrees, detectGitContext } from "../git/worktree.js";
+import type { SpawnFn } from "../bench/mine.js";
 
 export interface WorktreeStatus {
   /**
@@ -27,6 +29,72 @@ export interface WorktreeStatus {
   isMain: boolean;
   /** Whether `init` has run here. A linked worktree with false has no usable brain. */
   indexed: boolean;
+  /**
+   * True when the resolved default branch is NOT an ancestor of HEAD — this
+   * worktree was created (or has sat) on a base that has since moved on.
+   * Absent (not `false`) when the check found nothing to warn about, or when
+   * no default branch could be resolved at all — an advisory, never a hard
+   * requirement, so an unresolvable case fails silent rather than noisy.
+   */
+  baseStale?: boolean;
+  /** The resolved default branch, e.g. "origin/main", "main", "master". Present only when baseStale is true. */
+  defaultBranch?: string;
+  /** Short commit where HEAD and defaultBranch last agreed. Present only when baseStale is true. */
+  mergeBase?: string;
+  /** Commits on defaultBranch that HEAD does not have. Present only when baseStale is true. */
+  behindBy?: number;
+}
+
+/** git that reports failure as empty string instead of throwing — same seam as bench/mine.ts and okf/candidates.ts. */
+function runGit(cwd: string, args: string[], spawn: SpawnFn): string {
+  const result = spawn("git", args, { cwd, encoding: "utf-8" });
+  return result.status === 0 ? (result.stdout ?? "").trim() : "";
+}
+
+/**
+ * Resolve the project's default branch: `origin/HEAD`'s symbolic ref first
+ * (what a fresh clone actually points at), then a local `main`, then a local
+ * `master`. Returns null when none resolves — a repo with no remote and a
+ * differently-named trunk (e.g. `trunk`) is not an error, just unresolvable,
+ * and this check stays silent about it rather than guessing.
+ */
+function resolveDefaultBranch(root: string, spawn: SpawnFn): string | null {
+  const originHead = runGit(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], spawn);
+  if (originHead) return originHead;
+
+  for (const candidate of ["main", "master"]) {
+    const verify = spawn("git", ["rev-parse", "--verify", "--quiet", candidate], { cwd: root, encoding: "utf-8" });
+    if (verify.status === 0) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Whether `defaultBranch` is an ancestor of HEAD, and if not, where they
+ * diverged and by how much. Returns null both when the default branch cannot
+ * be resolved AND when it IS an ancestor (nothing to warn about) — the
+ * caller only needs to know "is there a warning", not why not.
+ */
+function checkBaseFreshness(
+  root: string,
+  spawn: SpawnFn
+): { defaultBranch: string; mergeBase: string; behindBy: number } | null {
+  const defaultBranch = resolveDefaultBranch(root, spawn);
+  if (!defaultBranch) return null;
+
+  const ancestry = spawn("git", ["merge-base", "--is-ancestor", defaultBranch, "HEAD"], { cwd: root, encoding: "utf-8" });
+  if (ancestry.status === 0) return null; // up to date
+  // Any status other than 1 (the documented "not an ancestor" result) means the
+  // check itself is untrustworthy (e.g. an invalid ref) — skip rather than warn.
+  if (ancestry.status !== 1) return null;
+
+  const mergeBase = runGit(root, ["merge-base", defaultBranch, "HEAD"], spawn);
+  if (!mergeBase) return null;
+
+  const behindBy = Number.parseInt(runGit(root, ["rev-list", "--count", `HEAD..${defaultBranch}`], spawn), 10);
+  if (!Number.isFinite(behindBy)) return null;
+
+  return { defaultBranch, mergeBase: mergeBase.slice(0, 7), behindBy };
 }
 
 /**
@@ -38,7 +106,10 @@ export interface WorktreeStatus {
  * registry lowercases repository names and project-brain does not — so a caller that
  * reuses one where the other belongs silently splits the orchestration in half.
  */
-export async function worktreeStatus(root: string = process.cwd()): Promise<WorktreeStatus> {
+export async function worktreeStatus(
+  root: string = process.cwd(),
+  spawn: SpawnFn = spawnSync
+): Promise<WorktreeStatus> {
   const ctx = detectGitContext(root);
   const configPath = join(ctx.root, ".project-brain", "project.json");
 
@@ -54,6 +125,8 @@ export async function worktreeStatus(root: string = process.cwd()): Promise<Work
     // not initialized here
   }
 
+  const freshness = checkBaseFreshness(ctx.root, spawn);
+
   return {
     project: ctx.project,
     worktree: ctx.worktree,
@@ -61,6 +134,7 @@ export async function worktreeStatus(root: string = process.cwd()): Promise<Work
     root: ctx.root,
     isMain: ctx.isMain,
     indexed: recorded !== null,
+    ...(freshness ? { baseStale: true as const, ...freshness } : {}),
   };
 }
 
@@ -174,6 +248,14 @@ export async function execute(args: string[]): Promise<void> {
     if (!status.indexed) {
       console.log("");
       console.log("Not indexed here. Run `project-brain init` then `project-brain sync`.");
+    }
+    // T8 — a worktree created on a stale base ran ahead silently; name it.
+    if (status.baseStale) {
+      console.log("");
+      console.log(
+        `⚠ ${status.defaultBranch} is ${status.behindBy} commit(s) ahead of this worktree ` +
+          `(diverged at ${status.mergeBase}) — consider rebasing or merging.`
+      );
     }
     return;
   }
