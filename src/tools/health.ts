@@ -28,6 +28,9 @@ export async function handleHealth(
     model: emb.model ?? EMBEDDING_MODEL,
     chunks,
     version: VERSION,
+    // `deps.reranker` is only ever set when a token resolved at startup
+    // (see createServer) — its presence IS "configured", no separate lookup.
+    reranker: deps.reranker ? "configured" : "off",
     ...(lastError ? { lastError } : {}),
     ...(embedLatencyMs !== undefined ? { embedLatencyMs } : {}),
     slowEmbeddings: embedLatencyMs !== undefined && embedLatencyMs > HOOK_TIMEOUT_MS,
@@ -54,6 +57,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
         model: z.string(),
         chunks: z.number(),
         version: z.string(),
+        reranker: z.enum(["off", "configured"]),
         lastError: z
           .object({ phase: z.string(), message: z.string(), timestamp: z.number() })
           .optional(),

@@ -91,6 +91,31 @@ describe("health command", () => {
       expect(result.chunks).toBe(0);
     });
 
+    it("reports reranker: off when not passed (default)", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo",
+        store: makeStore(0),
+        embeddings: makeEmbeddings(true),
+        dbPath: dir,
+      });
+
+      expect(result.reranker).toBe("off");
+    });
+
+    it("reports reranker: configured when the caller resolved a token", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo",
+        store: makeStore(0),
+        embeddings: makeEmbeddings(true),
+        dbPath: dir,
+        reranker: "configured",
+      });
+
+      expect(result.reranker).toBe("configured");
+    });
+
     it("reports the version from package.json, not a hardcoded literal", async () => {
       const { runHealth } = await import("../../src/commands/health.js");
       const pkg = await import("../../package.json", {

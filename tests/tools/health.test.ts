@@ -206,4 +206,26 @@ describe("check_health tool", () => {
     expect(data.manifestChunks).toBeUndefined();
     expect(data.desynced).toBeUndefined();
   });
+
+  it("reports reranker: off when no reranker is injected (no token configured)", async () => {
+    const result = await handleHealth(
+      { project: "demo" },
+      { store: makeMockStore(1), embeddings: makeMockEmbeddings(true) }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.reranker).toBe("off");
+  });
+
+  it("reports reranker: configured when a reranker is injected", async () => {
+    const result = await handleHealth(
+      { project: "demo" },
+      {
+        store: makeMockStore(1),
+        embeddings: makeMockEmbeddings(true),
+        reranker: { rerank: async () => [] },
+      }
+    );
+    const data = JSON.parse(result.content[0].text);
+    expect(data.reranker).toBe("configured");
+  });
 });

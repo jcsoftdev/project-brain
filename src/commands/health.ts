@@ -14,6 +14,11 @@ export interface HealthOptions {
   dbPath: string;
   /** Chunks the repo manifest says were written; omitted when the repo has no manifest. */
   manifestChunks?: number;
+  /**
+   * Whether a reranker token resolved (env or file) — resolved by the caller,
+   * no network call. Defaults to "off" when omitted.
+   */
+  reranker?: "off" | "configured";
 }
 
 export interface HealthResult {
@@ -35,6 +40,8 @@ export interface HealthResult {
    * injects nothing every time, silently.
    */
   slowEmbeddings: boolean;
+  /** "configured" when a reranker token resolves (env or file); "off" otherwise. */
+  reranker: "off" | "configured";
 }
 
 /**
@@ -78,6 +85,7 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
     ...(lastError ? { lastError } : {}),
     ...(embedLatencyMs !== undefined ? { embedLatencyMs } : {}),
     slowEmbeddings: embedLatencyMs !== undefined && embedLatencyMs > HOOK_TIMEOUT_MS,
+    reranker: options.reranker ?? "off",
   };
 }
 
@@ -122,13 +130,23 @@ export async function execute(args: string[]): Promise<void> {
   const store = new LanceDbStore(DB_PATH);
   const { readTableMeta } = await import("../store/meta.js");
   const { resolveSyncModel } = await import("./sync.js");
+  const { resolveRerankerToken } = await import("../rerank/token.js");
   const storedMeta = await readTableMeta(DB_PATH, projectId);
   const embeddings = await createEmbeddingClient(
     resolveSyncModel({ envModel: process.env.BRAIN_EMBED_MODEL || undefined, storedMeta }),
     { host: OLLAMA_HOST, autoPull: false }
   );
+  // Env/file read only — never a network call, per the health contract.
+  const reranker = (await resolveRerankerToken()) ? "configured" : "off";
 
-  const result = await runHealth({ projectId, store, embeddings, dbPath: DB_PATH, manifestChunks: await readManifestChunks(root) });
+  const result = await runHealth({
+    projectId,
+    store,
+    embeddings,
+    dbPath: DB_PATH,
+    manifestChunks: await readManifestChunks(root),
+    reranker,
+  });
 
   const storeIcon = result.store === "connected" ? "✓" : "✗";
   const embIcon = result.embeddings === "available" ? "✓" : "✗";
@@ -148,6 +166,7 @@ export async function execute(args: string[]): Promise<void> {
       `  ⚠ Embedding latency (${Math.round(result.embedLatencyMs ?? 0)}ms) exceeds the prompt hook's ${HOOK_TIMEOUT_MS}ms budget — the hook will inject nothing while this persists. Check system load or Ollama.`
     );
   }
+  console.log(`  Reranker:   ${result.reranker}`);
   console.log(`  Version:    ${result.version}`);
   if (result.lastError) {
     const when = new Date(result.lastError.timestamp).toISOString();
