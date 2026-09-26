@@ -25,7 +25,7 @@ export interface AcquireSyncLockOptions {
   now?: () => number;
 }
 
-interface LockRecord {
+export interface LockRecord {
   pid: number;
   at: number;
 }
@@ -38,8 +38,11 @@ export function syncLockPath(root: string): string {
 /**
  * Signal 0 asks the kernel whether the process exists without delivering
  * anything. EPERM means it exists and belongs to another user — still alive.
+ *
+ * Exported so sync-status.ts's crashed-detection can reuse this exact probe
+ * instead of maintaining a second copy that could drift from it.
  */
-function defaultIsAlive(pid: number): boolean {
+export function defaultIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;

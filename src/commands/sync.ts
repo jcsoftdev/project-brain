@@ -1217,11 +1217,24 @@ export async function execute(args: string[]): Promise<void> {
   // Skipping (not queueing) is the right answer: the holder is about to index
   // the same working tree.
   const { acquireSyncLock } = await import("./sync-lock.js");
+  const { writeSyncStatus, writeSyncStatusSync } = await import("./sync-status.js");
   const lock = await acquireSyncLock(root);
   if (lock === null) {
     console.log(`A sync is already running for ${projectId} — skipping this one.`);
     return;
   }
+
+  const pid = process.pid;
+  // Distinct from the `startedAt` further below (which times just the
+  // runSync call for the "Duration:" line) — this one spans the whole
+  // command, including model resolution, and is what the status file and
+  // the skip message's age both measure against.
+  const syncStartedAt = Date.now();
+  // Written before any work starts so a reader (health, the skip message's
+  // sibling `crashed` detection) can tell "in progress" from "never ran" —
+  // and so a hard kill of this very process leaves behind a `running` record
+  // that readSyncStatus later reports as `crashed` once the pid is dead.
+  await writeSyncStatus(root, { outcome: "running", pid, startedAt: syncStartedAt, changedOnly });
 
   // Wall-clock budget, armed BEFORE the first call that can hang. Everything
   // below has its own per-request timeouts, but the model auto-pull has none,
@@ -1232,10 +1245,20 @@ export async function execute(args: string[]): Promise<void> {
   const cancelWatchdog = startSyncWatchdog({
     timeoutMs,
     onExpire: () => {
-      console.error(
-        `\nsync: aborting after ${Math.round(timeoutMs / 1000)}s — this job is wedged, not slow. ` +
-          `Set BRAIN_SYNC_TIMEOUT_MS to raise the budget, or 0 to remove it.`
-      );
+      const message =
+        `sync: aborting after ${Math.round(timeoutMs / 1000)}s — this job is wedged, not slow. ` +
+        `Set BRAIN_SYNC_TIMEOUT_MS to raise the budget, or 0 to remove it.`;
+      console.error(`\n${message}`);
+      // Synchronous: process.exit() below leaves no further event-loop turn
+      // for an async write to land.
+      writeSyncStatusSync(root, {
+        outcome: "aborted",
+        pid,
+        startedAt: syncStartedAt,
+        finishedAt: Date.now(),
+        changedOnly,
+        error: message,
+      });
       // Exit without unwinding, and leave the lock file behind on purpose: the
       // next run reads a dead pid out of it and reclaims it immediately. That
       // is more reliable than asking a process we have just declared wedged to
@@ -1282,6 +1305,14 @@ export async function execute(args: string[]): Promise<void> {
       // Total embed failure: do not report "Ingested: 0" as success
       console.error(`\nError: ${result.error}`);
       exitCode = 1;
+      await writeSyncStatus(root, {
+        outcome: "failed",
+        pid,
+        startedAt: syncStartedAt,
+        finishedAt: Date.now(),
+        changedOnly,
+        error: result.error,
+      });
     } else {
       console.log(`  Scanned:  ${result.scanned} files`);
       console.log(`  Ingested: ${result.ingested} files`);
@@ -1306,7 +1337,32 @@ export async function execute(args: string[]): Promise<void> {
       } else {
         console.log("\nSync complete.");
       }
+
+      // Reported as `ok` even on a partial embed failure (exitCode above may
+      // still be 1) — the run itself completed and stored what it could,
+      // unlike `result.error` above where nothing was stored at all. `chunks`
+      // is the store's own count rather than a running tally, so it reflects
+      // reality even if this run only touched a subset of files.
+      await writeSyncStatus(root, {
+        outcome: "ok",
+        pid,
+        startedAt: syncStartedAt,
+        finishedAt: Date.now(),
+        changedOnly,
+        files: result.ingested,
+        chunks: await store.countChunks(projectId),
+      });
     }
+  } catch (err) {
+    await writeSyncStatus(root, {
+      outcome: "failed",
+      pid,
+      startedAt: syncStartedAt,
+      finishedAt: Date.now(),
+      changedOnly,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   } finally {
     // Both must run on the throw path too, or a crashed sync leaves the next
     // one locked out until the stale window expires.
