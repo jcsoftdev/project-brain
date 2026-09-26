@@ -70,4 +70,23 @@ describe("runInit project rules wiring (T-6.2)", () => {
     const startCount = content.split("<!-- project-brain:start -->").length - 1;
     expect(startCount).toBe(1);
   });
+
+  // T6 — `project-brain init` must report what it changed in CLAUDE.md, not rewrite silently.
+  it("runInit's result carries the CLAUDE.md write summary when rules are written", async () => {
+    const { runInit } = await import("../../src/commands/init.js");
+
+    const result = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipIndex: true });
+
+    expect(result.rulesSummary?.file).toBe(join(tempDir, "CLAUDE.md"));
+    expect(result.rulesSummary?.linesAdded).toBeGreaterThan(0);
+    expect(result.rulesSummary?.outsideBlockUnchanged).toBe(true);
+  });
+
+  it("runInit's result omits rulesSummary when skipRules is true", async () => {
+    const { runInit } = await import("../../src/commands/init.js");
+
+    const result = await runInit({ root: tempDir, dataDir: join(tempDir, ".project-brain"), skipGitHook: true, skipRules: true, skipIndex: true });
+
+    expect(result.rulesSummary).toBeUndefined();
+  });
 });

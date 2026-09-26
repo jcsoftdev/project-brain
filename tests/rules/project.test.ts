@@ -272,4 +272,16 @@ describe("writeProjectRules — conditional OKF block", () => {
     await writeProjectRules(tempDir, { projectId: "p", stack, hasOkfBundle: false });
     expect(await claudeMd()).not.toContain("Knowledge bundle");
   });
+
+  // T6 — okf init/project-brain init must report what changed, not rewrite silently.
+  it("returns the writeSection change summary for CLAUDE.md", async () => {
+    const { writeProjectRules } = await import("../../src/rules/project.js");
+    const first = await writeProjectRules(tempDir, { projectId: "p", stack });
+    expect(first.file).toBe(join(tempDir, "CLAUDE.md"));
+    expect(first.outsideBlockUnchanged).toBe(true);
+
+    const second = await writeProjectRules(tempDir, { projectId: "p", stack, hasOkfBundle: true });
+    expect(second.unchanged).toBe(false);
+    expect(second.linesAdded).toBeGreaterThan(0);
+  });
 });

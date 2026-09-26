@@ -6,6 +6,7 @@ import {
   writeSection,
   removeSection,
   hasSection,
+  formatSectionWriteSummary,
 } from "../../src/rules/section-marker.js";
 
 describe("section-marker", () => {
@@ -64,6 +65,88 @@ describe("section-marker", () => {
       expect(content).toContain("# Header");
       expect(content).toContain("User content here.");
       expect(content).toContain("Brain section");
+    });
+  });
+
+  // T6 — an agent reported `okf init` rewrote 51 lines of CLAUDE.md silently.
+  // writeSection now returns a change summary so callers can print what changed.
+  describe("writeSection change summary", () => {
+    it("reports the file, lines added, and outsideBlockUnchanged=true on first write (append)", async () => {
+      await Bun.write(filePath, "# Header\n\nUser content here.\n");
+      const summary = await writeSection(filePath, "line one\nline two");
+
+      expect(summary.file).toBe(filePath);
+      expect(summary.linesAdded).toBeGreaterThan(0);
+      expect(summary.linesRemoved).toBe(0);
+      expect(summary.unchanged).toBe(false);
+      expect(summary.outsideBlockUnchanged).toBe(true);
+    });
+
+    it("reports lines added and removed when replacing an existing section", async () => {
+      await writeSection(filePath, "a\nb\nc");
+      const summary = await writeSection(filePath, "x\ny");
+
+      expect(summary.linesRemoved).toBeGreaterThan(0);
+      expect(summary.linesAdded).toBeGreaterThan(0);
+      expect(summary.outsideBlockUnchanged).toBe(true);
+    });
+
+    it("reports unchanged=true when rewriting with identical content", async () => {
+      await writeSection(filePath, "same content");
+      const summary = await writeSection(filePath, "same content");
+
+      expect(summary.unchanged).toBe(true);
+      expect(summary.linesAdded).toBe(0);
+      expect(summary.linesRemoved).toBe(0);
+    });
+
+    it("outsideBlockUnchanged stays true even though the outside content is untouched by a normal rewrite", async () => {
+      await Bun.write(filePath, "# My own header\n\nMy own paragraph.\n");
+      await writeSection(filePath, "v1");
+      const summary = await writeSection(filePath, "v2 has more lines\nline two\nline three");
+
+      expect(summary.outsideBlockUnchanged).toBe(true);
+      const content = await Bun.file(filePath).text();
+      expect(content).toContain("# My own header");
+      expect(content).toContain("My own paragraph.");
+    });
+  });
+
+  describe("formatSectionWriteSummary", () => {
+    it('formats an unchanged write as "<file>: unchanged"', () => {
+      const line = formatSectionWriteSummary({
+        file: "/x/CLAUDE.md",
+        linesAdded: 0,
+        linesRemoved: 0,
+        unchanged: true,
+        outsideBlockUnchanged: true,
+      });
+      expect(line).toBe("CLAUDE.md: unchanged");
+    });
+
+    it("formats a changed write with +added -removed and the outside-unchanged note", () => {
+      const line = formatSectionWriteSummary({
+        file: "/x/CLAUDE.md",
+        linesAdded: 3,
+        linesRemoved: 51,
+        unchanged: false,
+        outsideBlockUnchanged: true,
+      });
+      expect(line).toBe(
+        "CLAUDE.md: project-brain block updated (+3 −51); content outside the block unchanged"
+      );
+    });
+
+    it("warns when content outside the block changed", () => {
+      const line = formatSectionWriteSummary({
+        file: "/x/CLAUDE.md",
+        linesAdded: 1,
+        linesRemoved: 1,
+        unchanged: false,
+        outsideBlockUnchanged: false,
+      });
+      expect(line).toContain("WARNING");
+      expect(line).toContain("outside the block");
     });
   });
 

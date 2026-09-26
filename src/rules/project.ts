@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import template from "../../templates/project.claude.md" with { type: "text" };
-import { writeSection } from "./section-marker.js";
+import { writeSection, type SectionWriteSummary } from "./section-marker.js";
 import { listLiveWorktrees } from "../git/worktree.js";
 import type { StackInfo } from "../indexer/stack.js";
 
@@ -144,7 +144,7 @@ Read-only work needs none of this.
 export async function writeProjectRules(
   root: string,
   info: ProjectRulesInfo
-): Promise<void> {
+): Promise<SectionWriteSummary> {
   const modulesSection = renderModulesSection(info.modules ?? []);
 
   const rendered = template
@@ -158,5 +158,5 @@ export async function writeProjectRules(
     .replace(/\{\{worktree\}\}/g, renderWorktreeSection(listLiveWorktrees(root).length > 0));
 
   const claudeMdPath = join(root, "CLAUDE.md");
-  await writeSection(claudeMdPath, rendered);
+  return writeSection(claudeMdPath, rendered);
 }

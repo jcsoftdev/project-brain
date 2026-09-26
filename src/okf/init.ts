@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import type { SectionWriteSummary } from "../rules/section-marker.js";
 
 /** Bundle directory name, relative to the project root, when none is given. */
 export const DEFAULT_BUNDLE_DIRNAME = "okf";
@@ -18,7 +19,7 @@ export interface OkfInitOptions {
    * refresh the host would never be told the bundle exists. Injected so the
    * scaffolding stays testable without the whole init machinery.
    */
-  refreshRules?: () => Promise<void>;
+  refreshRules?: () => Promise<SectionWriteSummary | void>;
 }
 
 export interface OkfInitResult {
@@ -26,6 +27,11 @@ export interface OkfInitResult {
   created: string[];
   /** Filenames left alone because they already existed. */
   skipped: string[];
+  /**
+   * What `refreshRules` changed in CLAUDE.md, when it ran and succeeded.
+   * Absent when no `refreshRules` was given, or when it threw.
+   */
+  rulesSummary?: SectionWriteSummary;
 }
 
 /**
@@ -123,13 +129,14 @@ export async function runOkfInit(options: OkfInitOptions): Promise<OkfInitResult
 
   // Best-effort: a bundle that exists but whose rules were not refreshed is
   // still a working bundle. Failing here must not report a half-made one.
+  let rulesSummary: SectionWriteSummary | undefined;
   if (options.refreshRules) {
     try {
-      await options.refreshRules();
+      rulesSummary = (await options.refreshRules()) ?? undefined;
     } catch (e: any) {
       console.warn(`Warning: bundle created, but refreshing project rules failed: ${e.message}`);
     }
   }
 
-  return { created, skipped };
+  return { created, skipped, ...(rulesSummary ? { rulesSummary } : {}) };
 }

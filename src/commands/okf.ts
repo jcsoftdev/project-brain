@@ -14,6 +14,7 @@ import {
 } from "../okf/judge.js";
 import { JEV_JUDGE_MODEL_NAME, OKF_JUDGE_MODEL } from "../constants.js";
 import type { CodeClock } from "../git/last-changed.js";
+import { formatSectionWriteSummary, type SectionWriteSummary } from "../rules/section-marker.js";
 
 /**
  * Default bundle location, relative to the project root.
@@ -105,14 +106,14 @@ export async function runOkfSync(dir: string, deps: OkfSyncDeps): Promise<string
  * Reads the same project.json init wrote, so projectId and stack stay in sync
  * rather than being re-detected differently here.
  */
-async function refreshProjectRules(root: string): Promise<void> {
+async function refreshProjectRules(root: string): Promise<SectionWriteSummary> {
   const { readFile } = await import("node:fs/promises");
   const { writeProjectRules } = await import("../rules/project.js");
 
   const raw = await readFile(join(root, ".project-brain", "project.json"), "utf-8");
   const config = JSON.parse(raw) as { projectId: string; stack: any; modules?: string[] };
 
-  await writeProjectRules(root, {
+  return writeProjectRules(root, {
     projectId: config.projectId,
     stack: config.stack,
     modules: config.modules,
@@ -252,11 +253,18 @@ export async function execute(args: string[]): Promise<void> {
 
   if (action === "init") {
     const { runOkfInit } = await import("../okf/init.js");
-    const { created, skipped } = await runOkfInit({ root, dir, refreshRules: () => refreshProjectRules(root) });
+    const { created, skipped, rulesSummary } = await runOkfInit({
+      root,
+      dir,
+      refreshRules: () => refreshProjectRules(root),
+    });
 
     console.log(`project-brain okf init — ${dir}`);
     for (const name of created) console.log(`  created  ${name}`);
     for (const name of skipped) console.log(`  exists   ${name} (left alone)`);
+    // T6: `okf init` used to rewrite CLAUDE.md's managed block silently — an
+    // agent had no way to tell 51 lines changed without diffing by hand.
+    if (rulesSummary) console.log(`  ${formatSectionWriteSummary(rulesSummary)}`);
     if (created.length === 0) {
       console.log("\n  Bundle already present. Nothing to do.");
     } else {

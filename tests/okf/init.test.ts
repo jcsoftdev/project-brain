@@ -102,6 +102,32 @@ describe("runOkfInit", () => {
     expect(refreshed).toBe(1);
   });
 
+  // T6 — surface what refreshRules changed instead of leaving it silent.
+  it("carries the rulesSummary returned by refreshRules through to the result", async () => {
+    const { runOkfInit } = await import("../../src/okf/init.js");
+    const summary = {
+      file: join(root, "CLAUDE.md"),
+      linesAdded: 3,
+      linesRemoved: 51,
+      unchanged: false,
+      outsideBlockUnchanged: true,
+    };
+    const result = await runOkfInit({ root, refreshRules: async () => summary });
+    expect(result.rulesSummary).toEqual(summary);
+  });
+
+  it("omits rulesSummary when refreshRules is not provided", async () => {
+    const { runOkfInit } = await import("../../src/okf/init.js");
+    const result = await runOkfInit({ root });
+    expect(result.rulesSummary).toBeUndefined();
+  });
+
+  it("omits rulesSummary when refreshRules throws", async () => {
+    const { runOkfInit } = await import("../../src/okf/init.js");
+    const result = await runOkfInit({ root, refreshRules: async () => { throw new Error("no CLAUDE.md"); } });
+    expect(result.rulesSummary).toBeUndefined();
+  });
+
   /** A rules refresh is a nicety; failing it must not leave a half-made bundle. */
   it("still reports the created bundle when the rules refresh throws", async () => {
     const { runOkfInit } = await import("../../src/okf/init.js");

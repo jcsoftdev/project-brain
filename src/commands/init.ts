@@ -8,6 +8,7 @@ import { detectGitContext } from "../git/worktree.js";
 import { installGitHook } from "../hooks/git.js";
 import { upsertContextHook } from "../hooks/claude-settings.js";
 import { writeProjectRules } from "../rules/project.js";
+import { formatSectionWriteSummary, type SectionWriteSummary } from "../rules/section-marker.js";
 import { detectModules, writeModuleStubs } from "../indexer/modules.js";
 import { runReindex } from "./reindex.js";
 import { runSync } from "./sync.js";
@@ -50,6 +51,8 @@ export interface InitResult {
   indexWarning?: string;
   /** present iff indexed === true */
   indexStats?: ReindexResult;
+  /** What writeProjectRules changed in CLAUDE.md. Absent when skipRules is true or the write threw. */
+  rulesSummary?: SectionWriteSummary;
 }
 
 /**
@@ -130,10 +133,11 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
   // The knowledge-bundle section is gated on the bundle EXISTING, so a re-run
   // of init on a project that has since gained one picks it up. On a first run
   // there is no bundle yet — `okf init` re-renders this file when it creates one.
+  let rulesSummary: SectionWriteSummary | undefined;
   if (!options.skipRules) {
     try {
       const hasOkfBundle = existsSync(join(root, DEFAULT_BUNDLE_DIRNAME));
-      await writeProjectRules(root, { projectId, stack, modules, hasOkfBundle });
+      rulesSummary = await writeProjectRules(root, { projectId, stack, modules, hasOkfBundle });
     } catch {
       // Non-fatal: rules writing should not block init
     }
@@ -256,6 +260,7 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
     indexed,
     indexWarning,
     indexStats,
+    ...(rulesSummary ? { rulesSummary } : {}),
   };
 }
 
@@ -309,6 +314,9 @@ export async function execute(args: string[]): Promise<void> {
       `Indexed:    skipped (run \`project-brain sync\` once Ollama is available)`
     );
   }
+
+  // T6: report the CLAUDE.md rewrite instead of leaving it silent.
+  if (result.rulesSummary) console.log(formatSectionWriteSummary(result.rulesSummary));
 
   console.log("\nInitialization complete. Run `project-brain sync` to index files.");
 }
