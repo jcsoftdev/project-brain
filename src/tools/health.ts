@@ -4,7 +4,7 @@ import { EMBEDDING_MODEL, VERSION, toolAnnotations } from "../constants.js";
 import type { ToolDeps } from "../types.js";
 import { jsonResult, type ToolResult } from "./format.js";
 import { readLastError } from "../store/error-state.js";
-import { measureEmbedLatency, readManifestChunks } from "../commands/health.js";
+import { measureEmbedLatency, readManifestChunks, readProjectRulesState } from "../commands/health.js";
 import { HOOK_TIMEOUT_MS } from "../commands/search.js";
 
 /** Handle check_health logic (exported for testing). */
@@ -14,13 +14,15 @@ export async function handleHealth(
 ): Promise<ToolResult> {
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(args.project) : deps.embeddings;
 
-  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, manifestChunks] = await Promise.all([
-    emb.isAvailable(),
-    deps.store.countChunks(args.project),
-    deps.dbPath ? readLastError(deps.dbPath, args.project) : Promise.resolve(null),
-    measureEmbedLatency(emb),
-    deps.projectRoot ? readManifestChunks(deps.projectRoot) : Promise.resolve(undefined),
-  ]);
+  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, manifestChunks, projectRules] =
+    await Promise.all([
+      emb.isAvailable(),
+      deps.store.countChunks(args.project),
+      deps.dbPath ? readLastError(deps.dbPath, args.project) : Promise.resolve(null),
+      measureEmbedLatency(emb),
+      deps.projectRoot ? readManifestChunks(deps.projectRoot) : Promise.resolve(undefined),
+      deps.projectRoot ? readProjectRulesState(deps.projectRoot) : Promise.resolve(undefined),
+    ]);
 
   const report = {
     store: "connected",
@@ -37,6 +39,7 @@ export async function handleHealth(
     ...(manifestChunks !== undefined
       ? { manifestChunks, desynced: chunks < manifestChunks }
       : {}),
+    ...(projectRules !== undefined ? { projectRules } : {}),
   };
 
   return jsonResult(report);
@@ -65,6 +68,7 @@ export function register(server: McpServer, deps: ToolDeps): void {
         slowEmbeddings: z.boolean(),
         manifestChunks: z.number().optional(),
         desynced: z.boolean().optional(),
+        projectRules: z.enum(["current", "stale", "missing"]).optional(),
       },
       annotations: toolAnnotations("check_health"),
     },

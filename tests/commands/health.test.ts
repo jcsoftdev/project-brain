@@ -264,4 +264,65 @@ describe("health command", () => {
       expect(result.slowEmbeddings).toBe(false);
     });
   });
+
+  describe("projectRules", () => {
+    let dir: string;
+    beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "pb-health-rules-")); });
+    afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+    it("runHealth omits projectRules when the caller did not resolve it", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo", store: makeStore(0), embeddings: makeEmbeddings(true), dbPath: dir,
+      });
+      expect(result.projectRules).toBeUndefined();
+      expect("projectRules" in result).toBe(false);
+    });
+
+    it("runHealth passes through whatever projectRules state the caller resolved", async () => {
+      const { runHealth } = await import("../../src/commands/health.js");
+      const result = await runHealth({
+        projectId: "demo", store: makeStore(0), embeddings: makeEmbeddings(true), dbPath: dir,
+        projectRules: "stale",
+      });
+      expect(result.projectRules).toBe("stale");
+    });
+
+    it("readProjectRulesState reports missing with no .project-brain/project.json", async () => {
+      const { readProjectRulesState } = await import("../../src/commands/health.js");
+      expect(await readProjectRulesState(dir)).toBe("missing");
+    });
+
+    it("readProjectRulesState reports current right after init's writeProjectRules", async () => {
+      const { readProjectRulesState } = await import("../../src/commands/health.js");
+      const { writeProjectRules } = await import("../../src/rules/project.js");
+      const { mkdir, writeFile } = await import("node:fs/promises");
+
+      const stack = { languages: ["TypeScript"], frameworks: [], packageManager: "bun", manifest: "package.json" };
+      await mkdir(join(dir, ".project-brain"), { recursive: true });
+      await writeFile(
+        join(dir, ".project-brain", "project.json"),
+        JSON.stringify({ projectId: "demo-proj", stack })
+      );
+      await writeProjectRules(dir, { projectId: "demo-proj", stack });
+
+      expect(await readProjectRulesState(dir)).toBe("current");
+    });
+
+    it("readProjectRulesState reports stale when the on-disk block predates the current template", async () => {
+      const { readProjectRulesState } = await import("../../src/commands/health.js");
+      const { writeSection } = await import("../../src/rules/section-marker.js");
+      const { mkdir, writeFile } = await import("node:fs/promises");
+
+      const stack = { languages: ["TypeScript"], frameworks: [], packageManager: "bun", manifest: "package.json" };
+      await mkdir(join(dir, ".project-brain"), { recursive: true });
+      await writeFile(
+        join(dir, ".project-brain", "project.json"),
+        JSON.stringify({ projectId: "demo-proj", stack })
+      );
+      await writeSection(join(dir, "CLAUDE.md"), "## project-brain MCP\n\nan old full tool catalog\n");
+
+      expect(await readProjectRulesState(dir)).toBe("stale");
+    });
+  });
 });

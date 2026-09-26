@@ -1,7 +1,13 @@
+import { join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { EMBEDDING_MODEL, VERSION } from "../constants.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
 import { readLastError, type LastError } from "../store/error-state.js";
 import { HOOK_TIMEOUT_MS } from "./search.js";
+
+/** Whether <root>/CLAUDE.md's project-brain block matches the current template; "missing" when there is no `.project-brain/project.json` to compare it against. */
+export type ProjectRulesState = "current" | "stale" | "missing";
 
 export interface HealthOptions {
   /** Project identifier for chunk count lookup. */
@@ -19,6 +25,12 @@ export interface HealthOptions {
    * no network call. Defaults to "off" when omitted.
    */
   reranker?: "off" | "configured";
+  /**
+   * Staleness of the project CLAUDE.md block, resolved by the caller via
+   * {@link readProjectRulesState} — same pattern as `manifestChunks`: `health`
+   * itself performs no filesystem scanning, the caller already has `root`.
+   */
+  projectRules?: ProjectRulesState;
 }
 
 export interface HealthResult {
@@ -42,6 +54,8 @@ export interface HealthResult {
   slowEmbeddings: boolean;
   /** "configured" when a reranker token resolves (env or file); "off" otherwise. */
   reranker: "off" | "configured";
+  /** Omitted when the caller did not resolve it (no root available). */
+  projectRules?: ProjectRulesState;
 }
 
 /**
@@ -86,7 +100,42 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
     ...(embedLatencyMs !== undefined ? { embedLatencyMs } : {}),
     slowEmbeddings: embedLatencyMs !== undefined && embedLatencyMs > HOOK_TIMEOUT_MS,
     reranker: options.reranker ?? "off",
+    ...(options.projectRules !== undefined ? { projectRules: options.projectRules } : {}),
   };
+}
+
+/**
+ * Resolve {@link ProjectRulesState} for `root` from its own persisted config —
+ * `.project-brain/project.json` already has `projectId` and `stack`, so this
+ * needs no re-detection of either. Module and OKF-bundle presence are cheap,
+ * read-only checks of the same kind `init` already performs on every run.
+ */
+export async function readProjectRulesState(root: string): Promise<ProjectRulesState> {
+  let config: { projectId?: string; stack?: unknown };
+  try {
+    const raw = await readFile(join(root, ".project-brain", "project.json"), "utf-8");
+    config = JSON.parse(raw);
+  } catch {
+    return "missing";
+  }
+  if (!config.projectId || !config.stack) return "missing";
+
+  const { detectModules } = await import("../indexer/modules.js");
+  const { DEFAULT_BUNDLE_DIRNAME } = await import("../okf/init.js");
+  const { isProjectRulesCurrent } = await import("../rules/project.js");
+
+  const [modules, hasOkfBundle] = await Promise.all([
+    detectModules(root),
+    Promise.resolve(existsSync(join(root, DEFAULT_BUNDLE_DIRNAME))),
+  ]);
+
+  const current = await isProjectRulesCurrent(root, {
+    projectId: config.projectId,
+    stack: config.stack as import("../indexer/stack.js").StackInfo,
+    modules,
+    hasOkfBundle,
+  });
+  return current ? "current" : "stale";
 }
 
 /** Read-only: health must not create a manifest in a repo that never had one. */
@@ -109,8 +158,6 @@ export async function readManifestChunks(root: string): Promise<number | undefin
 /** CLI entry point for the health command. */
 export async function execute(args: string[]): Promise<void> {
   const { LanceDbStore } = await import("../store/lancedb.js");
-  const { readFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
 
   const root = args.find((a) => !a.startsWith("--")) ?? process.cwd();
 
@@ -146,6 +193,7 @@ export async function execute(args: string[]): Promise<void> {
     dbPath: DB_PATH,
     manifestChunks: await readManifestChunks(root),
     reranker,
+    projectRules: await readProjectRulesState(root),
   });
 
   const storeIcon = result.store === "connected" ? "✓" : "✗";
@@ -168,6 +216,10 @@ export async function execute(args: string[]): Promise<void> {
   }
   console.log(`  Reranker:   ${result.reranker}`);
   console.log(`  Version:    ${result.version}`);
+  if (result.projectRules) console.log(`  Project rules: ${result.projectRules}`);
+  if (result.projectRules === "stale") {
+    console.log(`  ⚠ CLAUDE.md's project-brain block is stale — run: project-brain init`);
+  }
   if (result.lastError) {
     const when = new Date(result.lastError.timestamp).toISOString();
     console.log(`  ⚠ Last error: [${result.lastError.phase}] ${result.lastError.message} (${when})`);
