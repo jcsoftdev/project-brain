@@ -1,4 +1,5 @@
 import { RERANK_TIMEOUT_MS } from "../constants.js";
+import { ask, type NoulQuestion, type TypesafeFetchFn } from "../typesafe/client.js";
 
 /** One item eligible for reranking: enough for Jev to judge relevance without shipping the whole chunk. */
 export interface RerankCandidate {
@@ -17,7 +18,7 @@ export interface Reranker {
 }
 
 /** Injectable fetch-like function — matches src/embeddings/factory.ts's DI pattern so tests never stub global fetch. */
-export type JevFetchFn = (url: string, init: RequestInit) => Promise<Response>;
+export type JevFetchFn = TypesafeFetchFn;
 
 export interface JevRerankerOptions {
   /** Injectable HTTP call. Defaults to the real global fetch. */
@@ -25,8 +26,6 @@ export interface JevRerankerOptions {
   /** Per-request timeout, ms. Defaults to RERANK_TIMEOUT_MS. */
   timeoutMs?: number;
 }
-
-const TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone";
 
 /** Content is capped per candidate to keep the request small and the cost bounded. */
 const MAX_CONTENT_CHARS = 1200;
@@ -57,7 +56,7 @@ export class JevReranker implements Reranker {
     if (candidates.length === 0) return [];
 
     const stateCandidates: Record<string, { file: string; symbol?: string; content: string }> = {};
-    const questions: Record<string, { type: "noul"; instructions: string }> = {};
+    const questions: Record<string, NoulQuestion> = {};
 
     candidates.forEach((c, i) => {
       const key = `c${i}`;
@@ -74,46 +73,14 @@ export class JevReranker implements Reranker {
       };
     });
 
-    let response: Response;
-    try {
-      response = await this.fetchFn(TYPESAFE_URL, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "jev-latest",
-          state: { query, candidates: stateCandidates },
-          questions,
-        }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch {
-      // Network error, abort, or timeout — treat as opt-out, not a crash.
-      return null;
-    }
+    const answers = await ask(this.token, { query, candidates: stateCandidates }, questions, {
+      fetchFn: this.fetchFn,
+      timeoutMs: this.timeoutMs,
+    });
+    // ask() already guarantees every key resolves to a valid noul answer, or
+    // the whole call is null — never a partial reorder on a partial response.
+    if (!answers) return null;
 
-    if (!response.ok) return null;
-
-    let data: unknown;
-    try {
-      data = await response.json();
-    } catch {
-      return null;
-    }
-
-    const answers = (data as { answers?: Record<string, { noul?: unknown }> } | null)?.answers;
-    if (!answers || typeof answers !== "object") return null;
-
-    const scores: number[] = [];
-    for (let i = 0; i < candidates.length; i++) {
-      const noul = answers[`c${i}`]?.noul;
-      // Any missing/non-numeric answer invalidates the whole batch — never
-      // partially reorder on a partial response.
-      if (typeof noul !== "number") return null;
-      scores.push(noul);
-    }
-    return scores;
+    return candidates.map((_, i) => answers[`c${i}`]!.noul);
   }
 }
