@@ -189,38 +189,89 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function overlap(symbol: RankedSymbol, hunk: Hunk): number {
-  // A pure deletion (count 0) still happened at `start`; count it as one line.
-  const end = hunk.start + Math.max(hunk.count, 1) - 1;
-  return Math.max(0, Math.min(symbol.end_line, end) - Math.max(symbol.start_line, hunk.start) + 1);
+/** One change range of `git diff -U0 <from> <to>`, both sides, a missing count meaning 1. */
+export interface LineRange {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+}
+
+export function parseLineMap(diff: string): LineRange[] {
+  const ranges: LineRange[] = [];
+  for (const line of diff.split("\n")) {
+    const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (match) {
+      ranges.push({
+        oldStart: Number(match[1]),
+        oldCount: match[2] === undefined ? 1 : Number(match[2]),
+        newStart: Number(match[3]),
+        newCount: match[4] === undefined ? 1 : Number(match[4]),
+      });
+    }
+  }
+  return ranges;
+}
+
+/**
+ * Where a line of an older version of a file sits at HEAD, given the ranges of
+ * `git diff -U0 <older> HEAD -- <file>`. Lines outside every change shift by the
+ * net size of the changes above them; a line inside a rewritten range has no
+ * exact counterpart and maps to that range's new start.
+ */
+export function mapLineToHead(line: number, map: LineRange[]): number {
+  let offset = 0;
+  for (const r of map) {
+    // An insertion (oldCount 0) sits AFTER oldStart; anything else spans it.
+    const lastOld = r.oldCount === 0 ? r.oldStart : r.oldStart + r.oldCount - 1;
+    if (r.oldCount > 0 && line >= r.oldStart && line <= lastOld) return r.newStart;
+    if (line > lastOld) offset += r.newCount - r.oldCount;
+    else break;
+  }
+  return line + offset;
+}
+
+function contains(symbol: RankedSymbol, line: number): boolean {
+  return symbol.start_line <= line && line <= symbol.end_line;
 }
 
 /**
  * The symbol a commit's hunks actually changed. Two signals, in order:
  *
- * 1. Line overlap with today's graph, innermost first. git's function context
- *    names the enclosing TOP-LEVEL construct — a class, not the method inside
- *    it — so a header alone anchors every method change on its class. The
- *    ranges come from the commit's own diff and the symbols from HEAD, so an
- *    old commit can drift; that is why the header is the fallback, not dropped.
- * 2. The symbol most hunk headers name as a whole identifier.
+ * 1. Each hunk votes, weighted by its size, for the INNERMOST symbol that
+ *    contains its first line. git's function context names the enclosing
+ *    top-level construct — the class, not the method inside it — and a class
+ *    contains every line its methods do, so a plain overlap count would anchor
+ *    every method change on its class. Hunk lines must already be in HEAD's
+ *    numbering (see `mapLineToHead`), because the symbols come from HEAD.
+ * 2. When no hunk falls inside any symbol: the symbol most hunk headers name
+ *    as a whole identifier.
  *
  * Ties and "neither signal says anything" keep PageRank order — `inFile` is
  * already sorted by it.
  */
 function pickChangedSymbol(inFile: RankedSymbol[], hunks: Hunk[]): string {
-  let best: RankedSymbol | null = null;
-  let bestOverlap = 0;
-  for (const s of inFile) {
-    const lines = hunks.reduce((sum, h) => sum + overlap(s, h), 0);
-    const span = s.end_line - s.start_line;
-    const bestSpan = best ? best.end_line - best.start_line : Infinity;
-    if (lines > bestOverlap || (lines > 0 && lines === bestOverlap && span < bestSpan)) {
-      best = s;
-      bestOverlap = lines;
+  const votes = new Map<string, number>();
+  for (const h of hunks) {
+    let innermost: RankedSymbol | null = null;
+    for (const s of inFile) {
+      if (!contains(s, h.start)) continue;
+      if (!innermost || s.end_line - s.start_line < innermost.end_line - innermost.start_line) innermost = s;
     }
+    if (innermost) votes.set(innermost.name, (votes.get(innermost.name) ?? 0) + Math.max(h.count, 1));
   }
-  if (best) return best.name;
+  if (votes.size > 0) {
+    let best = "";
+    let bestVotes = 0;
+    for (const s of inFile) {
+      const v = votes.get(s.name) ?? 0;
+      if (v > bestVotes) {
+        best = s.name;
+        bestVotes = v;
+      }
+    }
+    return best;
+  }
 
   let byHeader = inFile[0]!.name;
   let bestHits = 0;
@@ -463,7 +514,14 @@ export async function mineOkfCandidates(opts: MineCandidatesOptions): Promise<Mi
   const spawn = opts.spawn ?? spawnSync;
   const hunks: HunksFn =
     opts.hunks ??
-    ((hash, path) => parseHunks(runGit(opts.cwd, ["show", "-U0", "--format=", hash, "--", path], spawn)));
+    ((hash, path) => {
+      // Hunk lines are in the commit's own numbering; the graph is HEAD's.
+      const toHead = parseLineMap(runGit(opts.cwd, ["diff", "-U0", hash, "HEAD", "--", path], spawn));
+      return parseHunks(runGit(opts.cwd, ["show", "-U0", "--format=", hash, "--", path], spawn)).map((h) => ({
+        ...h,
+        start: mapLineToHead(h.start, toHead),
+      }));
+    });
 
   const withAnchor = commits
     .map((commit) => ({ commit, anchor: proposeAnchor(commit, symbols, exists, hunks) }))

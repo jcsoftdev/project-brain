@@ -6,6 +6,8 @@ import {
   mineOkfCandidates,
   proposeAnchor,
   parseHunks,
+  parseLineMap,
+  mapLineToHead,
   type Hunk,
   scoreCommit,
   type FixCommit,
@@ -177,6 +179,22 @@ describe("proposeAnchor", () => {
     expect(anchor.symbol).toBe("runSync");
   });
 
+  it("lets each hunk vote for the innermost symbol containing it, so a class never outvotes its methods", () => {
+    const anchor = proposeAnchor(
+      commit([{ path: "src/store.ts", lines: 50 }]),
+      table({
+        "src/store.ts": [
+          symbol("Store", "src/store.ts", 10, 300),
+          symbol("helper", "src/store.ts", 20, 30),
+          symbol("hybridSearch", "src/store.ts", 150, 190),
+        ],
+      }),
+      () => true,
+      () => [hunk("export class Store {", 100, 1), hunk("export class Store {", 160, 2), hunk("export class Store {", 170, 1)]
+    );
+    expect(anchor.symbol).toBe("hybridSearch");
+  });
+
   it("picks the innermost symbol whose lines the hunks overlap", () => {
     const anchor = proposeAnchor(
       commit([{ path: "src/store.ts", lines: 5 }]),
@@ -237,6 +255,36 @@ describe("parseHunks", () => {
       { header: "export function watchParent(pid: number) {", start: 10, count: 3 },
       { header: "", start: 41, count: 1 },
     ]);
+  });
+});
+
+describe("parseLineMap / mapLineToHead", () => {
+  const diff = [
+    "@@ -5,0 +6,10 @@ header",
+    "@@ -20,4 +31,1 @@",
+    "@@ -50 +42 @@",
+  ].join("\n");
+  const map = parseLineMap(diff);
+
+  it("parses old and new ranges, a missing count meaning 1", () => {
+    expect(map).toEqual([
+      { oldStart: 5, oldCount: 0, newStart: 6, newCount: 10 },
+      { oldStart: 20, oldCount: 4, newStart: 31, newCount: 1 },
+      { oldStart: 50, oldCount: 1, newStart: 42, newCount: 1 },
+    ]);
+  });
+
+  it("keeps lines before the first change", () => {
+    expect(mapLineToHead(3, map)).toBe(3);
+  });
+
+  it("shifts lines by the net size of every change above them", () => {
+    expect(mapLineToHead(10, map)).toBe(20);
+    expect(mapLineToHead(30, map)).toBe(37);
+  });
+
+  it("maps a line inside a rewritten range to that range's new start", () => {
+    expect(mapLineToHead(22, map)).toBe(31);
   });
 });
 
