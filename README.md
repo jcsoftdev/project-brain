@@ -253,6 +253,8 @@ The CLI commands exit 0 for any executed query — including legitimate empty re
 | `manage_adr` | Create or list Architecture Decision Records. Append-only: supersede by creating a new ADR with `supersedes:<slug>`. |
 | `get_architecture` | One-call project summary: detected tech stack, indexed modules, chunk count, and symbol count. |
 | `sync_project` | Re-index changed files now (incremental, hash-gated). Streams progress via MCP notifications when the client supplies a `progressToken`. Use when results look stale. |
+| `okf_candidates` | Mines `fix:` commits for OKF write candidates: scores each against the symbol graph and existing bundle coverage, so the agent gets ranked suggestions instead of hunting through history by hand. |
+| `okf_write` | Writes a new OKF concept file from structured fields (type, title, anchor, body). Refuses to write when any declared anchor (`resource` or `sources[]`) doesn't resolve against the repo and its symbol graph — an unverifiable claim never reaches the bundle. |
 
 Curated knowledge (the *why* behind the code) lives in an OKF bundle rather than in these tools — see [`okf`](#okf--knowledge-bundles-the-why-not-the-what).
 
