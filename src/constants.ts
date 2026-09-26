@@ -234,6 +234,8 @@ export const TOOL_CATALOG: ToolDoc[] = [
   { name: "manage_adr", summary: "create or list Architecture Decision Records. Append-only: supersede by creating a new ADR with supersedes:<slug>.", annotations: { idempotentHint: true, openWorldHint: false } },
   { name: "get_architecture", summary: "one-call project summary: detected tech stack, indexed modules, chunk count, and symbol count. Use to orient before drilling into search_context or the structural tools.", annotations: RO },
   { name: "sync_project", summary: "re-index changed files now (incremental). Use when results look stale. Streams progress.", annotations: { idempotentHint: true, openWorldHint: false } },
+  { name: "okf_candidates", summary: "mine \"fix:\" commits from git history and rank them as possible Open Knowledge Format concepts (Jev-scored when a TypeSafe token is configured, heuristic otherwise).", annotations: RO },
+  { name: "okf_write", summary: "write one Open Knowledge Format concept file, refusing when any anchor does not resolve against the symbol graph; updates okf/index.md.", annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false } },
 ];
 
 /** Look up a tool's annotations from the catalog (single source of truth). */

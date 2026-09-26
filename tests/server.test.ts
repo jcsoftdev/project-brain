@@ -103,7 +103,7 @@ describe("Server", () => {
     }
   });
 
-  it("registers all 18 tools", async () => {
+  it("registers all 21 tools", async () => {
     const { toolNames } = await createServer({ dbPath: "/tmp/brain-test-server", embeddings: stubEmbeddings });
     const expected = [
       "search_context",
@@ -125,11 +125,13 @@ describe("Server", () => {
       "manage_adr",
       "get_architecture",
       "sync_project",
+      "okf_candidates",
+      "okf_write",
     ];
     for (const name of expected) {
       expect(toolNames).toContain(name);
     }
-    expect(toolNames.length).toBe(19);
+    expect(toolNames.length).toBe(21);
   });
 
   it("wires SERVER_INSTRUCTIONS into the server (instructions const is passed)", async () => {

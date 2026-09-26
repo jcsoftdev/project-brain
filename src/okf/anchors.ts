@@ -95,7 +95,7 @@ export function parseResource(resource: string): ParsedResource | null {
  * (`/decisions/x.md`). Returns null when the result escapes the repo, since
  * nothing outside it is in the graph and reporting it unresolved would be noise.
  */
-function toRepoPath(rawPath: string, layout: BundleLayout): string | null {
+export function toRepoPath(rawPath: string, layout: BundleLayout): string | null {
   const absolute = resolve(layout.bundleRoot, rawPath);
   const rel = relative(layout.repoRoot, absolute);
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
@@ -180,4 +180,49 @@ export function collectAnchors(bundle: Bundle, layout: BundleLayout): Anchor[] {
     }
   }
   return anchors;
+}
+
+export type AnchorResolutionReason = "unparseable" | "outside-repo" | "missing-file" | "missing-symbol";
+
+export interface AnchorResolutionResult {
+  ok: boolean;
+  /** Repo-relative POSIX path, once resolvable. Null when the resource could not even be parsed/mapped into the repo. */
+  path: string | null;
+  symbol: string | null;
+  lines: { start: number; end: number } | null;
+  reason?: AnchorResolutionReason;
+}
+
+export interface AnchorResolverDeps {
+  /** Whether a repo-relative path is still on disk. */
+  exists(repoRelPath: string): boolean;
+  /** Whether the named symbol is known to exist in that file, per the symbol graph. */
+  hasSymbol(repoRelPath: string, symbol: string): boolean;
+}
+
+/**
+ * Validates one `resource:` string (exactly as it would appear in a concept's
+ * frontmatter) against the repo and its symbol graph — the single resolver
+ * `okf audit`'s anchor checks are built on (`collectAnchors` + this) and that
+ * `okf candidates`/`okf_write` reuse rather than re-implementing resolution.
+ */
+export function resolveAnchorResource(
+  resource: string,
+  layout: BundleLayout,
+  deps: AnchorResolverDeps
+): AnchorResolutionResult {
+  const parsed = parseResource(resource);
+  if (!parsed) return { ok: false, path: null, symbol: null, lines: null, reason: "unparseable" };
+
+  const path = toRepoPath(parsed.path, layout);
+  if (path === null) {
+    return { ok: false, path: null, symbol: parsed.symbol, lines: parsed.lines, reason: "outside-repo" };
+  }
+  if (!deps.exists(path)) {
+    return { ok: false, path, symbol: parsed.symbol, lines: parsed.lines, reason: "missing-file" };
+  }
+  if (parsed.symbol !== null && !deps.hasSymbol(path, parsed.symbol)) {
+    return { ok: false, path, symbol: parsed.symbol, lines: null, reason: "missing-symbol" };
+  }
+  return { ok: true, path, symbol: parsed.symbol, lines: parsed.lines };
 }

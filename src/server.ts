@@ -21,6 +21,8 @@ import { register as registerProjects } from "./tools/projects.js";
 import { register as registerAdr } from "./tools/adr.js";
 import { register as registerArchitecture } from "./tools/architecture.js";
 import { register as registerSyncProject } from "./tools/sync-project.js";
+import { register as registerOkfCandidates } from "./tools/okf-candidates.js";
+import { register as registerOkfWrite } from "./tools/okf-write.js";
 import { openGraphDb } from "./graph/db.js";
 import { GraphStore } from "./graph/store.js";
 import { GraphCache } from "./graph/cache.js";
@@ -175,6 +177,8 @@ export async function createServer(options: ServerOptions = {}) {
   registerAdr(server, deps);
   registerArchitecture(server, deps);
   registerSyncProject(server, deps);
+  registerOkfCandidates(server, deps);
+  registerOkfWrite(server, deps);
 
   const toolNames = [
     "search_context",
@@ -196,6 +200,8 @@ export async function createServer(options: ServerOptions = {}) {
     "manage_adr",
     "get_architecture",
     "sync_project",
+    "okf_candidates",
+    "okf_write",
   ];
 
   // foreignGraphs is returned, not kept private: it holds live SQLite handles

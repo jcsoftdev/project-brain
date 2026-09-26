@@ -26,6 +26,8 @@ const ALL_TOOLS = [
   "manage_adr",
   "get_architecture",
   "sync_project",
+  "okf_candidates",
+  "okf_write",
 ];
 
 describe("tool catalog is the single source of truth", () => {
