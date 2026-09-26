@@ -2,6 +2,7 @@ import { describe, it, expect } from "bun:test";
 import { handleSearch } from "../../src/tools/search.js";
 import { VECTOR_DIM } from "../../src/constants.js";
 import type { VectorStore, EmbeddingClient, SearchResult } from "../../src/types.js";
+import type { Reranker } from "../../src/rerank/jev.js";
 
 const mockResults: SearchResult[] = [
   { id: "a::0", content: "auth uses JWT", source: "auth.ts", module: "auth", score: 0.95 },
@@ -369,6 +370,69 @@ describe("handleSearch — query embedding cache", () => {
     await handleSearch({ project: "p", query: "same question" }, deps);
     await handleSearch({ project: "p", query: "same question" }, deps);
     expect(embedCalls).toBe(1);
+  });
+});
+
+describe("handleSearch — Jev reranker wiring", () => {
+  it("reorders the vector pool by noul score before threshold+mmr when a reranker is injected", async () => {
+    const store = makeMockStore(); // hybridSearch -> [auth.ts 0.95, billing.ts 0.80]
+    const capturedCandidates: any[] = [];
+    const reranker: Reranker = {
+      rerank: async (query, candidates) => {
+        expect(query).toBe("test");
+        capturedCandidates.push(...candidates);
+        // Flip relevance: billing.ts should now outrank auth.ts.
+        return [0.3, 0.9];
+      },
+    };
+
+    const result = await handleSearch(
+      { project: "demo", query: "test", limit: 2 },
+      { store, embeddings: makeMockEmbeddings(), reranker }
+    );
+
+    const data = JSON.parse(result.content[0].text);
+    expect(data.results[0].source).toBe("billing.ts");
+    expect(data.results[0].score).toBe(0.9);
+    expect(capturedCandidates[0]).toEqual({ file: "auth.ts", content: "auth uses JWT" });
+  });
+
+  it("leaves the pool untouched when the reranker returns null (failure fallback)", async () => {
+    const reranker: Reranker = { rerank: async () => null };
+
+    const result = await handleSearch(
+      { project: "demo", query: "test", limit: 2 },
+      { store: makeMockStore(), embeddings: makeMockEmbeddings(), reranker }
+    );
+
+    const data = JSON.parse(result.content[0].text);
+    expect(data.results[0].source).toBe("auth.ts");
+    expect(data.results[0].score).toBe(0.95);
+  });
+
+  it("never calls rerank when no reranker is configured (no token = no call, identical order)", async () => {
+    const result = await handleSearch(
+      { project: "demo", query: "test", limit: 2 },
+      { store: makeMockStore(), embeddings: makeMockEmbeddings() }
+    );
+
+    const data = JSON.parse(result.content[0].text);
+    expect(data.results[0].source).toBe("auth.ts");
+    expect(data.results[0].score).toBe(0.95);
+  });
+
+  it("reranks the lexical-floor pool too (degraded/no-embeddings branch)", async () => {
+    const store = makeMockStore();
+    store.ftsSearch = async () => mockResults;
+    const reranker: Reranker = { rerank: async () => [0.25, 0.9] };
+
+    const result = await handleSearch(
+      { project: "demo", query: "test", limit: 2 },
+      { store, embeddings: makeMockEmbeddings(false), reranker }
+    );
+
+    const data = JSON.parse(result.content[0].text);
+    expect(data.results[0].source).toBe("billing.ts");
   });
 });
 

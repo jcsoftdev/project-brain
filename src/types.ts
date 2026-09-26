@@ -112,6 +112,7 @@ export interface VectorStore {
 }
 
 import type { GraphStore } from "./graph/store.js";
+import type { Reranker } from "./rerank/jev.js";
 
 /**
  * Narrow dependency shape for the 6 structural-graph handlers (find_symbol,
@@ -170,4 +171,10 @@ export interface ToolDeps extends GraphDeps {
   projectRoot?: string;
   /** Base path to look up per-project last-error state (check_health). Absent → lastError omitted. */
   dbPath?: string;
+  /**
+   * Optional Jev reranker (TypeSafe). Present only when a token resolved at
+   * startup — its absence means opt-out, not failure: handleSearch and
+   * check_health both treat a missing reranker as "off", never as an error.
+   */
+  reranker?: Reranker;
 }

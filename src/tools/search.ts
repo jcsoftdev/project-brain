@@ -7,6 +7,7 @@ import { expandQuery } from "../retrieval/query-expand.js";
 import { SCORE_THRESHOLD, MMR_LAMBDA, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES, HARDNESS, toolAnnotations } from "../constants.js";
 import { jsonResult, type ToolResult } from "./format.js";
 import { QueryEmbedCache } from "../embeddings/query-cache.js";
+import { rerankPool } from "../rerank/apply.js";
 
 const LEXICAL_DEGRADED_NOTE =
   "Embeddings unavailable — showing keyword (BM25) results. Conceptual matches may be missed; start Ollama for full semantic search.";
@@ -44,7 +45,8 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
     const ftsResults = deps.store.ftsSearch
       ? await deps.store.ftsSearch(project, expandQuery(query), Math.max(limit * 3, 20))
       : [];
-    const kept = applyThreshold(ftsResults, SCORE_THRESHOLD);
+    const rerankedFts = await rerankPool(ftsResults, query, deps.reranker);
+    const kept = applyThreshold(rerankedFts, SCORE_THRESHOLD);
     // mmr diversifies via lexical Jaccard on `content` and needs no vector
     // field, so it runs unmodified on FTS results — mirrors the vector
     // path's cap-and-diversify step instead of only capping by token budget.
@@ -63,7 +65,8 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
   }
 
   const fused = await deps.store.hybridSearch(project, vectors[0], query, Math.max(limit * 3, 20));
-  const kept = applyThreshold(fused, SCORE_THRESHOLD);
+  const reranked = await rerankPool(fused, query, deps.reranker);
+  const kept = applyThreshold(reranked, SCORE_THRESHOLD);
   const diverse = mmr(kept, limit, MMR_LAMBDA);
   const results = fillBudget(diverse, SEARCH_TOKEN_BUDGET, SNIPPET_MAX_LINES);
   return jsonResult({ results });
