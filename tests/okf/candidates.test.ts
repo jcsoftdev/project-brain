@@ -195,6 +195,23 @@ describe("proposeAnchor", () => {
     expect(anchor.symbol).toBe("hybridSearch");
   });
 
+  it("counts a class only when no member of it was touched", () => {
+    const anchor = proposeAnchor(
+      commit([{ path: "src/store.ts", lines: 50 }]),
+      table({
+        "src/store.ts": [
+          symbol("Store", "src/store.ts", 10, 300),
+          symbol("rerankedScores", "src/store.ts", 60, 75),
+          symbol("hybridSearch", "src/store.ts", 150, 190),
+        ],
+      }),
+      () => true,
+      // A new doc comment (class body, 40-59) plus the method under it (60-75).
+      () => [hunk("export class Store {", 40, 36), hunk("export class Store {", 160, 2)]
+    );
+    expect(anchor.symbol).toBe("rerankedScores");
+  });
+
   it("picks the innermost symbol whose lines the hunks overlap", () => {
     const anchor = proposeAnchor(
       commit([{ path: "src/store.ts", lines: 5 }]),

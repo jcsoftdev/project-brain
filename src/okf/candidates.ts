@@ -238,11 +238,11 @@ function contains(symbol: RankedSymbol, line: number): boolean {
 /**
  * The symbol a commit's hunks actually changed. Two signals, in order:
  *
- * 1. Each hunk votes, weighted by its size, for the INNERMOST symbol that
- *    contains its first line. git's function context names the enclosing
+ * 1. Every changed line votes for the INNERMOST symbol that contains it. git's function context names the enclosing
  *    top-level construct — the class, not the method inside it — and a class
  *    contains every line its methods do, so a plain overlap count would anchor
- *    every method change on its class. Hunk lines must already be in HEAD's
+ *    every method change on its class; a container's votes only count when
+ *    no member got any. Hunk lines must already be in HEAD's
  *    numbering (see `mapLineToHead`), because the symbols come from HEAD.
  * 2. When no hunk falls inside any symbol: the symbol most hunk headers name
  *    as a whole identifier.
@@ -251,26 +251,32 @@ function contains(symbol: RankedSymbol, line: number): boolean {
  * already sorted by it.
  */
 function pickChangedSymbol(inFile: RankedSymbol[], hunks: Hunk[]): string {
-  const votes = new Map<string, number>();
+  const votes = new Map<RankedSymbol, number>();
   for (const h of hunks) {
-    let innermost: RankedSymbol | null = null;
-    for (const s of inFile) {
-      if (!contains(s, h.start)) continue;
-      if (!innermost || s.end_line - s.start_line < innermost.end_line - innermost.start_line) innermost = s;
-    }
-    if (innermost) votes.set(innermost.name, (votes.get(innermost.name) ?? 0) + Math.max(h.count, 1));
-  }
-  if (votes.size > 0) {
-    let best = "";
-    let bestVotes = 0;
-    for (const s of inFile) {
-      const v = votes.get(s.name) ?? 0;
-      if (v > bestVotes) {
-        best = s.name;
-        bestVotes = v;
+    for (let line = h.start; line < h.start + Math.max(h.count, 1); line++) {
+      let innermost: RankedSymbol | null = null;
+      for (const s of inFile) {
+        if (!contains(s, line)) continue;
+        if (!innermost || s.end_line - s.start_line < innermost.end_line - innermost.start_line) innermost = s;
       }
+      if (innermost) votes.set(innermost, (votes.get(innermost) ?? 0) + 1);
     }
-    return best;
+  }
+  // A container (a symbol enclosing another one, e.g. a class) collects every
+  // line between its members — doc comments, fields — so it only wins when the
+  // commit touched none of its members.
+  const isContainer = (s: RankedSymbol) =>
+    inFile.some((o) => o !== s && s.start_line <= o.start_line && o.end_line <= s.end_line);
+  const leaves = [...votes.keys()].filter((s) => !isContainer(s));
+  const pool = leaves.length > 0 ? leaves : [...votes.keys()];
+  if (pool.length > 0) {
+    let best = pool[0]!;
+    for (const s of inFile) {
+      if (pool.includes(s) && votes.get(s)! > votes.get(best)!) best = s;
+    }
+    // PageRank order on ties: the first of the tied symbols in `inFile` order.
+    const top = votes.get(best)!;
+    return inFile.find((s) => pool.includes(s) && votes.get(s) === top)!.name;
   }
 
   let byHeader = inFile[0]!.name;
