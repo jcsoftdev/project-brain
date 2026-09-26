@@ -1,4 +1,7 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
 import { upsertRoutingHooks } from "../../src/hooks/claude-settings.js";
 import { routingGuardDecision } from "../../src/hooks/routing-guard.js";
 import { ROUTING_CONTENT_VERSION } from "../../src/constants.js";
@@ -112,9 +115,15 @@ describe("routingGuardDecision", () => {
 });
 
 describe("routing-rules payload", () => {
+  // A nonexistent path stands in for "no routing section written yet" — every
+  // test here that wants the full-table branch passes it explicitly so the
+  // result never depends on what happens to be in the real ~/.claude/CLAUDE.md
+  // on the machine running the suite.
+  const noRulesFile = join(tmpdir(), "pb-routing-rules-test-does-not-exist", "CLAUDE.md");
+
   it("emits SessionStart additionalContext with the tier table", async () => {
     const { buildRoutingReminder } = await import("../../src/hooks/routing-rules.js");
-    const payload = JSON.parse(await buildRoutingReminder());
+    const payload = JSON.parse(await buildRoutingReminder(undefined, noRulesFile));
 
     expect(payload.hookSpecificOutput.hookEventName).toBe("SessionStart");
     expect(payload.hookSpecificOutput.additionalContext).toContain("fast");
@@ -124,16 +133,65 @@ describe("routing-rules payload", () => {
 
   it("stays well under the 10,000-character hook output cap", async () => {
     const { buildRoutingReminder } = await import("../../src/hooks/routing-rules.js");
-    const payload = JSON.parse(await buildRoutingReminder());
+    const payload = JSON.parse(await buildRoutingReminder(undefined, noRulesFile));
     expect(payload.hookSpecificOutput.additionalContext.length).toBeLessThan(10_000);
   });
 
   it("injects the rules, not the prose — the session pays for every character", async () => {
     const { buildRoutingReminder } = await import("../../src/hooks/routing-rules.js");
-    const payload = JSON.parse(await buildRoutingReminder());
+    const payload = JSON.parse(await buildRoutingReminder(undefined, noRulesFile));
     const context: string = payload.hookSpecificOutput.additionalContext;
 
     expect(context).not.toContain("Relative cost");
     expect(context).not.toContain(`model-routing-version: ${ROUTING_CONTENT_VERSION}`);
+  });
+});
+
+/**
+ * The rules file (Claude Code's own `~/.claude/CLAUDE.md`) is loaded into
+ * every session on its own — a full second copy of the same table from this
+ * hook is ~2.5K tokens paid twice for no new information. Only an absent or
+ * stale section still needs the hook to say the whole thing.
+ */
+describe("routing-rules payload — dedup against a written rules-file section", () => {
+  let dir: string;
+  let rulesPath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "pb-routing-dedup-"));
+    rulesPath = join(dir, "CLAUDE.md");
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("emits the full table when the rules file has no routing section", async () => {
+    const { buildRoutingReminder } = await import("../../src/hooks/routing-rules.js");
+    const payload = JSON.parse(await buildRoutingReminder(undefined, rulesPath));
+    expect(payload.hookSpecificOutput.additionalContext).toContain("Tier");
+  });
+
+  it("emits the full table when the written section is from an older release", async () => {
+    const { buildRoutingReminder } = await import("../../src/hooks/routing-rules.js");
+    const { writeRoutingSection } = await import("../../src/registrars/routing-section.js");
+
+    await writeRoutingSection(rulesPath, `<!-- model-routing-version: ${ROUTING_CONTENT_VERSION - 1} -->\nold table\n`);
+
+    const payload = JSON.parse(await buildRoutingReminder(undefined, rulesPath));
+    expect(payload.hookSpecificOutput.additionalContext).toContain("Tier");
+  });
+
+  it("emits a short pointer instead of the full table when the written section is current", async () => {
+    const { buildRoutingReminder } = await import("../../src/hooks/routing-rules.js");
+    const { writeRoutingSection } = await import("../../src/registrars/routing-section.js");
+
+    await writeRoutingSection(rulesPath, `<!-- model-routing-version: ${ROUTING_CONTENT_VERSION} -->\ncurrent table\n`);
+
+    const payload = JSON.parse(await buildRoutingReminder(undefined, rulesPath));
+    const context: string = payload.hookSpecificOutput.additionalContext;
+
+    expect(context.length).toBeLessThan(300);
+    expect(context).not.toContain("Tier");
+    expect(context).not.toContain("| Task | Tier");
   });
 });
