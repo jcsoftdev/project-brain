@@ -5,7 +5,8 @@ import {
   mineFixCommits,
   mineOkfCandidates,
   proposeAnchor,
-  parseHunkHeaders,
+  parseHunks,
+  type Hunk,
   scoreCommit,
   type FixCommit,
 } from "../../src/okf/candidates.js";
@@ -118,6 +119,10 @@ function table(byFile: Record<string, RankedSymbol[]>): SymbolTable {
   return { ranked: [...map.values()].flat(), byFile: map };
 }
 
+function hunk(header: string, start = 0, count = 0): Hunk {
+  return { header, start, count };
+}
+
 function commit(changes: { path: string; lines: number }[]): FixCommit {
   return { hash: "h1", subject: "fix: x", body: "y", changes };
 }
@@ -157,7 +162,7 @@ describe("proposeAnchor", () => {
       commit([{ path: "src/cli.ts", lines: 20 }]),
       table({ "src/cli.ts": [symbol("printHelp", "src/cli.ts"), symbol("watchParent", "src/cli.ts")] }),
       () => true,
-      () => ["function watchParent(pid: number) {", "export function watchParent(pid: number) {", "const HELP = `"]
+      () => [hunk("function watchParent(pid: number) {"), hunk("export function watchParent(pid: number) {"), hunk("const HELP = `")]
     );
     expect(anchor.proposed).toBe("src/cli.ts#watchParent");
   });
@@ -167,9 +172,25 @@ describe("proposeAnchor", () => {
       commit([{ path: "src/a.ts", lines: 5 }]),
       table({ "src/a.ts": [symbol("run", "src/a.ts"), symbol("runSync", "src/a.ts")] }),
       () => true,
-      () => ["export async function runSync(args: string[]) {"]
+      () => [hunk("export async function runSync(args: string[]) {")]
     );
     expect(anchor.symbol).toBe("runSync");
+  });
+
+  it("picks the innermost symbol whose lines the hunks overlap", () => {
+    const anchor = proposeAnchor(
+      commit([{ path: "src/store.ts", lines: 5 }]),
+      table({
+        "src/store.ts": [
+          symbol("Store", "src/store.ts", 10, 200),
+          symbol("getTable", "src/store.ts", 20, 40),
+          symbol("hybridSearch", "src/store.ts", 150, 190),
+        ],
+      }),
+      () => true,
+      () => [hunk("export class Store {", 160, 4), hunk("export class Store {", 175, 1)]
+    );
+    expect(anchor.symbol).toBe("hybridSearch");
   });
 
   it("keeps the top-ranked symbol when no hunk header names a symbol", () => {
@@ -177,7 +198,7 @@ describe("proposeAnchor", () => {
       commit([{ path: "src/a.ts", lines: 5 }]),
       table({ "src/a.ts": [symbol("alpha", "src/a.ts"), symbol("beta", "src/a.ts")] }),
       () => true,
-      () => ["", "import { x } from './x';"]
+      () => [hunk(""), hunk("import { x } from './x';")]
     );
     expect(anchor.symbol).toBe("alpha");
   });
@@ -200,8 +221,8 @@ describe("proposeAnchor", () => {
   });
 });
 
-describe("parseHunkHeaders", () => {
-  it("returns the function context git prints after each hunk range", () => {
+describe("parseHunks", () => {
+  it("returns each hunk's new-side range and the function context git printed", () => {
     const diff = [
       "diff --git a/src/a.ts b/src/a.ts",
       "--- a/src/a.ts",
@@ -212,7 +233,10 @@ describe("parseHunkHeaders", () => {
       "-x",
       "+y",
     ].join("\n");
-    expect(parseHunkHeaders(diff)).toEqual(["export function watchParent(pid: number) {", ""]);
+    expect(parseHunks(diff)).toEqual([
+      { header: "export function watchParent(pid: number) {", start: 10, count: 3 },
+      { header: "", start: 41, count: 1 },
+    ]);
   });
 });
 

@@ -155,52 +155,91 @@ export interface AnchorProposal {
  * symbol answer is a live one by construction. Only the file's continued
  * existence on disk is checked explicitly, since the graph can lag a deletion.
  */
-/**
- * The function context git prints after each hunk range of a diff
- * (`@@ -a,b +c,d @@ <context>`), one entry per hunk, "" when git printed none.
- * That context is the enclosing definition as of the commit itself, so it
- * does not drift the way line numbers checked against today's graph would.
- */
-export function parseHunkHeaders(diff: string): string[] {
-  const headers: string[] = [];
-  for (const line of diff.split("\n")) {
-    const match = /^@@ [^@]* @@ ?(.*)$/.exec(line);
-    if (match) headers.push(match[1]!.trim());
-  }
-  return headers;
+/** One hunk of a commit's diff for one file: its new-side line range and git's function context. */
+export interface Hunk {
+  header: string;
+  start: number;
+  count: number;
 }
 
-/** Hunk headers for one file of one commit — injectable so tests never shell out. */
-export type HunkHeadersFn = (hash: string, path: string) => string[];
+/**
+ * Hunks of a `git show -U0` diff: the new-side range (`+c,d`, where a missing
+ * `d` means 1) and the function context git prints after the range, "" when
+ * it printed none.
+ */
+export function parseHunks(diff: string): Hunk[] {
+  const hunks: Hunk[] = [];
+  for (const line of diff.split("\n")) {
+    const match = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@ ?(.*)$/.exec(line);
+    if (match) {
+      hunks.push({
+        header: match[3]!.trim(),
+        start: Number(match[1]),
+        count: match[2] === undefined ? 1 : Number(match[2]),
+      });
+    }
+  }
+  return hunks;
+}
+
+/** Hunks for one file of one commit — injectable so tests never shell out. */
+export type HunksFn = (hash: string, path: string) => Hunk[];
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function overlap(symbol: RankedSymbol, hunk: Hunk): number {
+  // A pure deletion (count 0) still happened at `start`; count it as one line.
+  const end = hunk.start + Math.max(hunk.count, 1) - 1;
+  return Math.max(0, Math.min(symbol.end_line, end) - Math.max(symbol.start_line, hunk.start) + 1);
+}
+
 /**
- * The symbol most hunks sit in: the one named, as a whole identifier, by the
- * most hunk headers. Ties and "no header names anything" keep PageRank order,
- * since `inFile` is already sorted by it.
+ * The symbol a commit's hunks actually changed. Two signals, in order:
+ *
+ * 1. Line overlap with today's graph, innermost first. git's function context
+ *    names the enclosing TOP-LEVEL construct — a class, not the method inside
+ *    it — so a header alone anchors every method change on its class. The
+ *    ranges come from the commit's own diff and the symbols from HEAD, so an
+ *    old commit can drift; that is why the header is the fallback, not dropped.
+ * 2. The symbol most hunk headers name as a whole identifier.
+ *
+ * Ties and "neither signal says anything" keep PageRank order — `inFile` is
+ * already sorted by it.
  */
-function pickChangedSymbol(inFile: RankedSymbol[], headers: string[]): string {
-  let best = inFile[0]!.name;
+function pickChangedSymbol(inFile: RankedSymbol[], hunks: Hunk[]): string {
+  let best: RankedSymbol | null = null;
+  let bestOverlap = 0;
+  for (const s of inFile) {
+    const lines = hunks.reduce((sum, h) => sum + overlap(s, h), 0);
+    const span = s.end_line - s.start_line;
+    const bestSpan = best ? best.end_line - best.start_line : Infinity;
+    if (lines > bestOverlap || (lines > 0 && lines === bestOverlap && span < bestSpan)) {
+      best = s;
+      bestOverlap = lines;
+    }
+  }
+  if (best) return best.name;
+
+  let byHeader = inFile[0]!.name;
   let bestHits = 0;
   for (const s of inFile) {
     const pattern = new RegExp(`(^|[^A-Za-z0-9_$])${escapeRegExp(s.name)}([^A-Za-z0-9_$]|$)`);
-    const hits = headers.filter((h) => pattern.test(h)).length;
+    const hits = hunks.filter((h) => pattern.test(h.header)).length;
     if (hits > bestHits) {
-      best = s.name;
+      byHeader = s.name;
       bestHits = hits;
     }
   }
-  return best;
+  return byHeader;
 }
 
 export function proposeAnchor(
   commit: FixCommit,
   symbols: SymbolTable,
   exists: (path: string) => boolean,
-  hunkHeaders?: HunkHeadersFn
+  hunks?: HunksFn
 ): AnchorProposal {
   const candidates = commit.changes.filter((c) => !isNoisePath(c.path));
   const source = candidates.filter((c) => !looksLikeTest(c.path));
@@ -211,8 +250,8 @@ export function proposeAnchor(
   const inFile = symbols.byFile.get(top.path);
   const symbol =
     inFile && inFile.length > 0
-      ? hunkHeaders
-        ? pickChangedSymbol(inFile, hunkHeaders(commit.hash, top.path))
+      ? hunks
+        ? pickChangedSymbol(inFile, hunks(commit.hash, top.path))
         : inFile[0]!.name
       : null;
 
@@ -407,8 +446,8 @@ export interface MineCandidatesOptions {
   bundleLayout?: BundleLayout;
   /** Whether a repo-relative path still exists on disk. Defaults to a real fs check under `cwd`. */
   fsExists?: (path: string) => boolean;
-  /** Hunk headers per commit+file. Default: `git show -U0` in `cwd`. */
-  hunkHeaders?: HunkHeadersFn;
+  /** Hunks per commit+file. Default: `git show -U0` in `cwd`. */
+  hunks?: HunksFn;
 }
 
 /**
@@ -422,12 +461,12 @@ export async function mineOkfCandidates(opts: MineCandidatesOptions): Promise<Mi
   const covered = opts.bundle && opts.bundleLayout ? buildCoveredAnchors(opts.bundle, opts.bundleLayout) : new Set<string>();
   const topN = opts.topN ?? DEFAULT_TOP_N;
   const spawn = opts.spawn ?? spawnSync;
-  const hunkHeaders: HunkHeadersFn =
-    opts.hunkHeaders ??
-    ((hash, path) => parseHunkHeaders(runGit(opts.cwd, ["show", "-U0", "--format=", hash, "--", path], spawn)));
+  const hunks: HunksFn =
+    opts.hunks ??
+    ((hash, path) => parseHunks(runGit(opts.cwd, ["show", "-U0", "--format=", hash, "--", path], spawn)));
 
   const withAnchor = commits
-    .map((commit) => ({ commit, anchor: proposeAnchor(commit, symbols, exists, hunkHeaders) }))
+    .map((commit) => ({ commit, anchor: proposeAnchor(commit, symbols, exists, hunks) }))
     .filter(({ anchor }) => !isCovered(covered, anchor.path, anchor.symbol));
 
   if (!opts.token) {
