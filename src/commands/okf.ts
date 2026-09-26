@@ -343,6 +343,53 @@ export async function execute(args: string[]): Promise<void> {
     return;
   }
 
+  if (action === "candidates") {
+    const { existsSync } = await import("node:fs");
+    const { mineOkfCandidates, formatCandidates } = await import("../okf/candidates.js");
+    const { resolveRerankerToken } = await import("../rerank/token.js");
+
+    const graph = openProjectGraph(root);
+    if (!graph) {
+      console.error("No structural graph at this project root yet — run `project-brain sync` first.");
+      process.exit(1);
+      return;
+    }
+
+    try {
+      const token = await resolveRerankerToken();
+      // A bundle is optional here: candidates is useful before a bundle even
+      // exists (that is arguably its best moment), so a missing one just means
+      // nothing is skipped as "already covered".
+      let bundle: import("../okf/bundle.js").Bundle | undefined;
+      if (existsSync(dir)) {
+        try {
+          bundle = await readBundle(dir);
+        } catch {
+          bundle = undefined;
+        }
+      }
+
+      const result = await mineOkfCandidates({
+        cwd: root,
+        graph,
+        token,
+        since,
+        topN: limit,
+        bundle,
+        bundleLayout: bundle ? { bundleRoot: dir, repoRoot: root } : undefined,
+      });
+
+      if (json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatCandidates(result));
+      }
+    } finally {
+      graph.close();
+    }
+    return;
+  }
+
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
   const { LanceDbStore } = await import("../store/lancedb.js");
   const { createEmbeddingClient } = await import("../embeddings/factory.js");

@@ -124,7 +124,18 @@ Knowledge bundles (Open Knowledge Format v0.2 — the *why*, not the *what*):
                              concepts whose code calls across them but whose
                              prose does not
     --symbol <name>        Name the concepts to re-read after <name> changes
+    --judge                Ask a model whether each "code-changed" stale finding
+                             still holds. Opt-in — costs money or a TypeSafe token.
+    --judge-model <m>      jev|claude (default claude) — which model judges
+    --judge-compare        Run BOTH judges and print an agreement table plus
+                             disagreements, for hand labelling
                              dir defaults to ./okf
+  okf candidates [dir]     Mine "fix:" commits and rank them for a possible
+                             OKF concept, using Jev when a TypeSafe token is
+                             configured (heuristic ranking otherwise)
+    --since <rev|date>     Only commits after this rev or date
+    --limit <n>            How many ranked candidates to print (default 20)
+    --json                 With audit|candidates: print one JSON object
 
 Structural (offline — no Ollama probe, reads the local graph.db directly):
   find <name>              Exact symbol lookup by name
