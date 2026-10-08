@@ -288,6 +288,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     units.map(async (unit) => {
       const state = await unit.inspect(ctx).catch(() => "absent" as UnitState);
       const seen = membership(selection, unit.id);
+      const defaultSelected = (await unit.defaultWhen?.(ctx).catch(() => undefined)) ?? unit.defaultSelected;
       return {
         id: unit.id,
         label: unit.label,
@@ -295,8 +296,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
         description: unit.description,
         state,
         membership: seen,
-        chosen: initialChecked(state, seen, unit.defaultSelected, selection !== null),
-        seed: promptSeed(state, seen, unit.defaultSelected, selection !== null),
+        chosen: initialChecked(state, seen, defaultSelected, selection !== null),
+        seed: promptSeed(state, seen, defaultSelected, selection !== null),
       };
     })
   );

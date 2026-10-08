@@ -300,6 +300,11 @@ switch (command) {
     await execute();
     break;
   }
+  case "commit-check": {
+    const { execute } = await import("./hooks/commit-check.js");
+    await execute();
+    break;
+  }
   case "arch": {
     const { execute } = await import("./commands/arch.js");
     await execute(args);

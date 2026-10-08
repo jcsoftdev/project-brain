@@ -438,6 +438,25 @@ A layer is a glob or an array of globs; `pkg:<name>` claims a third-party packag
 
 The hook reads stdin and fails open on anything it cannot parse. A block exits `2` with the reason on stderr, which Claude Code hands to the model as the retry prompt.
 
+#### Commit check (needs a TypeSafe token)
+
+A `PreToolUse` hook on `Bash` that acts only on `git commit` (including `git -C x commit` and `a && git commit`). One Jev call over the staged diff does two jobs:
+
+- **Review triage.** Yes/no questions: security or permission boundaries, data loss or destructive operations, concurrency or locking, public contract changes. If any has P(yes) above 0.8 (or Jev is down or unsure on a risky-looking diff), Claude is told to run an independent deep review on a stronger model, or ask you, before committing. Jev only escalates: a routine change prints nothing, and silence is never an approval.
+- **Test warning.** For staged source files with no staged test, Jev says whether the change is a business rule, bug fix, security boundary or data contract, which is where tests earn their keep. A match is a warning naming the files; nothing is ever required first.
+
+```bash
+project-brain setup --with=hooks:commit-check
+```
+
+`setup` ticks it by default only when a token is already configured, since the diff (first 16,000 characters) is sent to `api.typesafe.ai`. Without a token, with an empty diff, or on any error or timeout, it does nothing. The default is a warning delivered as `additionalContext`; to make the review escalation block (exit `2`, reason on stderr), write `~/.project-brain/commit-check.json`:
+
+```json
+{ "mode": "block" }
+```
+
+The test warning never blocks.
+
 ### `init`
 
 Initialize a project. Detects the stack, writes a `CLAUDE.md` with MCP instructions, installs a git hook, scaffolds module stubs in `docs/modules/`, and indexes the project.

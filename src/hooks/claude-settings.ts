@@ -403,6 +403,67 @@ export function removeArchGuardHooks(existing: object | null): object {
   return { ...base, hooks };
 }
 
+const COMMIT_CHECK_COMMAND = "project-brain commit-check";
+
+/**
+ * Add the commit pre-filter to a parsed settings object.
+ *
+ * PreToolUse on Bash, gated by `if: "Bash(git *)"` so Claude Code does not spawn a process
+ * (~60-80 ms) for every shell command just to exit 0. The gate is deliberately broad: a narrower
+ * `git commit *` would miss `git -C x commit`. It is only a cheap pre-filter; the hook's own
+ * command parsing stays the authoritative check.
+ *
+ * An entry installed before the gate existed is upgraded in place, since `addGroup` alone would
+ * keep it. Pure, non-mutating and idempotent, like its siblings.
+ */
+export function upsertCommitCheckHooks(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  const group = {
+    matcher: "Bash",
+    hooks: [
+      {
+        type: "command",
+        command: COMMIT_CHECK_COMMAND,
+        if: "Bash(git *)",
+        timeout: 5,
+        statusMessage: "project-brain: pre-commit check",
+      },
+    ],
+  };
+  const current: Array<Record<string, unknown>> = Array.isArray(hooks.PreToolUse)
+    ? (hooks.PreToolUse as Array<Record<string, unknown>>)
+    : [];
+  hooks.PreToolUse = current.some((g) => groupHasCommand(g, COMMIT_CHECK_COMMAND))
+    ? current.map((g) => (groupHasCommand(g, COMMIT_CHECK_COMMAND) ? group : g))
+    : [...current, group];
+
+  return { ...base, hooks };
+}
+
+/**
+ * Remove the commit pre-filter from a parsed settings object.
+ *
+ * The inverse of {@link upsertCommitCheckHooks}, narrow for {@link removeRoutingHooks}' reason.
+ */
+export function removeCommitCheckHooks(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "PreToolUse", [COMMIT_CHECK_COMMAND]);
+
+  return { ...base, hooks };
+}
+
 const JEV_ENV_COMMAND = "project-brain jev-env";
 
 /**

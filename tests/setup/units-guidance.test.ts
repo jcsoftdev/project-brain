@@ -23,19 +23,20 @@ async function context(): Promise<SetupContext> {
 }
 
 describe("guidance units", () => {
-  it("declares every guidance unit selected by default, the warn-only architecture guard included", async () => {
+  it("declares every guidance unit selected by default except commit-check, which defaults on only with a token", async () => {
     const { guidanceUnits } = await import("../../src/setup/units.js");
     const ids = guidanceUnits().map((u) => u.id).sort();
 
     expect(ids).toEqual([
       "guidance:model-routing",
       "hooks:arch-guard",
+      "hooks:commit-check",
       "hooks:routing",
       "hooks:session-title",
       "hooks:worktree",
     ]);
     const optIn = guidanceUnits().filter((u) => !u.defaultSelected).map((u) => u.id);
-    expect(optIn).toEqual([]);
+    expect(optIn).toEqual(["hooks:commit-check"]);
   });
 });
 
