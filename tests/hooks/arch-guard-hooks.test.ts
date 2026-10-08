@@ -64,12 +64,12 @@ describe("hooks:arch-guard unit", () => {
     } as SetupContext;
   }
 
-  it("is opt-in, discloses the Jev data flow, and goes absent -> current -> absent", async () => {
+  it("is on by default, discloses the Jev data flow, and goes absent -> current -> absent", async () => {
     const { guidanceUnits } = await import("../../src/setup/units.js");
     const unit = guidanceUnits().find((u) => u.id === "hooks:arch-guard")!;
     const ctx = await context();
 
-    expect(unit.defaultSelected).toBe(false);
+    expect(unit.defaultSelected).toBe(true);
     expect(unit.description).toContain("api.typesafe.ai");
 
     expect(await unit.inspect(ctx)).toBe("absent");

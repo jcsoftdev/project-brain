@@ -276,6 +276,34 @@ function settingsHaveCommand(settings: Record<string, unknown> | null, command: 
 }
 
 /**
+ * The architecture guard owns two things: the hook and the global default
+ * config. The config is seeded once and survives removal, since the user may
+ * have edited it and the hook can be reinstalled against it.
+ */
+function withGlobalArchConfig(base: SetupUnit): SetupUnit {
+  const configPath = async (ctx: SetupContext) => (await import("../commands/arch.js")).globalArchConfigPath(ctx.dataDir);
+  return {
+    ...base,
+
+    async inspect(ctx) {
+      const state = await base.inspect(ctx);
+      if (state !== "current") return state;
+      return (await Bun.file(await configPath(ctx)).exists()) ? "current" : "stale";
+    },
+
+    async apply(ctx) {
+      await base.apply(ctx);
+      await (await import("../commands/arch.js")).initGlobalArchConfig(ctx.dataDir);
+    },
+
+    async remove(ctx) {
+      await base.remove(ctx);
+      console.log(`Kept ${await configPath(ctx)}; delete it by hand to drop the global default.`);
+    },
+  };
+}
+
+/**
  * Build a unit for one hook pair, since routing and worktree differ only in
  * which functions they call and which command proves they are installed.
  *
@@ -490,20 +518,22 @@ export function guidanceUnits(): SetupUnit[] {
       },
     }),
 
-    hookUnit({
-      id: "hooks:arch-guard",
-      label: "Architecture guard",
-      description:
-        "block edits that break the layer rules in .project-brain/architecture.json (Claude Code only); " +
-        "with a TypeSafe token it also sends the edit plus the okf/ constraint text to api.typesafe.ai for Jev to judge",
-      probe: "project-brain arch-guard",
-      strictOf: () => false,
-      defaultSelected: false,
-      load: async () => {
-        const m = await import("../hooks/claude-settings.js");
-        return { upsert: m.upsertArchGuardHooks, remove: m.removeArchGuardHooks };
-      },
-    }),
+    withGlobalArchConfig(
+      hookUnit({
+        id: "hooks:arch-guard",
+        label: "Architecture guard",
+        description:
+          "hexagonal layer check on every edit, with a global default in ~/.project-brain/architecture.json " +
+          "(a project's own .project-brain/architecture.json overrides it); warn-only unless a config says \"mode\": \"block\" " +
+          "(Claude Code only); the Jev constraint layer runs only with a TypeSafe token and sends the edit plus the okf/ constraint text to api.typesafe.ai",
+        probe: "project-brain arch-guard",
+        strictOf: () => false,
+        load: async () => {
+          const m = await import("../hooks/claude-settings.js");
+          return { upsert: m.upsertArchGuardHooks, remove: m.removeArchGuardHooks };
+        },
+      })
+    ),
   ];
 }
 

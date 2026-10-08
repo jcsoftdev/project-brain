@@ -8,7 +8,8 @@
  * blocks on a rule it half-understood.
  */
 
-export type ArchMode = "block" | "warn";
+/** `off` is the opt-out: the file exists to say "no guard here", for the deterministic and the Jev layer alike. */
+export type ArchMode = "block" | "warn" | "off";
 
 export interface ArchRule {
   from: string;
@@ -25,7 +26,7 @@ export interface LayerMatcher {
 export interface ArchConfig {
   layers: Map<string, LayerMatcher>;
   forbid: ArchRule[];
-  mode: ArchMode;
+  mode: Exclude<ArchMode, "off">;
 }
 
 export interface ParsedArchConfig {
@@ -41,14 +42,24 @@ export interface ParsedArchConfig {
 
 export const ARCH_CONFIG_PATH = ".project-brain/architecture.json";
 
+/** The machine-wide default, a file of the same shape inside DATA_DIR. A project's own file replaces it whole. */
+export const GLOBAL_ARCH_CONFIG_NAME = "architecture.json";
+
 const PACKAGE_PREFIX = "pkg:";
 
-/** The hexagonal preset `arch init` writes. Warn, not block: a fresh install must never stop an edit. */
+/**
+ * The hexagonal/clean preset written by `arch init` and by setup as the global
+ * default. Several spellings per layer, so it fits a tree it has never seen; a
+ * tree matching none of them is simply unchecked. Warn, not block: a fresh
+ * install must never stop an edit.
+ *
+ * Layer order is the tie-break (see `layersOfPath`), so it runs innermost-first.
+ */
 export const HEXAGONAL_PRESET = {
   layers: {
-    domain: "src/domain/**",
-    application: "src/application/**",
-    infrastructure: "src/infra/**",
+    domain: ["**/domain/**", "**/core/**", "**/entities/**"],
+    application: ["**/application/**", "**/use-cases/**", "**/usecases/**"],
+    infrastructure: ["**/infrastructure/**", "**/infra/**", "**/adapters/**"],
   },
   forbid: [
     { from: "domain", to: ["application", "infrastructure"] },
@@ -84,10 +95,11 @@ export function parseArchConfig(raw: unknown): ParsedArchConfig {
     return { config: null, mode: "warn", warnings: ["architecture.json must be a JSON object"] };
   }
 
-  const mode: ArchMode = raw.mode === "block" ? "block" : "warn";
-  if (raw.mode !== undefined && raw.mode !== "block" && raw.mode !== "warn") {
-    warnings.push('"mode" must be "block" or "warn"; using "warn"');
+  const mode: ArchMode = raw.mode === "block" || raw.mode === "off" ? raw.mode : "warn";
+  if (raw.mode !== undefined && raw.mode !== "block" && raw.mode !== "warn" && raw.mode !== "off") {
+    warnings.push('"mode" must be "block", "warn" or "off"; using "warn"');
   }
+  if (mode === "off") return { config: null, mode, warnings };
 
   const layers = new Map<string, LayerMatcher>();
   if (!isPlainObject(raw.layers)) {
@@ -125,13 +137,18 @@ export function parseArchConfig(raw: unknown): ParsedArchConfig {
   return { config: { layers, forbid, mode }, mode, warnings };
 }
 
-/** Names of every layer a repo-relative POSIX path belongs to. */
+/**
+ * The layer a repo-relative POSIX path belongs to, as a list of at most one.
+ *
+ * A path can match several layers (`src/infra/domain/x.ts`). The FIRST layer
+ * declared wins, so the answer never depends on glob specificity and the
+ * preset's innermost-first order makes the strictest layer win.
+ */
 export function layersOfPath(config: ArchConfig, repoPath: string): string[] {
-  const out: string[] = [];
   for (const [name, matcher] of config.layers) {
-    if (matcher.globs.some((g) => g.match(repoPath))) out.push(name);
+    if (matcher.globs.some((g) => g.match(repoPath))) return [name];
   }
-  return out;
+  return [];
 }
 
 /** Names of every layer that explicitly claims a bare package specifier. */
