@@ -278,9 +278,9 @@ With no token configured, nothing changes — zero network calls, identical resu
 
 ### Skill suggestions
 
-With a token configured, the same `UserPromptSubmit` hook also asks Jev which installed skill best fits your prompt, in parallel with retrieval, and appends one line to the injected context: `Suggested skill: <name> — <why>`. It only appears when Jev is at least 70% confident; otherwise nothing is added. Skills are read from `~/.claude/skills`, `<project>/.claude/skills`, `~/.agents/skills` and installed plugins (`plugin:skill`), cached on disk for ten minutes (or until a skills directory changes).
+With a token configured, the same `UserPromptSubmit` hook also asks Jev which installed skill best fits your prompt, in parallel with retrieval, and appends one line to the injected context: `Suggested skill: <name> — <why>`. It only appears when Jev is at least 70% confident; otherwise nothing is added. Skills are read from `~/.claude/skills`, `<project>/.claude/skills`, `~/.agents/skills` and installed plugins (`plugin:skill`), cached on disk (rebuilt when any SKILL.md changes, or after ten minutes). The shortlist is chosen by embedding similarity using the project's embedding model, so prompts in any language the model supports match English skill descriptions; skill vectors are cached next to the skill list, and without embeddings it falls back to keyword overlap.
 
-**The prompt text and the shortlisted skills' names and descriptions (at most 12, keyword-prefiltered) are sent to `api.typesafe.ai`** — the same disclosure as the reranker. Prompts with no keyword overlap with any skill, and trivial prompts, send nothing. The whole pick is capped at 1.5s and fails silently. Opt out with `BRAIN_SKILL_PICKER=0`.
+**The prompt text and the shortlisted skills' names and descriptions (at most 12) are sent to `api.typesafe.ai`** — the same disclosure as the reranker. Trivial prompts send nothing, and on the keyword fallback so do prompts with no overlap with any skill. The whole pick is capped at 1.5s and fails silently. Opt out with `BRAIN_SKILL_PICKER=0`.
 
 ## Recipes — get the most out of it
 

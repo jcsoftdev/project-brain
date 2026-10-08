@@ -3,6 +3,7 @@ import type { Reranker } from "../rerank/jev.js";
 import { handleSearch } from "../tools/search.js";
 import { isTrivialPrompt } from "./trivial-prompt.js";
 import { pickSkill, SKILL_PICK_BUDGET_MS } from "../skills/picker.js";
+import type { SharedQuery } from "../skills/semantic.js";
 
 /**
  * Hook budget: the UserPromptSubmit race in {@link execute} below gives up
@@ -41,6 +42,8 @@ export function parsePromptFromStdin(raw: string): string {
 
 export interface SearchArgs {
   query: string;
+  /** Precomputed embedding of `query` (hook path), forwarded to handleSearch. */
+  queryVector?: number[];
   project: string;
   limit: number;
 }
@@ -62,13 +65,13 @@ export interface SearchDeps {
  * Fail-fast contract: any error → print nothing, return (never throws).
  */
 export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<void> {
-  const { query, project, limit } = args;
+  const { query, project, limit, queryVector } = args;
 
   // Empty query → no-op
   if (!query.trim()) return;
 
   try {
-    const result = await handleSearch({ project, query, limit }, deps);
+    const result = await handleSearch({ project, query, limit, queryVector }, deps);
 
     // Embeddings unavailable or retrieval error → print nothing
     if (result.isError) return;
@@ -220,7 +223,7 @@ export async function execute(
 
       if (!query.trim()) return;
 
-      const searchPart = async (): Promise<void> => {
+      const searchPart = async (publish?: (q: SharedQuery | null) => void): Promise<void> => {
         // Resolve projectId from cwd config if not supplied
         if (!project) {
           const { readFile } = await import("node:fs/promises");
@@ -278,7 +281,14 @@ export async function execute(
         // HOOK_TIMEOUT_MS race this whole execute() runs under.
         const reranker = (await createReranker()) ?? undefined;
 
-        await runSearch({ query, project, limit }, { store, embeddings, dbPath: DB_PATH, reranker });
+        // The prompt is embedded here exactly once. Retrieval reuses the
+        // vector, and the skill pick (hook path only) gets the same one for
+        // its semantic shortlist instead of paying a second embed.
+        const vectors = publish ? await embeddings.embed([query]).catch(() => null) : null;
+        const queryVector = vectors?.[0];
+        publish?.(queryVector ? { embeddings, vector: queryVector } : null);
+
+        await runSearch({ query, project, limit, queryVector }, { store, embeddings, dbPath: DB_PATH, reranker });
       };
 
       // Only the hook path suggests a skill; `project-brain search "<q>"` stays retrieval-only.
@@ -286,7 +296,15 @@ export async function execute(
         await searchPart();
       } else {
         const prompt = hookPrompt;
-        await runWithSkillPick(searchPart, () => pickSkill(prompt, { projectDir: process.cwd() }));
+        let publish!: (q: SharedQuery | null) => void;
+        const sharedQuery = new Promise<SharedQuery | null>((resolve) => {
+          publish = resolve;
+        });
+        await runWithSkillPick(
+          // Resolve null on any exit so the pick never waits on a search that bailed out early.
+          () => searchPart(publish).finally(() => publish(null)),
+          () => pickSkill(prompt, { projectDir: process.cwd(), queryEmbedding: () => sharedQuery })
+        );
       }
     } catch (err) {
       // Any setup error → print nothing

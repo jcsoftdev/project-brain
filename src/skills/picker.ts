@@ -1,6 +1,7 @@
 import { resolveRerankerToken } from "../rerank/token.js";
 import { ask, type ChoiceQuestion, type TypesafeFetchFn } from "../typesafe/client.js";
 import { isTrivialPrompt } from "../commands/trivial-prompt.js";
+import { rankSkillsSemantic, type SharedQuery } from "./semantic.js";
 import { discoverSkills, type DiscoverOptions, type SkillInfo } from "./discovery.js";
 
 /**
@@ -61,6 +62,14 @@ export interface SkillPickDeps {
   fetchFn?: TypesafeFetchFn;
   env?: Record<string, string | undefined>;
   budgetMs?: number;
+  /**
+   * Resolves to the prompt embedding the search path already computed, or null
+   * when embeddings are unavailable. Present → semantic shortlist (works across
+   * languages); null/absent → keyword fallback.
+   */
+  queryEmbedding?: () => Promise<SharedQuery | null>;
+  /** Where skill vectors are cached. Defaults to the data dir. */
+  vectorCacheDir?: string;
   /** Test seam for discovery options (home, cache dir). */
   discoverOptions?: DiscoverOptions;
 }
@@ -87,7 +96,9 @@ export async function pickSkill(prompt: string, deps: SkillPickDeps & { projectD
     if (!token) return null;
 
     const skills = await (deps.discover ?? (() => discoverSkills(deps.discoverOptions ?? { projectDir: deps.projectDir })))();
-    const candidates = prefilterSkills(prompt, skills);
+    const shared = await (deps.queryEmbedding?.() ?? Promise.resolve(null));
+    const semantic = shared ? await rankSkillsSemantic(skills, shared, MAX_SKILL_CANDIDATES, deps.vectorCacheDir) : null;
+    const candidates = semantic ?? prefilterSkills(prompt, skills);
     if (candidates.length === 0) return null;
 
     const remaining = deadline - Date.now();

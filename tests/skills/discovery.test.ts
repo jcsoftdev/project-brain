@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverSkills } from "../../src/skills/discovery.js";
@@ -62,26 +62,42 @@ describe("discoverSkills", () => {
     await skill(join(project, ".claude", "skills"), "x", doc("same", "project copy"));
 
     const skills = await discoverSkills({ home, projectDir: project, cacheDir });
-    expect(skills).toEqual([{ name: "same", description: "project copy" }]);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]).toMatchObject({ name: "same", description: "project copy" });
   });
 
-  it("serves from the cache while roots are unchanged, and rescans when a root changes", async () => {
+  it("serves from the cache while nothing changed", async () => {
+    await skill(join(home, ".claude", "skills"), "a", doc("alpha", "one"));
+    await discoverSkills({ home, projectDir: project, cacheDir });
+    const cacheFile = (await readdir(cacheDir)).find((f) => f.startsWith("skills-"))!;
+    const marker = JSON.parse(await readFile(join(cacheDir, cacheFile), "utf-8"));
+    marker.skills[0].description = "from cache";
+    await writeFile(join(cacheDir, cacheFile), JSON.stringify(marker));
+
+    expect((await discoverSkills({ home, projectDir: project, cacheDir }))[0]!.description).toBe("from cache");
+  });
+
+  it("invalidates when an existing SKILL.md is edited in place", async () => {
     const dir = join(home, ".claude", "skills");
     await skill(dir, "a", doc("alpha", "one"));
-    const first = await discoverSkills({ home, projectDir: project, cacheDir });
-    expect(first).toHaveLength(1);
+    await discoverSkills({ home, projectDir: project, cacheDir });
 
-    // Editing an existing file leaves the root mtime alone: still the cached answer.
-    await writeFile(join(dir, "a", "SKILL.md"), doc("alpha", "edited"));
-    expect((await discoverSkills({ home, projectDir: project, cacheDir }))[0]!.description).toBe("one");
-
-    // Adding a skill bumps the root mtime → rescan.
-    await skill(dir, "b", doc("beta", "two"));
+    const file = join(dir, "a", "SKILL.md");
+    await writeFile(file, doc("alpha", "edited"));
     const later = new Date(Date.now() + 5000);
-    await utimes(dir, later, later);
-    const rescanned = await discoverSkills({ home, projectDir: project, cacheDir });
-    expect(rescanned.map((s) => s.name).sort()).toEqual(["alpha", "beta"]);
-    expect(rescanned.find((s) => s.name === "alpha")!.description).toBe("edited");
+    await utimes(file, later, later);
+
+    expect((await discoverSkills({ home, projectDir: project, cacheDir }))[0]!.description).toBe("edited");
+  });
+
+  it("invalidates when a skill is added", async () => {
+    const dir = join(home, ".claude", "skills");
+    await skill(dir, "a", doc("alpha", "one"));
+    await discoverSkills({ home, projectDir: project, cacheDir });
+    await skill(dir, "b", doc("beta", "two"));
+
+    const names = (await discoverSkills({ home, projectDir: project, cacheDir })).map((s) => s.name).sort();
+    expect(names).toEqual(["alpha", "beta"]);
   });
 
   it("rescans once the TTL lapses", async () => {

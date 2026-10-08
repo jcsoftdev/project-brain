@@ -9,6 +9,9 @@ export interface SkillInfo {
   /** `name` for user/project skills, `plugin:name` for plugin skills. */
   name: string;
   description: string;
+  /** SKILL.md location and mtime — the identity the vector cache keys on. */
+  path?: string;
+  mtime?: number;
 }
 
 /**
@@ -35,7 +38,7 @@ interface SkillRoot {
 
 interface CacheFile {
   builtAt: number;
-  fingerprint: number[];
+  fingerprint: string[];
   skills: SkillInfo[];
 }
 
@@ -50,24 +53,27 @@ async function mtimeOf(path: string): Promise<number> {
 /** Reads one SKILL.md; null when it is unreadable or lacks a usable name/description. */
 async function readSkill(file: string, prefix: string): Promise<SkillInfo | null> {
   try {
+    const mtime = await mtimeOf(file);
     const fm = parseDocument(await readFile(file, "utf-8")).frontmatter as Record<string, unknown>;
     const name = typeof fm.name === "string" ? fm.name.trim() : "";
     const description = typeof fm.description === "string" ? fm.description.replace(/\s+/g, " ").trim() : "";
-    return name && description ? { name: `${prefix}${name}`, description } : null;
+    return name && description ? { name: `${prefix}${name}`, description, path: file, mtime } : null;
   } catch {
     return null;
   }
 }
 
-async function readRoot({ dir, prefix }: SkillRoot): Promise<SkillInfo[]> {
-  let entries: string[];
+interface SkillFile {
+  file: string;
+  prefix: string;
+}
+
+async function listSkillFiles({ dir, prefix }: SkillRoot): Promise<SkillFile[]> {
   try {
-    entries = (await readdir(dir)).sort();
+    return (await readdir(dir)).sort().map((entry) => ({ file: join(dir, entry, "SKILL.md"), prefix }));
   } catch {
     return [];
   }
-  const skills = await Promise.all(entries.map((entry) => readSkill(join(dir, entry, "SKILL.md"), prefix)));
-  return skills.filter((s): s is SkillInfo => s !== null);
 }
 
 /** Plugin skill dirs from Claude Code's registry; the plugin name is the part before `@marketplace`. */
@@ -115,7 +121,11 @@ export async function discoverSkills(opts: DiscoverOptions): Promise<SkillInfo[]
   const cacheFile = join(cacheDir, `skills-${createHash("sha1").update(opts.projectDir).digest("hex").slice(0, 12)}.json`);
 
   const roots = await skillRoots(home, opts.projectDir, registry);
-  const fingerprint = await Promise.all([...roots.map((r) => r.dir), registry].map(mtimeOf));
+  const files = (await Promise.all(roots.map(listSkillFiles))).flat();
+  // Per-file mtimes, not directory ones: an in-place edit of a SKILL.md
+  // leaves its directory's mtime untouched.
+  const mtimes = await Promise.all(files.map((f) => mtimeOf(f.file)));
+  const fingerprint = [...files.map((f, i) => `${f.file}:${mtimes[i]}`), `registry:${await mtimeOf(registry)}`];
 
   try {
     const cached = JSON.parse(await readFile(cacheFile, "utf-8")) as CacheFile;
@@ -127,7 +137,8 @@ export async function discoverSkills(opts: DiscoverOptions): Promise<SkillInfo[]
     // Missing or corrupt cache → rescan.
   }
 
-  const skills = dedupeByName((await Promise.all(roots.map(readRoot))).flat());
+  const read = await Promise.all(files.map((f) => readSkill(f.file, f.prefix)));
+  const skills = dedupeByName(read.filter((s): s is SkillInfo => s !== null));
   try {
     await mkdir(cacheDir, { recursive: true });
     await writeFile(cacheFile, JSON.stringify({ builtAt: now, fingerprint, skills } satisfies CacheFile));
