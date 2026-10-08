@@ -3,7 +3,9 @@ import {
   DIFF_CAP_CHARS,
   commitCheckDecision,
   isSourcePath,
+  isSecretPath,
   isTestPath,
+  sanitizeDiff,
   parseGitCommit,
   parseMode,
   render,
@@ -101,6 +103,73 @@ describe("parseGitCommit", () => {
 
   it("keeps an operator inside a quoted message from splitting the command", () => {
     expect(parseGitCommit('git commit -m "fix a && b"')).not.toBeNull();
+  });
+});
+
+describe("cd handling", () => {
+  it("applies a leading cd before the commit, then -C", () => {
+    expect(parseGitCommit("cd sub && git commit -m x")?.dirs).toEqual(["sub"]);
+    expect(parseGitCommit("cd a; cd b; git -C c commit")?.dirs).toEqual(["a", "b", "c"]);
+  });
+
+  it("ignores a cd that comes after the commit", () => {
+    expect(parseGitCommit("git commit -m x && cd sub")?.dirs).toEqual([]);
+  });
+
+  it("fails open on a cd it cannot resolve statically", () => {
+    for (const c of ["cd && git commit", "cd - && git commit", "cd $DIR && git commit", "cd ~/x && git commit"]) {
+      expect(parseGitCommit(c)).toBeNull();
+    }
+  });
+
+  it("diffs the cd directory relative to payload.cwd", async () => {
+    const f = fake({});
+    const cwds: string[] = [];
+    const inner = f.ctx.git;
+    f.ctx.git = async (cwd, args) => (cwds.push(cwd), inner(cwd, args));
+    await commitCheckDecision(commit("cd sub && git commit -m x", "/repo"), f.ctx);
+    expect(cwds[0]).toBe("/repo/sub");
+  });
+});
+
+describe("secret withholding", () => {
+  it("recognises secret-like paths and spares examples", () => {
+    for (const p of [".env", "app/.env.local", "a/b.pem", "k.key", "x.p12", "x.pfx", "id_rsa", "id_ed25519.pub", "s.keystore", "credentials.json", "secrets.yaml", "prod.tfvars"]) {
+      expect(isSecretPath(p)).toBe(true);
+    }
+    for (const p of [".env.example", ".env.sample", "src/a.ts", "environment.ts", "README.md"]) {
+      expect(isSecretPath(p)).toBe(false);
+    }
+  });
+
+  it("drops the hunks of a secret file but keeps the header", () => {
+    const diff = ["diff --git a/.env b/.env", "+++ b/.env", "+API=hunter2", "diff --git a/src/a.ts b/src/a.ts", "+const a = 1;"].join("\n");
+    const out = sanitizeDiff(diff);
+    expect(out).not.toContain("hunter2");
+    expect(out).toContain("diff --git a/.env b/.env\n(content withheld)");
+    expect(out).toContain("+const a = 1;");
+  });
+
+  it("redacts key-shaped lines in other files", () => {
+    const lines = [
+      "+aws = 'AKIAABCDEFGHIJKLMNOP'",
+      "+-----BEGIN RSA PRIVATE KEY-----",
+      "+k = 'sk-abcdefghijklmnopqrstuvwx'",
+      "+t = 'ghp_abcdefghijklmnopqrstuvwxyz0123'",
+      "+s = 'xoxb-1234567890-abcdef'",
+    ];
+    const out = sanitizeDiff(["diff --git a/src/a.ts b/src/a.ts", ...lines, "+ok = 1"].join("\n"));
+    for (const secret of ["AKIA", "PRIVATE KEY", "sk-abc", "ghp_", "xoxb-"]) expect(out).not.toContain(secret);
+    expect(out).toContain("+ok = 1");
+  });
+
+  it("sends only the name of a staged .env to Jev, marked withheld", async () => {
+    const diff = "diff --git a/.env b/.env\n+++ b/.env\n+DB_PASSWORD=hunter2\n";
+    const f = fake({ names: ".env\nsrc/a.ts\n", diff });
+    await commitCheckDecision(commit("git commit -m x"), f.ctx);
+    const sent = JSON.stringify(f.asks[0]!.state);
+    expect(sent).not.toContain("hunter2");
+    expect(f.asks[0]!.state.files).toContain(".env (content withheld)");
   });
 });
 
