@@ -70,9 +70,42 @@ describe("exportJevEnv", () => {
   });
 
   it("does not duplicate an export already in the file", async () => {
-    const { ctx, writes } = memCtx({ file: "export OTHER=1\nexport TYPESAFE_API_KEY='x'\n" });
+    const { ctx, writes } = memCtx({ file: "export OTHER=1\nexport TYPESAFE_API_KEY='tok-123'\n" });
     expect(await exportJevEnv(ctx)).toBe(false);
     expect(writes).toHaveLength(0);
+  });
+
+  it("appends again when the existing export carries a different token", async () => {
+    const { ctx, writes } = memCtx({ file: "export TYPESAFE_API_KEY='old'\n" });
+    expect(await exportJevEnv(ctx)).toBe(true);
+    expect(writes[0]!.data).toBe("export TYPESAFE_API_KEY='tok-123'\n");
+  });
+
+  it("creates the env file with mode 0600 and leaves an existing file's mode alone", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pb-jev-env-"));
+    const prevFile = process.env.CLAUDE_ENV_FILE;
+    const prevKey = process.env.TYPESAFE_API_KEY;
+    try {
+      const { chmod, stat } = await import("node:fs/promises");
+      const created = join(dir, "new.sh");
+      const existing = join(dir, "old.sh");
+      await writeFile(existing, "");
+      await chmod(existing, 0o644);
+      delete process.env.TYPESAFE_API_KEY;
+      const { execute } = await import("../../src/hooks/jev-env.js");
+      const token = async () => "tok";
+      process.env.CLAUDE_ENV_FILE = created;
+      await execute(token);
+      expect((await stat(created)).mode & 0o777).toBe(0o600);
+      process.env.CLAUDE_ENV_FILE = existing;
+      await execute(token);
+      expect((await stat(existing)).mode & 0o777).toBe(0o644);
+    } finally {
+      if (prevFile === undefined) delete process.env.CLAUDE_ENV_FILE;
+      else process.env.CLAUDE_ENV_FILE = prevFile;
+      if (prevKey !== undefined) process.env.TYPESAFE_API_KEY = prevKey;
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("starts a new line when the file does not end with one", async () => {
@@ -187,6 +220,51 @@ describe("config:reranker unit with the export hook", () => {
     await u.remove(ctx);
     expect(await u.inspect(ctx)).toBe("absent");
     expect(await readFile(ctx.claudeSettingsPath, "utf8")).not.toContain("jev-env");
+  });
+
+  it("an env-only token is current, never stale, and setup-less inspect writes nothing", async () => {
+    const u = await unit();
+    const ctx = await context();
+    const prev = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = "env-only";
+    try {
+      expect(await u.inspect(ctx)).toBe("current");
+    } finally {
+      if (prev === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = prev;
+    }
+  });
+
+  it("apply keeps the file token over a stale env token", async () => {
+    const u = await unit();
+    const ctx = await context();
+    const { writeRerankerToken, resolveRerankerToken } = await import("../../src/rerank/token.js");
+    await writeRerankerToken(ctx.dataDir, "new-file-token");
+    const prev = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = "old-env-token";
+    try {
+      await u.apply(ctx);
+      expect(await resolveRerankerToken({ dataDir: ctx.dataDir, env: {} })).toBe("new-file-token");
+    } finally {
+      if (prev === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = prev;
+    }
+  });
+
+  it("remove says running sessions keep the token until restart", async () => {
+    const u = await unit();
+    const ctx = await context();
+    ctx.rerankerToken = "sk-1";
+    await u.apply(ctx);
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (...a: unknown[]) => void logs.push(a.map(String).join(" "));
+    try {
+      await u.remove(ctx);
+    } finally {
+      console.log = orig;
+    }
+    expect(logs.join("\n")).toContain("restart");
   });
 
   it("a token without the hook is stale, and apply heals it without prompting", async () => {

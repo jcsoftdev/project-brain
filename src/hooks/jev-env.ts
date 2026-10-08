@@ -42,20 +42,25 @@ export async function exportJevEnv(ctx: JevEnvContext): Promise<boolean> {
   if (!token) return false;
 
   const current = (await ctx.readFile(envFile)) ?? "";
-  if (current.split("\n").some((line) => line.trimStart().startsWith(EXPORT_PREFIX))) return false;
+  const line = `${EXPORT_PREFIX}${shellQuote(token)}`;
+  // Only the same value is a duplicate: after a rotation the later line wins when sourced.
+  if (current.split("\n").some((l) => l.trim() === line)) return false;
 
   const separator = current === "" || current.endsWith("\n") ? "" : "\n";
-  await ctx.appendFile(envFile, `${separator}${EXPORT_PREFIX}${shellQuote(token)}\n`);
+  await ctx.appendFile(envFile, `${separator}${line}\n`);
   return true;
 }
 
-export async function execute(): Promise<void> {
+export async function execute(
+  resolveToken: () => Promise<string | null> = () => resolveRerankerToken()
+): Promise<void> {
   try {
     await exportJevEnv({
       env: process.env,
       readFile: (path) => readFile(path, "utf8").catch(() => null),
-      appendFile: (path, data) => appendFile(path, data),
-      resolveToken: () => resolveRerankerToken(),
+      // The mode applies only when this creates the file; Claude Code owns an existing one.
+      appendFile: (path, data) => appendFile(path, data, { mode: 0o600 }),
+      resolveToken,
     });
   } catch {
     // A failing hook would only add noise to a session start.

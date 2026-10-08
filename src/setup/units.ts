@@ -598,10 +598,15 @@ export function otherUnits(): SetupUnit[] {
 
       async inspect(ctx): Promise<UnitState> {
         const { resolveRerankerToken } = await import("../rerank/token.js");
-        const token = await resolveRerankerToken({ dataDir: ctx.dataDir });
-        if (!token) return "absent";
+        // Only a token in the FILE can be stale: it is the one apply would reuse. An
+        // env-only token must not read as stale, or a plain setup would copy it to disk
+        // and install a hook nobody opted into.
+        const fileToken = await resolveRerankerToken({ dataDir: ctx.dataDir, env: {} });
+        if (!fileToken) {
+          return (await resolveRerankerToken({ dataDir: ctx.dataDir })) ? "current" : "absent";
+        }
 
-        // A token without the export hook is where every pre-hook install sits.
+        // A file token without the export hook is where every pre-hook install sits.
         // "stale" is what makes the next setup re-apply, and apply reuses the token.
         const settings = await readClaudeSettings(ctx.claudeSettingsPath);
         if (settings === "unparseable") return "stale";
@@ -611,8 +616,12 @@ export function otherUnits(): SetupUnit[] {
       async apply(ctx): Promise<void> {
         const { resolveRerankerToken, writeRerankerToken } = await import("../rerank/token.js");
 
-        let token = ctx.rerankerToken ?? process.env.TYPESAFE_API_KEY;
-        if (!token) token = (await resolveRerankerToken({ dataDir: ctx.dataDir })) ?? undefined;
+        // The file outranks the env: inside a Claude session this hook exports the file's
+        // token, so after a rotation the env holds the OLD one and must not overwrite it.
+        let token =
+          ctx.rerankerToken ??
+          (await resolveRerankerToken({ dataDir: ctx.dataDir, env: {} })) ??
+          process.env.TYPESAFE_API_KEY;
         if (!token) {
           const prompt =
             ctx.promptRerankerToken ?? (await import("../interactive.js")).promptRerankerToken;
@@ -648,6 +657,11 @@ export function otherUnits(): SetupUnit[] {
         const settings = await readClaudeSettings(ctx.claudeSettingsPath);
         if (settings === "unparseable" || settings === null) return;
         const { removeJevEnvHooks } = await import("../hooks/claude-settings.js");
+        if (settingsHaveCommand(settings, "project-brain jev-env")) {
+          console.log(
+            "Jev reranker removed. Running Claude Code sessions keep TYPESAFE_API_KEY until they restart."
+          );
+        }
         await Bun.write(
           ctx.claudeSettingsPath,
           `${JSON.stringify(removeJevEnvHooks(settings), null, 2)}\n`
