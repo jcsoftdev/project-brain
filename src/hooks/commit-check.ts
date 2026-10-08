@@ -423,15 +423,22 @@ export async function execute(): Promise<void> {
     process.exit(0); // unreadable stdin — allow, per fail-open
   }
 
-  const decision = await commitCheckDecision(payload, readCommitCheckContext());
-  if (decision.block) {
-    process.stderr.write(`${decision.message}\n`);
-    process.exit(2);
-  }
-  if (decision.message) {
-    // Stderr on exit 0 never reaches the model; additionalContext is delivered next to the tool result.
-    const output = { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: decision.message } };
-    process.stdout.write(`${JSON.stringify(output)}\n`);
-  }
-  process.exit(0);
+  const out = render(await commitCheckDecision(payload, readCommitCheckContext()));
+  if (out.stderr) process.stderr.write(out.stderr);
+  if (out.stdout) process.stdout.write(out.stdout);
+  process.exit(out.code);
+}
+
+export interface HookOutput {
+  code: 0 | 2;
+  stdout: string;
+  stderr: string;
+}
+
+export function render(decision: CommitCheckDecision): HookOutput {
+  if (decision.block) return { code: 2, stdout: "", stderr: `${decision.message}\n` };
+  if (!decision.message) return { code: 0, stdout: "", stderr: "" };
+  // Stderr on exit 0 never reaches the model; additionalContext is delivered next to the tool result.
+  const output = { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: decision.message } };
+  return { code: 0, stdout: `${JSON.stringify(output)}\n`, stderr: "" };
 }
