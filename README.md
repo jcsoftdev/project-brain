@@ -272,6 +272,8 @@ To enable it:
 - Pass `--reranker-token <token>` to `project-brain setup` for a non-interactive install, or
 - Set the `TYPESAFE_API_KEY` environment variable (checked before the file either way).
 
+With the reranker unit installed, a Claude Code `SessionStart` hook (`project-brain jev-env`) also exports the stored token as `TYPESAFE_API_KEY` into the session's shell, so the typesafe-ai skill, the TypeSafe SDK and ad-hoc scripts find it too. It appends to `CLAUDE_ENV_FILE`, leaves an already-set `TYPESAFE_API_KEY` alone, and never prints the token. Re-run `project-brain setup` once to add the hook to an existing install; the stored token is reused.
+
 With no token configured, nothing changes — zero network calls, identical result order. Any failure (timeout, non-2xx, a malformed response) falls back silently to the normal, unreranked order rather than surfacing an error. `project-brain health` reports `reranker: configured` once a token resolves.
 
 ## Recipes — get the most out of it
@@ -589,7 +591,7 @@ BRAIN_HTTP_TOKEN=your-secret project-brain serve --http [--port 3000]
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL |
 | `BRAIN_NO_UPDATE_CHECK` | — | Set to `1` to disable the update-available notice |
 | `BRAIN_CONCEPT_MODEL` | `claude-haiku-5-5` | Anthropic model id `conceptualize` uses to write module concepts. Read on each call. Same credentials as `--judge` (`ANTHROPIC_API_KEY` or `ant auth login`). |
-| `TYPESAFE_API_KEY` | — | Opt-in Jev reranker token — see [Reranking (optional)](#reranking-optional). Checked before `~/.project-brain/reranker.json`. |
+| `TYPESAFE_API_KEY` | — | Opt-in Jev reranker token — see [Reranking (optional)](#reranking-optional). Checked before `~/.project-brain/reranker.json`; a SessionStart hook exports the stored token under this name to Claude Code sessions. |
 
 ## Tuning (environment variables)
 

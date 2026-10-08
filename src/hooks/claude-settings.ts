@@ -402,3 +402,51 @@ export function removeArchGuardHooks(existing: object | null): object {
 
   return { ...base, hooks };
 }
+
+const JEV_ENV_COMMAND = "project-brain jev-env";
+
+/**
+ * Add the SessionStart hook that exports the stored TypeSafe token to the session.
+ *
+ * Pure, non-mutating and idempotent, like its siblings.
+ */
+export function upsertJevEnvHooks(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  addGroup(hooks, "SessionStart", JEV_ENV_COMMAND, {
+    hooks: [
+      {
+        type: "command",
+        command: JEV_ENV_COMMAND,
+        timeout: 5,
+        statusMessage: "project-brain: exporting TypeSafe token",
+      },
+    ],
+  });
+
+  return { ...base, hooks };
+}
+
+/**
+ * Remove the token-export hook from a parsed settings object.
+ *
+ * The inverse of {@link upsertJevEnvHooks}, narrow for {@link removeRoutingHooks}'
+ * reason: other SessionStart hooks must survive.
+ */
+export function removeJevEnvHooks(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "SessionStart", [JEV_ENV_COMMAND]);
+
+  return { ...base, hooks };
+}

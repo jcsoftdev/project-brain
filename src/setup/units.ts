@@ -589,7 +589,7 @@ export function otherUnits(): SetupUnit[] {
       group: "Other",
       label: "Jev reranker",
       description:
-        "reranks search results with TypeSafe's Jev: recall@1 66.0% → 84.3%, MRR 0.761 → 0.894 on the 332-query bench — sends each query and candidate code/doc snippets to api.typesafe.ai; needs a TYPESAFE token",
+        "reranks search results with TypeSafe's Jev: recall@1 66.0% → 84.3%, MRR 0.761 → 0.894 on the 332-query bench — sends each query and candidate code/doc snippets to api.typesafe.ai; needs a TYPESAFE token; also exports TYPESAFE_API_KEY to Claude Code sessions",
       // Ships unchecked: unlike every other unit here, this one sends the
       // content of every search — the query AND candidate code/doc snippets —
       // to a third-party API. That is a real disclosure decision, not a
@@ -599,13 +599,20 @@ export function otherUnits(): SetupUnit[] {
       async inspect(ctx): Promise<UnitState> {
         const { resolveRerankerToken } = await import("../rerank/token.js");
         const token = await resolveRerankerToken({ dataDir: ctx.dataDir });
-        return token ? "current" : "absent";
+        if (!token) return "absent";
+
+        // A token without the export hook is where every pre-hook install sits.
+        // "stale" is what makes the next setup re-apply, and apply reuses the token.
+        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+        if (settings === "unparseable") return "stale";
+        return settingsHaveCommand(settings, "project-brain jev-env") ? "current" : "stale";
       },
 
       async apply(ctx): Promise<void> {
-        const { writeRerankerToken } = await import("../rerank/token.js");
+        const { resolveRerankerToken, writeRerankerToken } = await import("../rerank/token.js");
 
         let token = ctx.rerankerToken ?? process.env.TYPESAFE_API_KEY;
+        if (!token) token = (await resolveRerankerToken({ dataDir: ctx.dataDir })) ?? undefined;
         if (!token) {
           const prompt =
             ctx.promptRerankerToken ?? (await import("../interactive.js")).promptRerankerToken;
@@ -619,11 +626,32 @@ export function otherUnits(): SetupUnit[] {
         }
 
         await writeRerankerToken(ctx.dataDir, token);
+
+        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+        if (settings === "unparseable") {
+          console.warn(
+            `Warning: ${ctx.claudeSettingsPath} is not valid JSON — TYPESAFE_API_KEY export hook not installed.`
+          );
+          return;
+        }
+        const { upsertJevEnvHooks } = await import("../hooks/claude-settings.js");
+        await Bun.write(
+          ctx.claudeSettingsPath,
+          `${JSON.stringify(upsertJevEnvHooks(settings), null, 2)}\n`
+        );
       },
 
       async remove(ctx): Promise<void> {
         const { removeRerankerToken } = await import("../rerank/token.js");
         await removeRerankerToken(ctx.dataDir);
+
+        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+        if (settings === "unparseable" || settings === null) return;
+        const { removeJevEnvHooks } = await import("../hooks/claude-settings.js");
+        await Bun.write(
+          ctx.claudeSettingsPath,
+          `${JSON.stringify(removeJevEnvHooks(settings), null, 2)}\n`
+        );
       },
     },
     settingsKeyUnit({

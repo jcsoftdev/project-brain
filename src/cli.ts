@@ -290,6 +290,11 @@ switch (command) {
     await execute();
     break;
   }
+  case "jev-env": {
+    const { execute } = await import("./hooks/jev-env.js");
+    await execute();
+    break;
+  }
   case "arch-guard": {
     const { execute } = await import("./hooks/arch-guard.js");
     await execute();
