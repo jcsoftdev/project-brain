@@ -24,6 +24,8 @@ interface SearchArgs {
   query: string;
   limit?: number;
   module?: string;
+  /** Precomputed embedding of `query`, so a caller that already embedded it (the prompt hook) is not charged twice. */
+  queryVector?: number[];
 }
 
 /** Handle search_context logic (exported for testing). */
@@ -34,7 +36,7 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(project) : deps.embeddings;
 
   const modelKey = emb.model ?? "";
-  const cached = queryCache.get(modelKey, query);
+  const cached = args.queryVector ?? queryCache.get(modelKey, query);
   const vectors = cached ? [cached] : await emb.embed([query]);
   if (vectors && !cached) queryCache.set(modelKey, query, vectors[0]);
   if (!vectors) {

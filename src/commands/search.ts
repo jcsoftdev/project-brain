@@ -2,6 +2,8 @@ import type { EmbeddingClient, VectorStore } from "../types.js";
 import type { Reranker } from "../rerank/jev.js";
 import { handleSearch } from "../tools/search.js";
 import { isTrivialPrompt } from "./trivial-prompt.js";
+import { pickSkill, SKILL_PICK_BUDGET_MS } from "../skills/picker.js";
+import type { SharedQuery } from "../skills/semantic.js";
 
 /**
  * Hook budget: the UserPromptSubmit race in {@link execute} below gives up
@@ -40,6 +42,8 @@ export function parsePromptFromStdin(raw: string): string {
 
 export interface SearchArgs {
   query: string;
+  /** Precomputed embedding of `query` (hook path), forwarded to handleSearch. */
+  queryVector?: number[];
   project: string;
   limit: number;
 }
@@ -61,13 +65,13 @@ export interface SearchDeps {
  * Fail-fast contract: any error → print nothing, return (never throws).
  */
 export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<void> {
-  const { query, project, limit } = args;
+  const { query, project, limit, queryVector } = args;
 
   // Empty query → no-op
   if (!query.trim()) return;
 
   try {
-    const result = await handleSearch({ project, query, limit }, deps);
+    const result = await handleSearch({ project, query, limit, queryVector }, deps);
 
     // Embeddings unavailable or retrieval error → print nothing
     if (result.isError) return;
@@ -129,6 +133,34 @@ export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<voi
   }
 }
 
+/**
+ * Runs retrieval and the skill pick side by side, so the hook's latency is
+ * max(search, pick) rather than their sum, then prints the suggestion after
+ * the retrieved context. The pick is raced against its own budget so a hung
+ * lookup can never hold the prompt past it; a failed pick prints nothing.
+ */
+export async function runWithSkillPick(
+  search: () => Promise<void>,
+  pick: () => Promise<string | null>,
+  print: (line: string) => void = console.log,
+  budgetMs: number = SKILL_PICK_BUDGET_MS
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const picked = Promise.race([
+    pick().catch(() => null),
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), budgetMs);
+    }),
+  ]);
+  try {
+    await search();
+    const line = await picked;
+    if (line) print(line);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** CLI entry point for the search command. */
 export async function execute(
   args: string[],
@@ -167,6 +199,7 @@ export async function execute(
       }
 
       let query: string;
+      let hookPrompt: string | undefined;
 
       if (useStdin) {
         // Read ALL of stdin, parse JSON, use .prompt as query.
@@ -183,70 +216,96 @@ export async function execute(
         // The MCP search_context tool and the CLI `search "<q>"` never take
         // this branch — only stdin, i.e. the UserPromptSubmit hook, does.
         if (isTrivialPrompt(query)) return;
+        hookPrompt = query;
       } else {
         query = queryParts.join(" ");
       }
 
       if (!query.trim()) return;
 
-      // Resolve projectId from cwd config if not supplied
-      if (!project) {
-        const { readFile } = await import("node:fs/promises");
-        const { join } = await import("node:path");
-        const configPath = join(process.cwd(), ".project-brain", "project.json");
-        try {
-          const raw = await readFile(configPath, "utf-8");
-          const config = JSON.parse(raw) as { projectId?: string };
-          project = config.projectId;
-        } catch {
-          // No config → use cwd basename as fallback
-          const { basename } = await import("node:path");
-          project = basename(process.cwd());
+      const searchPart = async (publish?: (q: SharedQuery | null) => void): Promise<void> => {
+        // Resolve projectId from cwd config if not supplied
+        if (!project) {
+          const { readFile } = await import("node:fs/promises");
+          const { join } = await import("node:path");
+          const configPath = join(process.cwd(), ".project-brain", "project.json");
+          try {
+            const raw = await readFile(configPath, "utf-8");
+            const config = JSON.parse(raw) as { projectId?: string };
+            project = config.projectId;
+          } catch {
+            // No config → use cwd basename as fallback
+            const { basename } = await import("node:path");
+            project = basename(process.cwd());
+          }
         }
+
+        if (!project) return;
+
+        const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
+        const { LanceDbStore } = await import("../store/lancedb.js");
+        const { createEmbeddingClient } = await import("../embeddings/factory.js");
+        const { readTableMeta } = await import("../store/meta.js");
+        const { createReranker } = await import("../rerank/factory.js");
+
+        const store = new LanceDbStore(DB_PATH);
+        // Read the project's actual indexed model — the registry default
+        // (dim 1024) is only correct for projects that happen to use it.
+        // A stale/wrong dim here defeats handleSearch's null-check-triggered
+        // lexical-floor degradation entirely (a wrong-dim vector is not
+        // null, so it proceeds to a doomed vector search instead).
+        const storedMeta = await readTableMeta(DB_PATH, project);
+        const embeddings = await createEmbeddingClient(storedMeta?.model, {
+          host: OLLAMA_HOST,
+          autoPull: false, // Never download models in hook path
+          // The meta we just read carries the width too, and passing it skips
+          // both discovery round-trips. That matters here specifically: this
+          // command IS the UserPromptSubmit hook, a fresh process per prompt,
+          // so an availability probe and a dim-detection embed were being paid
+          // from cold before every single search. Measured warm on a developer
+          // machine, they were 85ms against 92ms of actual query embedding —
+          // 48% of the invocation spent rediscovering recorded facts.
+          // Undefined when the project has no meta, which correctly falls
+          // through to full discovery.
+          recordedDim: storedMeta?.dim,
+        });
+
+        // `project` is narrowed to `string` here by the `if (!project) return;`
+        // check above (line 177) — no guard needed in this branch, unlike the
+        // outer catch below where the throw point (and thus narrowing) is unknown.
+        const { clearLastError } = await import("../store/error-state.js");
+        await clearLastError(DB_PATH, project, "search-setup");
+
+        // Resolving a token is a cheap env/file read (no network); the reranker's
+        // own POST, if any, is bounded by RERANK_TIMEOUT_MS well inside the
+        // HOOK_TIMEOUT_MS race this whole execute() runs under.
+        const reranker = (await createReranker()) ?? undefined;
+
+        // The prompt is embedded here exactly once. Retrieval reuses the
+        // vector, and the skill pick (hook path only) gets the same one for
+        // its semantic shortlist instead of paying a second embed.
+        const vectors = publish ? await embeddings.embed([query]).catch(() => null) : null;
+        const queryVector = vectors?.[0];
+        publish?.(queryVector ? { embeddings, vector: queryVector } : null);
+
+        await runSearch({ query, project, limit, queryVector }, { store, embeddings, dbPath: DB_PATH, reranker });
+      };
+
+      // Only the hook path suggests a skill; `project-brain search "<q>"` stays retrieval-only.
+      if (hookPrompt === undefined) {
+        await searchPart();
+      } else {
+        const prompt = hookPrompt;
+        let publish!: (q: SharedQuery | null) => void;
+        const sharedQuery = new Promise<SharedQuery | null>((resolve) => {
+          publish = resolve;
+        });
+        await runWithSkillPick(
+          // Resolve null on any exit so the pick never waits on a search that bailed out early.
+          () => searchPart(publish).finally(() => publish(null)),
+          () => pickSkill(prompt, { projectDir: process.cwd(), queryEmbedding: () => sharedQuery })
+        );
       }
-
-      if (!project) return;
-
-      const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
-      const { LanceDbStore } = await import("../store/lancedb.js");
-      const { createEmbeddingClient } = await import("../embeddings/factory.js");
-      const { readTableMeta } = await import("../store/meta.js");
-      const { createReranker } = await import("../rerank/factory.js");
-
-      const store = new LanceDbStore(DB_PATH);
-      // Read the project's actual indexed model — the registry default
-      // (dim 1024) is only correct for projects that happen to use it.
-      // A stale/wrong dim here defeats handleSearch's null-check-triggered
-      // lexical-floor degradation entirely (a wrong-dim vector is not
-      // null, so it proceeds to a doomed vector search instead).
-      const storedMeta = await readTableMeta(DB_PATH, project);
-      const embeddings = await createEmbeddingClient(storedMeta?.model, {
-        host: OLLAMA_HOST,
-        autoPull: false, // Never download models in hook path
-        // The meta we just read carries the width too, and passing it skips
-        // both discovery round-trips. That matters here specifically: this
-        // command IS the UserPromptSubmit hook, a fresh process per prompt,
-        // so an availability probe and a dim-detection embed were being paid
-        // from cold before every single search. Measured warm on a developer
-        // machine, they were 85ms against 92ms of actual query embedding —
-        // 48% of the invocation spent rediscovering recorded facts.
-        // Undefined when the project has no meta, which correctly falls
-        // through to full discovery.
-        recordedDim: storedMeta?.dim,
-      });
-
-      // `project` is narrowed to `string` here by the `if (!project) return;`
-      // check above (line 177) — no guard needed in this branch, unlike the
-      // outer catch below where the throw point (and thus narrowing) is unknown.
-      const { clearLastError } = await import("../store/error-state.js");
-      await clearLastError(DB_PATH, project, "search-setup");
-
-      // Resolving a token is a cheap env/file read (no network); the reranker's
-      // own POST, if any, is bounded by RERANK_TIMEOUT_MS well inside the
-      // HOOK_TIMEOUT_MS race this whole execute() runs under.
-      const reranker = (await createReranker()) ?? undefined;
-
-      await runSearch({ query, project, limit }, { store, embeddings, dbPath: DB_PATH, reranker });
     } catch (err) {
       // Any setup error → print nothing
       if (project) {

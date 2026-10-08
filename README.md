@@ -276,6 +276,12 @@ With the reranker unit installed, a Claude Code `SessionStart` hook (`project-br
 
 With no token configured, nothing changes — zero network calls, identical result order. Any failure (timeout, non-2xx, a malformed response) falls back silently to the normal, unreranked order rather than surfacing an error. `project-brain health` reports `reranker: configured` once a token resolves.
 
+### Skill suggestions
+
+With a token configured, the same `UserPromptSubmit` hook also asks Jev which installed skill best fits your prompt, in parallel with retrieval, and appends one line to the injected context: `Suggested skill: <name> — <why>`. It only appears when Jev is at least 70% confident; otherwise nothing is added. Skills are read from `~/.claude/skills`, `<project>/.claude/skills`, `~/.agents/skills` and installed plugins (`plugin:skill`), cached on disk (rebuilt when any SKILL.md changes, or after ten minutes). The shortlist is chosen by embedding similarity using the project's embedding model, so prompts in any language the model supports match English skill descriptions; skill vectors are cached next to the skill list, and without embeddings it falls back to keyword overlap.
+
+**The prompt text and the shortlisted skills' names and descriptions (at most 12) are sent to `api.typesafe.ai`** — the same disclosure as the reranker. Trivial prompts send nothing, and on the keyword fallback so do prompts with no overlap with any skill. The whole pick is capped at 1.5s and fails silently. Opt out with `BRAIN_SKILL_PICKER=0`.
+
 ## Recipes — get the most out of it
 
 You talk to your **AI assistant** in natural language; it picks the right tool. These prompts steer it well:
@@ -616,6 +622,7 @@ BRAIN_HTTP_TOKEN=your-secret project-brain serve --http [--port 3000]
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL |
 | `BRAIN_NO_UPDATE_CHECK` | — | Set to `1` to disable the update-available notice |
 | `BRAIN_CONCEPT_MODEL` | `claude-haiku-5-5` | Anthropic model id `conceptualize` uses to write module concepts. Read on each call. Same credentials as `--judge` (`ANTHROPIC_API_KEY` or `ant auth login`). |
+| `BRAIN_SKILL_PICKER` | on | Set to `0` to turn off the Jev skill suggestion the prompt hook appends — see [Skill suggestions](#skill-suggestions). |
 | `TYPESAFE_API_KEY` | — | Opt-in Jev reranker token — see [Reranking (optional)](#reranking-optional). Checked before `~/.project-brain/reranker.json`; a SessionStart hook exports the stored token under this name to Claude Code sessions. |
 
 ## Tuning (environment variables)
