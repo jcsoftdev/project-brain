@@ -283,28 +283,26 @@ function settingsHaveCommand(settings: Record<string, unknown> | null, command: 
 
 /**
  * The architecture guard owns two things: the hook and the global default
- * config. The config is seeded once and survives removal, since the user may
- * have edited it and the hook can be reinstalled against it.
+ * config. The config is seeded when the hook is first installed and survives
+ * removal, since the user may have edited it or deleted it on purpose.
  */
 function withGlobalArchConfig(base: SetupUnit): SetupUnit {
   const configPath = async (ctx: SetupContext) => (await import("../commands/arch.js")).globalArchConfigPath(ctx.dataDir);
   return {
     ...base,
 
-    async inspect(ctx) {
-      const state = await base.inspect(ctx);
-      if (state !== "current") return state;
-      return (await Bun.file(await configPath(ctx)).exists()) ? "current" : "stale";
-    },
-
+    // Seeded only on the first install: a file the user deleted stays deleted.
     async apply(ctx) {
+      const before = await base.inspect(ctx);
       await base.apply(ctx);
+      if (before !== "absent" || (await base.inspect(ctx)) !== "current") return;
       await (await import("../commands/arch.js")).initGlobalArchConfig(ctx.dataDir);
     },
 
     async remove(ctx) {
       await base.remove(ctx);
-      console.log(`Kept ${await configPath(ctx)}; delete it by hand to drop the global default.`);
+      const path = await configPath(ctx);
+      if (await Bun.file(path).exists()) console.log(`Kept ${path}; delete it by hand to drop the global default.`);
     },
   };
 }
