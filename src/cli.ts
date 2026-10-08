@@ -104,6 +104,7 @@ Commands:
   worktree           Show this worktree's brain + port identity, or reclaim dead ones
                        status [--json]   identity for project-brain and mcp-port-registry
                        prune [--dry-run] drop indexes of worktrees git no longer lists
+  arch init          Write .project-brain/architecture.json (hexagonal preset) [--force]
   compact            Reclaim storage from old versions + deleted rows [--project <id>]
   bench <file.jsonl> Measure retrieval quality (recall@k, MRR) for this index
                        [--project <id>] [--pipeline full|hybrid] (default: hybrid)
@@ -289,6 +290,16 @@ switch (command) {
     await execute();
     break;
   }
+  case "arch-guard": {
+    const { execute } = await import("./hooks/arch-guard.js");
+    await execute();
+    break;
+  }
+  case "arch": {
+    const { execute } = await import("./commands/arch.js");
+    await execute(args);
+    break;
+  }
   case "session-title": {
     const { execute } = await import("./hooks/session-title.js");
     await execute(args);
@@ -468,7 +479,7 @@ switch (command) {
   default:
     console.error(`Unknown command: ${command}`);
     console.error(
-      "Usage: project-brain [setup|init|sync|conceptualize|reindex|health|search|update|serve|find|callers|callees|impact|trace|map|code|okf]"
+      "Usage: project-brain [setup|init|arch|sync|conceptualize|reindex|health|search|update|serve|find|callers|callees|impact|trace|map|code|okf]"
     );
     process.exit(1);
 }
