@@ -118,7 +118,7 @@ export function createClaudeJudge(): StaleJudge {
         model: OKF_JUDGE_MODEL,
         max_tokens: 16000,
         betas: ["server-side-fallback-2026-06-01"],
-        fallbacks: [{ model: "claude-opus-4-8" }],
+        fallbacks: [{ model: "claude-opus-5" }],
         thinking: { type: "adaptive" },
         output_config: {
           effort: "medium",

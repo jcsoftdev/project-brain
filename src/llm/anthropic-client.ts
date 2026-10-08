@@ -5,6 +5,11 @@ export interface LlmClient {
   complete(prompt: string): Promise<string>;
 }
 
+/** Read per call, not at import, so `BRAIN_CONCEPT_MODEL` can be set after the module loads. */
+export function resolveConceptModel(): string {
+  return process.env.BRAIN_CONCEPT_MODEL?.trim() || CONCEPT_LLM_MODEL;
+}
+
 /**
  * Zero-arg client: the SDK auto-resolves credentials from whatever the host
  * already has (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or an `ant auth login`
@@ -18,7 +23,7 @@ export function createAnthropicClient(): LlmClient {
   return {
     async complete(prompt: string): Promise<string> {
       const response = await client.messages.create({
-        model: CONCEPT_LLM_MODEL,
+        model: resolveConceptModel(),
         max_tokens: 1500,
         messages: [{ role: "user", content: prompt }],
       });

@@ -392,7 +392,7 @@ describe("runOkfAudit", () => {
           })
         );
         const progressLine = logSpy.mock.calls.map((c) => c[0]).find((line) => String(line).includes("judging"));
-        expect(progressLine).toContain("claude-opus-5");
+        expect(progressLine).toContain("claude-opus-5-5");
       } finally {
         logSpy.mockRestore();
       }
@@ -413,7 +413,7 @@ describe("runOkfAudit", () => {
         );
         const progressLine = logSpy.mock.calls.map((c) => c[0]).find((line) => String(line).includes("judging"));
         expect(progressLine).toContain("jev-latest");
-        expect(progressLine).not.toContain("claude-opus-5");
+        expect(progressLine).not.toContain("claude-opus-5-5");
       } finally {
         logSpy.mockRestore();
       }

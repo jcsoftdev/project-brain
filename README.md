@@ -497,7 +497,7 @@ project-brain okf audit --json             # one JSON object instead of prose, f
 project-brain okf audit --judge            # ask Claude whether a stale finding's reasoning still holds
 ```
 
-`--judge` is opt-in and costs money: it sends `claude-opus-5` the concept's prose plus the actual code diff, for every `stale` finding where the code moved but the reasoning might not have (never for `uncommitted`, `expired`, or a broken anchor). Needs Anthropic credentials (`ANTHROPIC_API_KEY` or `ant auth login`) — without them the run aborts judging and falls back to the plain, unjudged audit. A "still holds" verdict never auto-attests; it only moves the finding into a non-failing `judged` backlog for a human to confirm with a `verified` entry.
+`--judge` is opt-in and costs money: it sends `claude-opus-5-5` the concept's prose plus the actual code diff, for every `stale` finding where the code moved but the reasoning might not have (never for `uncommitted`, `expired`, or a broken anchor). Needs Anthropic credentials (`ANTHROPIC_API_KEY` or `ant auth login`) — without them the run aborts judging and falls back to the plain, unjudged audit. A "still holds" verdict never auto-attests; it only moves the finding into a non-failing `judged` backlog for a human to confirm with a `verified` entry.
 
 `init` writes `index.md` and `log.md` and stops — **no seeded concepts**, because a bundle shipped with examples makes the first `audit` report coverage gaps across the whole repo. Type directories appear when the first concept needs them.
 
@@ -563,6 +563,7 @@ BRAIN_HTTP_TOKEN=your-secret project-brain serve --http [--port 3000]
 | `BRAIN_EMBED_MODEL` | `qwen3-embedding:0.6b` | Ollama embedding model (registry keys: `qwen3-embedding`, `nomic-text`; or any raw Ollama model name; `none` disables embeddings — lexical/keyword search only, no Ollama needed) |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL |
 | `BRAIN_NO_UPDATE_CHECK` | — | Set to `1` to disable the update-available notice |
+| `BRAIN_CONCEPT_MODEL` | `claude-haiku-5-5` | Anthropic model id `conceptualize` uses to write module concepts. Read on each call. Same credentials as `--judge` (`ANTHROPIC_API_KEY` or `ant auth login`). |
 | `TYPESAFE_API_KEY` | — | Opt-in Jev reranker token — see [Reranking (optional)](#reranking-optional). Checked before `~/.project-brain/reranker.json`. |
 
 ## Tuning (environment variables)
