@@ -175,15 +175,26 @@ function shellWords(command: string): string[][] {
 }
 
 export interface CommitInvocation {
-  /** Directories given with `git -C`, applied in order. */
+  /** Directories from a preceding `cd` and from `git -C`, applied in order. */
   dirs: string[];
   /** `-a` / `--all`: the commit takes tracked working-tree changes too, so the staged diff alone undercounts it. */
   all: boolean;
 }
 
-/** The first `git commit` in a shell line, or null. Handles `git -C x commit` and `a && git commit`. */
+/**
+ * The first `git commit` in a shell line, or null. Handles `git -C x commit`, `a && git commit`,
+ * and `cd sub && git commit`. A `cd` whose target cannot be known statically (`cd`, `cd -`, `$VAR`,
+ * `~`) makes the whole line unparseable, so the hook fails open rather than diff the wrong repo.
+ */
 export function parseGitCommit(command: string): CommitInvocation | null {
+  const cds: string[] = [];
   for (const words of shellWords(command)) {
+    if (words[0] === "cd") {
+      const target = words[1];
+      if (target === undefined || target === "-" || /[$~`]/.test(target)) return null;
+      cds.push(target);
+      continue;
+    }
     let i = 0;
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!)) i++;
     if (words[i] !== "git") continue;
@@ -199,7 +210,7 @@ export function parseGitCommit(command: string): CommitInvocation | null {
 
     const flags = words.slice(i + 1);
     const all = flags.some((w) => w === "--all" || (/^-[A-Za-z]+$/.test(w) && w.includes("a")));
-    return { dirs, all };
+    return { dirs: [...cds, ...dirs], all };
   }
   return null;
 }
@@ -210,6 +221,57 @@ export function isTestPath(path: string): boolean {
 
 export function isSourcePath(path: string): boolean {
   return SOURCE_EXT.test(path) && !isTestPath(path);
+}
+
+/**
+ * Paths whose content never leaves the machine: only the name is sent, marked as withheld, so the
+ * triage can still flag "secrets staged". Matched against the file's basename.
+ */
+const SECRET_PATHS: RegExp[] = [
+  /^\.env$/,
+  /^\.env\.(?!example$|sample$).+/,
+  /\.(?:pem|key|p12|pfx|keystore|tfvars)$/,
+  /^id_rsa/,
+  /^id_ed25519/,
+  /^credentials/,
+  /^secrets/,
+];
+
+/** Lines in otherwise ordinary files that look like a credential; the whole line is dropped. */
+const SECRET_LINES: RegExp[] = [
+  /AKIA[0-9A-Z]{16}/,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
+  /\bsk-[A-Za-z0-9_-]{16,}/,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/,
+  /\bxox[bp]-[A-Za-z0-9-]{10,}/,
+];
+
+const WITHHELD = "(content withheld)";
+
+export function isSecretPath(path: string): boolean {
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  return SECRET_PATHS.some((re) => re.test(name));
+}
+
+/**
+ * Removes what must not be sent: the hunks of secret-like files and any line matching a known key
+ * shape. Deliberately simple — it catches the obvious leaks, it is not a secret scanner.
+ */
+export function sanitizeDiff(diff: string): string {
+  const out: string[] = [];
+  let withheld = false;
+  for (const line of diff.split("\n")) {
+    const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+    if (header) {
+      withheld = isSecretPath(header[2]!);
+      out.push(withheld ? `${line}\n${WITHHELD}` : line);
+      continue;
+    }
+    if (withheld) continue;
+    const changed = line.startsWith("+") || line.startsWith("-");
+    out.push(changed && SECRET_LINES.some((re) => re.test(line)) ? `${line[0]}[line redacted: looks like a secret]` : line);
+  }
+  return out.join("\n");
 }
 
 function truncateDiff(diff: string): string {
@@ -332,15 +394,18 @@ export async function commitCheckDecision(payload: unknown, ctx: CommitCheckCont
 
     const staged = names.split("\n").filter((f) => f !== "");
     const hasStagedTest = staged.some(isTestPath);
-    const untested = hasStagedTest ? [] : staged.filter(isSourcePath).slice(0, MAX_TEST_QUESTIONS);
+    const untested = hasStagedTest
+      ? []
+      : staged.filter((f) => isSourcePath(f) && !isSecretPath(f)).slice(0, MAX_TEST_QUESTIONS);
 
     const left = HOOK_BUDGET_MS - BUDGET_MARGIN_MS - (ctx.now() - startedAt);
     if (left <= 0) return SILENT;
 
-    const diff = truncateDiff(diffText);
+    const diff = truncateDiff(sanitizeDiff(diffText));
+    const listed = staged.slice(0, 50).map((f) => (isSecretPath(f) ? `${f} ${WITHHELD}` : f));
     const answers = await (ctx.ask ?? (jevAsk as ArchAsk))(
       token,
-      { diff, files: staged.slice(0, 50) },
+      { diff, files: listed },
       questionsFor(untested),
       { fetchFn: ctx.fetchFn, timeoutMs: Math.min(JEV_TIMEOUT_MS, left) }
     );
