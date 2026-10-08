@@ -23,7 +23,7 @@ async function context(): Promise<SetupContext> {
 }
 
 describe("guidance units", () => {
-  it("declares every unit selected by default except the blocking architecture guard", async () => {
+  it("declares every guidance unit selected by default, the warn-only architecture guard included", async () => {
     const { guidanceUnits } = await import("../../src/setup/units.js");
     const ids = guidanceUnits().map((u) => u.id).sort();
 
@@ -35,7 +35,7 @@ describe("guidance units", () => {
       "hooks:worktree",
     ]);
     const optIn = guidanceUnits().filter((u) => !u.defaultSelected).map((u) => u.id);
-    expect(optIn).toEqual(["hooks:arch-guard"]);
+    expect(optIn).toEqual([]);
   });
 });
 

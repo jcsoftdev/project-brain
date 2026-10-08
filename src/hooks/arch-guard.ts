@@ -22,10 +22,12 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { checkBoundaries, type BoundaryViolation, type ResolveEnv } from "../arch/boundaries.js";
-import { ARCH_CONFIG_PATH, parseArchConfig, type ArchConfig, type ArchMode } from "../arch/config.js";
+import { ARCH_CONFIG_PATH, GLOBAL_ARCH_CONFIG_NAME, parseArchConfig, type ArchConfig, type ArchMode } from "../arch/config.js";
 import { findProjectRoot } from "../commands/resolve-project.js";
+import { DATA_DIR } from "../constants.js";
 import { resolveRerankerToken } from "../rerank/token.js";
 import type { TypesafeFetchFn } from "../typesafe/client.js";
 import {
@@ -62,6 +64,8 @@ export interface ArchGuardContext {
   /** UTF-8 content of an absolute path, or null when absent or unreadable. */
   readFile(absPath: string): string | null;
   exists(absPath: string): boolean;
+  /** Absolute path of the machine-wide default config; absent means there is none to fall back to. */
+  globalConfigPath?: string;
   jev?: JevContext;
 }
 
@@ -126,11 +130,18 @@ interface LoadedConfig {
   config: ArchConfig | null;
   /** "warn" unless the file explicitly says "block"; also "warn" when there is no usable file at all. */
   mode: ArchMode;
+  /** Names the global default in a reason; empty when the project's own file decided. */
+  source: string;
+  /** Where to point the user when the rule itself is wrong. */
+  configPath: string;
 }
 
-function loadConfig(root: string, ctx: ArchGuardContext): LoadedConfig {
-  const raw = ctx.readFile(join(root, ARCH_CONFIG_PATH));
-  if (raw === null) return { config: null, mode: "warn" };
+function displayPath(path: string): string {
+  const home = homedir();
+  return path === home || path.startsWith(`${home}${sep}`) ? `~${path.slice(home.length)}` : path;
+}
+
+function parseConfig(raw: string): Pick<LoadedConfig, "config" | "mode"> {
   try {
     const { config, mode } = parseArchConfig(JSON.parse(raw));
     return { config, mode };
@@ -139,18 +150,35 @@ function loadConfig(root: string, ctx: ArchGuardContext): LoadedConfig {
   }
 }
 
+/**
+ * A project's own file replaces the global default whole, even when it is
+ * unparseable: merging would make the effective rules depend on two files, and
+ * a broken project file must read as "no check", not silently fall through to
+ * rules the project never chose.
+ */
+function loadConfig(root: string, ctx: ArchGuardContext): LoadedConfig {
+  const own = ctx.readFile(join(root, ARCH_CONFIG_PATH));
+  if (own !== null) return { ...parseConfig(own), source: "", configPath: ARCH_CONFIG_PATH };
+
+  const globalRaw = ctx.globalConfigPath ? ctx.readFile(ctx.globalConfigPath) : null;
+  if (globalRaw === null || !ctx.globalConfigPath) return { config: null, mode: "warn", source: "", configPath: ARCH_CONFIG_PATH };
+  const shown = displayPath(ctx.globalConfigPath);
+  return { ...parseConfig(globalRaw), source: ` (global default: ${shown})`, configPath: shown };
+}
+
 function describeViolation(file: string, v: BoundaryViolation): string {
   const target = v.resolved ? ` -> ${v.resolved}` : "";
   return `  ${file} imports "${v.specifier}"${target} (layer "${v.fromLayer}" -> "${v.toLayer}")`;
 }
 
-function boundaryReason(file: string, violations: BoundaryViolation[]): string {
+function boundaryReason(file: string, violations: BoundaryViolation[], loaded: LoadedConfig): string {
   const rules = [...new Set(violations.map((v) => `"${v.fromLayer}" must not depend on "${v.toLayer}"`))];
   return [
-    `Architecture boundary violation (${ARCH_CONFIG_PATH}): ${rules.join("; ")}.`,
+    `Architecture boundary violation (${loaded.configPath}): ${rules.join("; ")}.${loaded.source}`,
     ...violations.map((v) => describeViolation(file, v)),
     "Fix: depend on an abstraction owned by the inner layer (a port/interface) and let an outer layer supply the implementation, " +
-      `or drop the import. If the rule itself is wrong, change ${ARCH_CONFIG_PATH}; set "mode": "warn" to stop blocking.`,
+      `or drop the import. If the rule itself is wrong, change ${loaded.configPath}; set "mode": "warn" to stop blocking` +
+      (loaded.source ? ` or "off" to opt out, or pin a per-project ${ARCH_CONFIG_PATH} (\`project-brain arch init\`).` : "."),
   ].join("\n");
 }
 
@@ -168,9 +196,9 @@ function snapshotOf(tool: string, input: Record<string, unknown>): EditSnapshot 
   };
 }
 
-function constraintReason(violations: ConstraintViolation[]): string {
+function constraintReason(violations: ConstraintViolation[], source: string): string {
   return [
-    "Edit conflicts with a project constraint (judged by Jev from okf/):",
+    `Edit conflicts with a project constraint (judged by Jev from okf/)${source}:`,
     ...violations.map((v) => `  "${v.title}" (okf/${v.concept}) — P(violates)=${v.probability.toFixed(2)}`),
     "Fix: read the constraint and rework the edit so it keeps holding. If the constraint no longer applies, " +
       "update or remove that concept in okf/ first.",
@@ -213,7 +241,9 @@ export async function archGuardDecision(payload: unknown, ctx: ArchGuardContext)
     const file = relative(root, abs).split(sep).join("/");
     if (file === "" || file.startsWith("..")) return ALLOW;
 
-    const { config, mode } = loadConfig(root, ctx);
+    const loaded = loadConfig(root, ctx);
+    const { config, mode } = loaded;
+    if (mode === "off") return ALLOW;
     if (!config && !ctx.jev) return ALLOW;
 
     const fileExists = ctx.exists(abs);
@@ -234,7 +264,7 @@ export async function archGuardDecision(payload: unknown, ctx: ArchGuardContext)
       };
       const violations = checkBoundaries({ config, file, before: current, after, env });
       if (violations.length > 0) {
-        reasons.push(boundaryReason(file, violations));
+        reasons.push(boundaryReason(file, violations, loaded));
         block = mode === "block";
       }
     }
@@ -243,7 +273,7 @@ export async function archGuardDecision(payload: unknown, ctx: ArchGuardContext)
     if (!block && ctx.jev && after !== current) {
       const fuzzy = await jevViolations(ctx.jev, root, file, snapshotOf(tool, input), startedAt);
       if (fuzzy.length > 0) {
-        reasons.push(constraintReason(fuzzy));
+        reasons.push(constraintReason(fuzzy, loaded.source));
         block = mode === "block";
       }
     }
@@ -271,6 +301,7 @@ export function readGuardContext(): ArchGuardContext {
       }
     },
     exists: (path) => existsSync(path),
+    globalConfigPath: join(DATA_DIR, GLOBAL_ARCH_CONFIG_NAME),
     jev: {
       token: () => resolveRerankerToken(),
       constraints: loadCoveringConstraints,
