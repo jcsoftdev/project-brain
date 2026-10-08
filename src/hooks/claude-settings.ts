@@ -403,6 +403,58 @@ export function removeArchGuardHooks(existing: object | null): object {
   return { ...base, hooks };
 }
 
+const COMMIT_CHECK_COMMAND = "project-brain commit-check";
+
+/**
+ * Add the commit pre-filter to a parsed settings object.
+ *
+ * PreToolUse on Bash. No `if: "Bash(git commit *)"` filter: no other hook here uses the field,
+ * and the hook parses the command itself anyway, so a pattern that misses `git -C x commit` or a
+ * chained `&& git commit` would be a silent hole. Every other Bash call exits at once.
+ *
+ * Pure, non-mutating and idempotent, like its siblings.
+ */
+export function upsertCommitCheckHooks(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  addGroup(hooks, "PreToolUse", COMMIT_CHECK_COMMAND, {
+    matcher: "Bash",
+    hooks: [
+      {
+        type: "command",
+        command: COMMIT_CHECK_COMMAND,
+        timeout: 5,
+        statusMessage: "project-brain: pre-commit check",
+      },
+    ],
+  });
+
+  return { ...base, hooks };
+}
+
+/**
+ * Remove the commit pre-filter from a parsed settings object.
+ *
+ * The inverse of {@link upsertCommitCheckHooks}, narrow for {@link removeRoutingHooks}' reason.
+ */
+export function removeCommitCheckHooks(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "PreToolUse", [COMMIT_CHECK_COMMAND]);
+
+  return { ...base, hooks };
+}
+
 const JEV_ENV_COMMAND = "project-brain jev-env";
 
 /**

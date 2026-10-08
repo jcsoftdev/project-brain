@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { AIToolRegistrar } from "../registrars/types.js";
+import { resolveRerankerToken } from "../rerank/token.js";
 
 /**
  * What one setup unit looks like on disk right now.
@@ -70,6 +71,11 @@ export interface SetupUnit {
   description: string;
   /** Checked the first time this unit is ever offered. */
   defaultSelected: boolean;
+  /**
+   * Decides the first-run default from the machine when a constant cannot. Wins over
+   * `defaultSelected` whenever present; a throw falls back to it.
+   */
+  defaultWhen?(ctx: SetupContext): Promise<boolean>;
 
   inspect(ctx: SetupContext): Promise<UnitState>;
   apply(ctx: SetupContext): Promise<void>;
@@ -291,6 +297,7 @@ function hookUnit(spec: {
   strictOf: (ctx: SetupContext) => boolean;
   /** A hook that blocks a tool call is opt-in; the guidance hooks default to on. */
   defaultSelected?: boolean;
+  defaultWhen?: (ctx: SetupContext) => Promise<boolean>;
   load: () => Promise<{
     upsert: (existing: object | null, options: { strict: boolean }) => object;
     remove: (existing: object | null) => object;
@@ -302,6 +309,7 @@ function hookUnit(spec: {
     label: spec.label,
     description: spec.description,
     defaultSelected: spec.defaultSelected ?? true,
+    defaultWhen: spec.defaultWhen,
 
     async inspect(ctx) {
       const settings = await readClaudeSettings(ctx.claudeSettingsPath);
@@ -502,6 +510,22 @@ export function guidanceUnits(): SetupUnit[] {
       load: async () => {
         const m = await import("../hooks/claude-settings.js");
         return { upsert: m.upsertArchGuardHooks, remove: m.removeArchGuardHooks };
+      },
+    }),
+
+    hookUnit({
+      id: "hooks:commit-check",
+      label: "Commit check",
+      description:
+        "before `git commit`, Jev triages the staged diff for review-worthy risk and warns about missing tests " +
+        "(Claude Code only); it sends the staged diff to api.typesafe.ai, so it only works with a TypeSafe token",
+      probe: "project-brain commit-check",
+      strictOf: () => false,
+      defaultSelected: false,
+      defaultWhen: async (ctx) => (await resolveRerankerToken({ dataDir: ctx.dataDir })) !== null,
+      load: async () => {
+        const m = await import("../hooks/claude-settings.js");
+        return { upsert: m.upsertCommitCheckHooks, remove: m.removeCommitCheckHooks };
       },
     }),
   ];
