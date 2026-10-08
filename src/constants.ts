@@ -21,10 +21,10 @@ export const EMBEDDING_MODEL = "nomic-embed-text";
 export const EMBED_NUM_CTX = 8192;
 
 /** Anthropic model used to generate commit-time conceptual summaries. */
-export const CONCEPT_LLM_MODEL = "claude-haiku-4-5";
+export const CONCEPT_LLM_MODEL = "claude-haiku-5-5";
 
 /** Anthropic model used by `okf audit --judge` to judge stale findings. Opt-in — it costs money. */
-export const OKF_JUDGE_MODEL = "claude-opus-5";
+export const OKF_JUDGE_MODEL = "claude-opus-5-5";
 
 /** Name shown for `okf audit --judge-model jev`'s progress line — never claim claude ran when jev did. */
 export const JEV_JUDGE_MODEL_NAME = "jev-latest";
