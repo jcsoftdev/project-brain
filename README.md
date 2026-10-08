@@ -405,6 +405,31 @@ Override the table in `~/.project-brain/model-routing.json`:
 
 Add `--routing-hook-strict` for enforcement: a `PreToolUse` hook that blocks a spawn naming no model and tells the model to re-issue it with one. Off by default — inheriting the session model is sometimes the right call, and the guard fails open on any payload it cannot parse. `--no-routing-hook` skips both.
 
+#### Architecture guard (opt-in)
+
+A `PreToolUse` hook on `Edit`, `Write` and `MultiEdit` that blocks an edit which breaks your architecture boundaries. Not installed by default, because it stops a real tool call:
+
+```bash
+project-brain setup --with=hooks:arch-guard
+project-brain arch init            # writes .project-brain/architecture.json (hexagonal preset, mode "warn")
+```
+
+**Layer rules (deterministic, offline).** `.project-brain/architecture.json` names the layers and what may not depend on what:
+
+```json
+{
+  "layers": { "domain": "src/domain/**", "application": "src/application/**", "infrastructure": ["src/infra/**", "pkg:pg"] },
+  "forbid": [{ "from": "domain", "to": ["application", "infrastructure"] }],
+  "mode": "block"
+}
+```
+
+A layer is a glob or an array of globs; `pkg:<name>` claims a third-party package, which is otherwise in no layer. Only the imports the edit **adds** are judged, so a violation already in the file never blocks an unrelated change. TS/JS (`import`, `export … from`, `require`, literal `import()`), Go (through the `go.mod` module path) and Python are understood; relative specifiers resolve against the edited file, trying extensions and `/index`. `tsconfig` `paths` aliases are not resolved yet. Import syntax is matched in code only, so an import written inside a string, template or docstring is not a dependency. Only an explicit `"mode": "block"` blocks; a missing or unrecognised mode, and a file that is not valid JSON, mean `"warn"`. A warning is delivered to Claude as `additionalContext` next to the tool result, and a malformed file means no check, never a crash.
+
+**Constraints (fuzzy, needs a TypeSafe token).** Any `type: Constraint` concept in `okf/` whose `resource:` anchor covers the edited file is put to Jev as a yes/no question; the edit is blocked when P(violates) is above 0.8. A directory anchor with a trailing slash (`resource: ../src/domain/`) covers every file under it. This layer sends the edit and the constraint text to `api.typesafe.ai`, and only runs when a token resolves (the same one the reranker uses). With no token it is skipped, and a timeout or error lets the edit through. It blocks only when `architecture.json` exists and says `"mode": "block"` (the file may hold nothing else); with no file it only warns, so a token you keep for reranking never stops an edit. At most 10 constraints are asked per edit, the most specific anchors first.
+
+The hook reads stdin and fails open on anything it cannot parse. A block exits `2` with the reason on stderr, which Claude Code hands to the model as the retry prompt.
+
 ### `init`
 
 Initialize a project. Detects the stack, writes a `CLAUDE.md` with MCP instructions, installs a git hook, scaffolds module stubs in `docs/modules/`, and indexes the project.

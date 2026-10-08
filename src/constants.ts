@@ -40,6 +40,14 @@ export const JEV_JUDGE_MODEL_NAME = "jev-latest";
  */
 export const JEV_JUDGE_MIN_CONFIDENCE = 0.6;
 
+/**
+ * `arch-guard` blocks an edit only when Jev's probability that it violates a
+ * constraint is ABOVE this. Higher than {@link JEV_JUDGE_MIN_CONFIDENCE} on
+ * purpose: that one downgrades a verdict to "unclear", which costs a human look;
+ * this one stops an agent mid-edit, and a false block is the more expensive error.
+ */
+export const JEV_ARCH_VIOLATION_MIN_PROBABILITY = 0.8;
+
 /** Max modules conceptualized per commit; the rest are logged as pending. */
 export const CONCEPT_MODULE_CAP = 5;
 

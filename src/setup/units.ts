@@ -289,6 +289,8 @@ function hookUnit(spec: {
   description: string;
   probe: string;
   strictOf: (ctx: SetupContext) => boolean;
+  /** A hook that blocks a tool call is opt-in; the guidance hooks default to on. */
+  defaultSelected?: boolean;
   load: () => Promise<{
     upsert: (existing: object | null, options: { strict: boolean }) => object;
     remove: (existing: object | null) => object;
@@ -299,7 +301,7 @@ function hookUnit(spec: {
     group: "Guidance",
     label: spec.label,
     description: spec.description,
-    defaultSelected: true,
+    defaultSelected: spec.defaultSelected ?? true,
 
     async inspect(ctx) {
       const settings = await readClaudeSettings(ctx.claudeSettingsPath);
@@ -485,6 +487,21 @@ export function guidanceUnits(): SetupUnit[] {
       load: async () => {
         const m = await import("../hooks/claude-settings.js");
         return { upsert: m.upsertSessionTitleHook, remove: m.removeSessionTitleHook };
+      },
+    }),
+
+    hookUnit({
+      id: "hooks:arch-guard",
+      label: "Architecture guard",
+      description:
+        "block edits that break the layer rules in .project-brain/architecture.json (Claude Code only); " +
+        "with a TypeSafe token it also sends the edit plus the okf/ constraint text to api.typesafe.ai for Jev to judge",
+      probe: "project-brain arch-guard",
+      strictOf: () => false,
+      defaultSelected: false,
+      load: async () => {
+        const m = await import("../hooks/claude-settings.js");
+        return { upsert: m.upsertArchGuardHooks, remove: m.removeArchGuardHooks };
       },
     }),
   ];
