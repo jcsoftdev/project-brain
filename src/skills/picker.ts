@@ -17,8 +17,15 @@ export const MAX_DESCRIPTION_CHARS = 220;
 /** Top probability needed to suggest. Below it, silence beats a wrong nudge on every prompt. */
 export const SKILL_CONFIDENCE_THRESHOLD = 0.7;
 
-/** The whole pick (discovery + Jev) must fit here so the prompt hook stays fast. */
-export const SKILL_PICK_BUDGET_MS = 1500;
+/**
+ * Jev's own timeout, counted from when the shortlist is ready (i.e. once the
+ * shared prompt vector has arrived), not from hook start: the vector is only
+ * published after store and embedding setup, which can be well over a second in.
+ */
+export const SKILL_JEV_TIMEOUT_MS = 1000;
+
+/** How long past the end of retrieval the hook will still wait for the pick. */
+export const SKILL_PICK_GRACE_MS = 250;
 
 const NONE = "none";
 
@@ -61,7 +68,7 @@ export interface SkillPickDeps {
   discover?: () => Promise<SkillInfo[]>;
   fetchFn?: TypesafeFetchFn;
   env?: Record<string, string | undefined>;
-  budgetMs?: number;
+  jevTimeoutMs?: number;
   /**
    * Resolves to the prompt embedding the search path already computed, or null
    * when embeddings are unavailable. Present → semantic shortlist (works across
@@ -89,9 +96,6 @@ export async function pickSkill(prompt: string, deps: SkillPickDeps & { projectD
   try {
     if (!skillPickerEnabled(deps.env) || isTrivialPrompt(prompt)) return null;
 
-    const budgetMs = deps.budgetMs ?? SKILL_PICK_BUDGET_MS;
-    const deadline = Date.now() + budgetMs;
-
     const token = await (deps.getToken ?? (() => resolveRerankerToken()))();
     if (!token) return null;
 
@@ -100,9 +104,6 @@ export async function pickSkill(prompt: string, deps: SkillPickDeps & { projectD
     const semantic = shared ? await rankSkillsSemantic(skills, shared, MAX_SKILL_CANDIDATES, deps.vectorCacheDir) : null;
     const candidates = semantic ?? prefilterSkills(prompt, skills);
     if (candidates.length === 0) return null;
-
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) return null;
 
     const described = candidates.map((c) => ({ name: c.name, description: truncate(c.description, MAX_DESCRIPTION_CHARS) }));
     const criteria: Record<string, string> = Object.fromEntries(
@@ -119,7 +120,7 @@ export async function pickSkill(prompt: string, deps: SkillPickDeps & { projectD
 
     const answers = await ask(token, { prompt, skills: described }, { pick: question }, {
       fetchFn: deps.fetchFn,
-      timeoutMs: remaining,
+      timeoutMs: deps.jevTimeoutMs ?? SKILL_JEV_TIMEOUT_MS,
     });
     if (!answers) return null;
 

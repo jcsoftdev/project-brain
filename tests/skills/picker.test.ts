@@ -166,7 +166,7 @@ describe("runWithSkillPick", () => {
       async () => {},
       () => new Promise<string | null>(() => {}),
       (l) => printed.push(l),
-      50
+      { graceMs: 50 }
     );
     expect(performance.now() - start).toBeLessThan(200);
     expect(printed).toEqual([]);
@@ -177,5 +177,68 @@ describe("runWithSkillPick", () => {
     await runWithSkillPick(async () => {}, async () => { throw new Error("x"); }, (l) => printed.push(l));
     await runWithSkillPick(async () => {}, async () => null, (l) => printed.push(l));
     expect(printed).toEqual([]);
+  });
+
+  describe("late shared vector (live-hook regression)", () => {
+    const delayed = <T,>(ms: number, v: T) => new Promise<T>((r) => setTimeout(() => r(v), ms));
+    // Timings are the live ones scaled ~1/10: vector ~1.4s -> 140ms, search ~1.6s -> 160ms.
+    const timing = { graceMs: 25, jevBudgetMs: 100, capMs: 1000 };
+
+    function setup(vectorMs: number) {
+      const { deps: d } = deps({
+        jevTimeoutMs: 100,
+        fetchFn: async () => {
+          await sleep(40);
+          return jevResponse("brain-commit", 0.95);
+        },
+      });
+      const vector = delayed(vectorMs, null);
+      return { d: { ...d, queryEmbedding: () => vector }, vector };
+    }
+
+    it("still prints when the vector arrives after most of the hook and search ends later", async () => {
+      const { d, vector } = setup(140);
+      const printed: string[] = [];
+      await runWithSkillPick(() => sleep(160), () => pickSkill(PROMPT, d), (l) => printed.push(l), {
+        ...timing,
+        vectorSettled: vector,
+      });
+      expect(printed).toHaveLength(1);
+      expect(printed[0]).toStartWith("Suggested skill: brain-commit");
+    });
+
+    it("keeps a hung pick bounded when search finishes early", async () => {
+      const printed: string[] = [];
+      const vector = delayed(5, null);
+      const start = performance.now();
+      await runWithSkillPick(
+        () => sleep(10),
+        () => new Promise<string | null>(() => {}),
+        (l) => printed.push(l),
+        { ...timing, vectorSettled: vector }
+      );
+      const elapsed = performance.now() - start;
+      expect(elapsed).toBeLessThan(180); // vector (5) + jev budget (100), not the cap
+      expect(printed).toEqual([]);
+    });
+
+    it("never waits past the cap", async () => {
+      const start = performance.now();
+      await runWithSkillPick(
+        () => sleep(10),
+        () => new Promise<string | null>(() => {}),
+        () => {},
+        { graceMs: 25, jevBudgetMs: 5000, capMs: 80, vectorSettled: delayed(5, null) }
+      );
+      expect(performance.now() - start).toBeLessThan(150);
+    });
+
+    it("falls back to keywords immediately when the vector is null", async () => {
+      const { deps: d } = deps({ jevTimeoutMs: 100 });
+      const t0 = performance.now();
+      const line = await pickSkill(PROMPT, { ...d, queryEmbedding: async () => null });
+      expect(line).toStartWith("Suggested skill:");
+      expect(performance.now() - t0).toBeLessThan(50);
+    });
   });
 });

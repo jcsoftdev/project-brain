@@ -4,8 +4,24 @@ import { DATA_DIR } from "../constants.js";
 import type { EmbeddingClient } from "../types.js";
 import type { SkillInfo } from "./discovery.js";
 
-/** Skills embedded per run when the vector cache is cold. A hook process is short-lived, so warming is spread across prompts instead of one long embed that the pick budget would kill. */
-export const SKILL_EMBED_BATCH = 48;
+/**
+ * Skills embedded per request when the vector cache is cold. Small on purpose:
+ * the hook calls process.exit as soon as it prints, so each batch is written
+ * to disk the moment it lands rather than at the end of a long embed.
+ */
+export const SKILL_EMBED_BATCH = 16;
+
+/** Time a cold cache may spend warming (past the first batch) before ranking with what exists, so warming never delays the suggestion. */
+export const SKILL_WARM_BUDGET_MS = 400;
+
+/**
+ * Minimum cosine for a skill to be shortlisted. Calibrated on qwen3-embedding:0.6b
+ * against 139 installed skills with Spanish prompts: the right skill scored
+ * 0.714-0.797 (lowest: "graba un video del flujo de login para el PR"), while
+ * unrelated prompts topped out at 0.47-0.62. 0.67 sits in that gap; below it no
+ * skill is a plausible fit, so no Jev call is made.
+ */
+export const SKILL_MIN_COSINE = 0.67;
 
 /** Vector cache entries kept before the file is reset; bounds growth across projects and edits. */
 const MAX_CACHED_VECTORS = 2000;
@@ -57,35 +73,40 @@ async function loadVectors(file: string): Promise<Record<string, number[]>> {
 const round = (v: number[]): number[] => v.map((x) => Number(x.toFixed(VECTOR_DECIMALS)));
 
 /**
- * Top `topN` skills by cosine to the prompt vector, or null when embeddings
- * can't help (no vectors for any skill) so the caller falls back to keywords.
+ * Top `topN` skills by cosine to the prompt vector that clear
+ * {@link SKILL_MIN_COSINE} ([] when none do), or null when embeddings can't
+ * help (no vectors for any skill) so the caller falls back to keywords.
  * Skill vectors are cached on disk by path + mtime + model; a cold cache is
- * warmed {@link SKILL_EMBED_BATCH} skills at a time. Never throws.
+ * warmed {@link SKILL_EMBED_BATCH} skills at a time, persisted per batch, for
+ * at most {@link SKILL_WARM_BUDGET_MS}. Never throws.
  */
 export async function rankSkillsSemantic(
   skills: SkillInfo[],
   query: SharedQuery,
   topN: number,
-  cacheDir: string = DATA_DIR
+  cacheDir: string = DATA_DIR,
+  now: () => number = Date.now
 ): Promise<SkillInfo[] | null> {
   try {
     const file = cachePath(cacheDir, query.embeddings.model ?? "");
     let vectors = await loadVectors(file);
     if (Object.keys(vectors).length > MAX_CACHED_VECTORS) vectors = {};
 
-    const missing = skills.filter((s) => !vectors[vectorKey(s)]).slice(0, SKILL_EMBED_BATCH);
-    if (missing.length > 0) {
-      const embedded = await query.embeddings.embed(missing.map(skillText));
-      if (embedded && embedded.length === missing.length) {
-        missing.forEach((s, i) => {
-          vectors[vectorKey(s)] = round(embedded[i]!);
-        });
-        try {
-          await mkdir(cacheDir, { recursive: true });
-          await writeFile(file, JSON.stringify(vectors));
-        } catch {
-          // Unwritable cache → re-embed next time.
-        }
+    const missing = skills.filter((s) => !vectors[vectorKey(s)]);
+    const warmStart = now();
+    for (let i = 0; i < missing.length; i += SKILL_EMBED_BATCH) {
+      if (i > 0 && now() - warmStart >= SKILL_WARM_BUDGET_MS) break;
+      const batch = missing.slice(i, i + SKILL_EMBED_BATCH);
+      const embedded = await query.embeddings.embed(batch.map(skillText));
+      if (!embedded || embedded.length !== batch.length) break;
+      batch.forEach((s, j) => {
+        vectors[vectorKey(s)] = round(embedded[j]!);
+      });
+      try {
+        await mkdir(cacheDir, { recursive: true });
+        await writeFile(file, JSON.stringify(vectors));
+      } catch {
+        // Unwritable cache → re-embed next time.
       }
     }
 
@@ -93,7 +114,8 @@ export async function rankSkillsSemantic(
       .filter((s) => vectors[vectorKey(s)])
       .map((s) => ({ skill: s, score: cosine(query.vector, vectors[vectorKey(s)]!) }))
       .sort((a, b) => b.score - a.score);
-    return scored.length === 0 ? null : scored.slice(0, topN).map((s) => s.skill);
+    if (scored.length === 0) return null;
+    return scored.filter((s) => s.score >= SKILL_MIN_COSINE).slice(0, topN).map((s) => s.skill);
   } catch {
     return null;
   }
