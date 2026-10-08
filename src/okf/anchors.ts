@@ -36,6 +36,12 @@ export interface Anchor {
   path: string;
   symbol: string | null;
   lines: { start: number; end: number } | null;
+  /**
+   * Set when the resource was written with a trailing slash (`../src/domain/`):
+   * the concept covers everything under that directory, not one file. Absent
+   * otherwise, so an anchor built without it keeps its single-path meaning.
+   */
+  directory?: true;
   origin: "resource" | "sources";
   /** Newest attestation on the concept, or null when it has never been attested. */
   attestedAt: string | null;
@@ -100,6 +106,11 @@ export function toRepoPath(rawPath: string, layout: BundleLayout): string | null
   const rel = relative(layout.repoRoot, absolute);
   if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null;
   return rel.split(sep).join("/");
+}
+
+/** Whether an anchor claims a repo-relative POSIX file: its exact path, or anything under a directory anchor. */
+export function anchorCovers(anchor: Pick<Anchor, "path" | "directory">, repoPath: string): boolean {
+  return anchor.directory ? repoPath.startsWith(`${anchor.path}/`) : anchor.path === repoPath;
 }
 
 /** ISO timestamp of the newest attestation, whichever field carries it. */
@@ -173,6 +184,7 @@ export function collectAnchors(bundle: Bundle, layout: BundleLayout): Anchor[] {
         path,
         symbol: parsed.symbol,
         lines: parsed.lines,
+        ...(parsed.path.endsWith("/") ? { directory: true as const } : {}),
         origin,
         attestedAt,
         staleAfter,

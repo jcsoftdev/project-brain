@@ -8,6 +8,12 @@
  * with the reason on stderr — PreToolUse has no `additionalContext`, so stderr is
  * the only feedback channel it has, and it is only surfaced in verbose mode.
  *
+ * Two layers. The deterministic one checks the imports an edit newly introduces
+ * against `.project-brain/architecture.json`. The fuzzy one asks Jev whether the
+ * edit breaks an OKF `Constraint` that anchors the file — and only runs when a
+ * TypeSafe token exists, since it sends the edit and the constraint text to
+ * api.typesafe.ai.
+ *
  * Fails OPEN on anything it cannot read or understand. A guard that blocks
  * because its own input was unparseable would stop all editing, and the user's
  * only fix would be to uninstall it.
@@ -18,8 +24,35 @@ import { dirname, join, relative, sep } from "node:path";
 import { checkBoundaries, type BoundaryViolation, type ResolveEnv } from "../arch/boundaries.js";
 import { ARCH_CONFIG_PATH, parseArchConfig, type ArchConfig } from "../arch/config.js";
 import { findProjectRoot } from "../commands/resolve-project.js";
+import { resolveRerankerToken } from "../rerank/token.js";
+import type { TypesafeFetchFn } from "../typesafe/client.js";
+import {
+  judgeConstraints,
+  loadCoveringConstraints,
+  type ArchAsk,
+  type ConstraintViolation,
+  type CoveringConstraint,
+  type EditSnapshot,
+} from "../arch/jev.js";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit"]);
+
+/** Everything the Jev layer touches outside the process; absent means the layer is off. */
+export interface JevContext {
+  /** TypeSafe token, or null when none is configured. */
+  token(): Promise<string | null>;
+  constraints(root: string, file: string): Promise<CoveringConstraint[]>;
+  ask?: ArchAsk;
+  fetchFn?: TypesafeFetchFn;
+  /** Milliseconds clock, so the Jev call can be cut to what is left of the hook's own timeout. */
+  now(): number;
+}
+
+/** Matches the `timeout` setup installs; Jev gets what the deterministic layer leaves of it. */
+const HOOK_BUDGET_MS = 5000;
+const JEV_TIMEOUT_MS = 3000;
+/** Leaves room for the process to print and exit before Claude Code kills it. */
+const BUDGET_MARGIN_MS = 500;
 
 export interface ArchGuardContext {
   /** Project root owning a file's directory, or null outside any project. */
@@ -27,6 +60,7 @@ export interface ArchGuardContext {
   /** UTF-8 content of an absolute path, or null when absent or unreadable. */
   readFile(absPath: string): string | null;
   exists(absPath: string): boolean;
+  jev?: JevContext;
 }
 
 export interface GuardDecision {
@@ -111,7 +145,50 @@ function boundaryReason(file: string, violations: BoundaryViolation[]): string {
   ].join("\n");
 }
 
+function snapshotOf(tool: string, input: Record<string, unknown>): EditSnapshot {
+  if (tool === "Write") return { tool, content: typeof input.content === "string" ? input.content : "" };
+  if (tool === "Edit") {
+    return { tool, oldString: String(input.old_string ?? ""), newString: String(input.new_string ?? "") };
+  }
+  const edits = Array.isArray(input.edits) ? input.edits : [];
+  return {
+    tool,
+    edits: edits.filter(isPlainObject).map((e) => ({ oldString: String(e.old_string ?? ""), newString: String(e.new_string ?? "") })),
+  };
+}
+
+function constraintReason(violations: ConstraintViolation[]): string {
+  return [
+    "Edit conflicts with a project constraint (judged by Jev from okf/):",
+    ...violations.map((v) => `  "${v.title}" (okf/${v.concept}) — P(violates)=${v.probability.toFixed(2)}`),
+    "Fix: read the constraint and rework the edit so it keeps holding. If the constraint no longer applies, " +
+      "update or remove that concept in okf/ first.",
+  ].join("\n");
+}
+
+async function jevViolations(
+  jev: JevContext,
+  root: string,
+  file: string,
+  edit: EditSnapshot,
+  startedAt: number
+): Promise<ConstraintViolation[]> {
+  const token = await jev.token();
+  if (!token) return [];
+  const constraints = await jev.constraints(root, file);
+  if (constraints.length === 0) return [];
+
+  const left = HOOK_BUDGET_MS - BUDGET_MARGIN_MS - (jev.now() - startedAt);
+  if (left <= 0) return [];
+  return judgeConstraints(token, constraints, file, edit, {
+    ask: jev.ask,
+    fetchFn: jev.fetchFn,
+    timeoutMs: Math.min(JEV_TIMEOUT_MS, left),
+  });
+}
+
 export async function archGuardDecision(payload: unknown, ctx: ArchGuardContext): Promise<GuardDecision> {
+  const startedAt = ctx.jev?.now() ?? 0;
   try {
     if (!isPlainObject(payload)) return ALLOW;
     const tool = payload.tool_name;
@@ -126,7 +203,7 @@ export async function archGuardDecision(payload: unknown, ctx: ArchGuardContext)
     if (file === "" || file.startsWith("..")) return ALLOW;
 
     const config = loadConfig(root, ctx);
-    if (!config) return ALLOW;
+    if (!config && !ctx.jev) return ALLOW;
 
     const fileExists = ctx.exists(abs);
     const current = fileExists ? ctx.readFile(abs) : "";
@@ -136,14 +213,31 @@ export async function archGuardDecision(payload: unknown, ctx: ArchGuardContext)
     const after = postEditContent(tool, input, current);
     if (after === null) return ALLOW;
 
-    const env: ResolveEnv = {
-      exists: (p) => ctx.exists(join(root, p)),
-      readFile: (p) => ctx.readFile(join(root, p)),
-    };
-    const violations = checkBoundaries({ config, file, before: current, after, env });
-    if (violations.length === 0) return ALLOW;
+    const reasons: string[] = [];
+    let block = false;
 
-    return { block: config.mode === "block", reason: boundaryReason(file, violations) };
+    if (config) {
+      const env: ResolveEnv = {
+        exists: (p) => ctx.exists(join(root, p)),
+        readFile: (p) => ctx.readFile(join(root, p)),
+      };
+      const violations = checkBoundaries({ config, file, before: current, after, env });
+      if (violations.length > 0) {
+        reasons.push(boundaryReason(file, violations));
+        block = config.mode === "block";
+      }
+    }
+
+    // A deterministic block is already final; spending a network call on top of it only adds latency.
+    if (!block && ctx.jev && after !== current) {
+      const fuzzy = await jevViolations(ctx.jev, root, file, snapshotOf(tool, input), startedAt);
+      if (fuzzy.length > 0) {
+        reasons.push(constraintReason(fuzzy));
+        block = (config?.mode ?? "block") === "block";
+      }
+    }
+
+    return reasons.length === 0 ? ALLOW : { block, reason: reasons.join("\n\n") };
   } catch {
     return ALLOW;
   }
@@ -166,6 +260,11 @@ export function readGuardContext(): ArchGuardContext {
       }
     },
     exists: (path) => existsSync(path),
+    jev: {
+      token: () => resolveRerankerToken(),
+      constraints: loadCoveringConstraints,
+      now: () => performance.now(),
+    },
   };
 }
 
