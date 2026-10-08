@@ -2,7 +2,7 @@ import type { EmbeddingClient, VectorStore } from "../types.js";
 import type { Reranker } from "../rerank/jev.js";
 import { handleSearch } from "../tools/search.js";
 import { isTrivialPrompt } from "./trivial-prompt.js";
-import { pickSkill, SKILL_PICK_BUDGET_MS } from "../skills/picker.js";
+import { pickSkill, SKILL_JEV_TIMEOUT_MS, SKILL_PICK_GRACE_MS } from "../skills/picker.js";
 import type { SharedQuery } from "../skills/semantic.js";
 
 /**
@@ -133,28 +133,52 @@ export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<voi
   }
 }
 
+export interface SkillPickTiming {
+  /** Settles when the shared prompt vector is published (or given up on). */
+  vectorSettled?: Promise<unknown>;
+  graceMs?: number;
+  jevBudgetMs?: number;
+  /** Absolute cap from hook start; the hook's own self-timeout minus room to print. */
+  capMs?: number;
+}
+
 /**
  * Runs retrieval and the skill pick side by side, so the hook's latency is
  * max(search, pick) rather than their sum, then prints the suggestion after
- * the retrieved context. The pick is raced against its own budget so a hung
- * lookup can never hold the prompt past it; a failed pick prints nothing.
+ * the retrieved context.
+ *
+ * The pick is not given a fixed budget from hook start: it can't even begin
+ * Jev until the vector is published, which happens after store/embedding
+ * setup. Instead it may run until the LATER of search-done + grace and
+ * vector-arrival + Jev budget, never past the cap. A failed pick prints nothing.
  */
 export async function runWithSkillPick(
   search: () => Promise<void>,
   pick: () => Promise<string | null>,
   print: (line: string) => void = console.log,
-  budgetMs: number = SKILL_PICK_BUDGET_MS
+  timing: SkillPickTiming = {}
 ): Promise<void> {
+  const { vectorSettled, graceMs = SKILL_PICK_GRACE_MS, jevBudgetMs = SKILL_JEV_TIMEOUT_MS, capMs = HOOK_TIMEOUT_MS - 250 } = timing;
+  const start = Date.now();
+  let vectorAt: number | undefined;
+  void vectorSettled?.then(() => {
+    vectorAt = Date.now();
+  });
+
+  const picked = pick().catch(() => null);
+  await search();
+  await vectorSettled; // already settled once search returned; makes vectorAt visible
+  const searchDoneAt = Date.now();
+
+  const deadline = Math.min(start + capMs, Math.max(searchDoneAt + graceMs, (vectorAt === undefined ? 0 : vectorAt + jevBudgetMs)));
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const picked = Promise.race([
-    pick().catch(() => null),
-    new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), budgetMs);
-    }),
-  ]);
   try {
-    await search();
-    const line = await picked;
+    const line = await Promise.race([
+      picked,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
+      }),
+    ]);
     if (line) print(line);
   } finally {
     clearTimeout(timer);
@@ -288,7 +312,15 @@ export async function execute(
         const queryVector = vectors?.[0];
         publish?.(queryVector ? { embeddings, vector: queryVector } : null);
 
-        await runSearch({ query, project, limit, queryVector }, { store, embeddings, dbPath: DB_PATH, reranker });
+        // A shared embed that was attempted and failed must not be retried by
+        // handleSearch (an Ollama 4xx would be sent twice): hand it a client
+        // that reports "unavailable" so it takes its existing BM25 path.
+        const searchEmbeddings =
+          publish && !queryVector
+            ? { dim: embeddings.dim, model: embeddings.model, isAvailable: () => embeddings.isAvailable(), embed: async () => null }
+            : embeddings;
+
+        await runSearch({ query, project, limit, queryVector }, { store, embeddings: searchEmbeddings, dbPath: DB_PATH, reranker });
       };
 
       // Only the hook path suggests a skill; `project-brain search "<q>"` stays retrieval-only.
@@ -303,7 +335,9 @@ export async function execute(
         await runWithSkillPick(
           // Resolve null on any exit so the pick never waits on a search that bailed out early.
           () => searchPart(publish).finally(() => publish(null)),
-          () => pickSkill(prompt, { projectDir: process.cwd(), queryEmbedding: () => sharedQuery })
+          () => pickSkill(prompt, { projectDir: process.cwd(), queryEmbedding: () => sharedQuery }),
+          console.log,
+          { vectorSettled: sharedQuery }
         );
       }
     } catch (err) {

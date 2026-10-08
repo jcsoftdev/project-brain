@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSearch } from "../../src/commands/search.js";
@@ -151,6 +151,68 @@ describe("semantic shortlist", () => {
     // Same fallback still works when the prompt does overlap.
     const line = await pickSkill("write the git commit message", { ...base, queryEmbedding: async () => null });
     expect(line).toStartWith("Suggested skill: brain-commit");
+  });
+});
+
+describe("similarity floor", () => {
+  it("drops skills below the cosine floor, returning [] rather than null", async () => {
+    const { client } = fakeEmbeddings();
+    const far: SharedQuery = { embeddings: client, vector: [0.5, 0.5, 0.5] }; // cos ~0.58 to every axis
+    expect(await rankSkillsSemantic(SKILLS, far, 12, dir)).toEqual([]);
+  });
+
+  it("makes no Jev call and prints no line when nothing clears the floor", async () => {
+    const { client } = fakeEmbeddings();
+    const j = jev("brain-commit");
+    const line = await pickSkill("explícame cómo funciona el store", {
+      projectDir: "/p",
+      env: {},
+      getToken: async () => "tok",
+      discover: async () => SKILLS,
+      queryEmbedding: async () => ({ embeddings: client, vector: [0.5, 0.5, 0.5] }),
+      vectorCacheDir: dir,
+      fetchFn: j.fetchFn,
+    });
+    expect(line).toBeNull();
+    expect(j.calls).toHaveLength(0);
+  });
+});
+
+describe("cold-cache warming", () => {
+  const many: SkillInfo[] = Array.from({ length: 40 }, (_, i) => ({
+    name: `s${i}`,
+    description: "commit helper",
+    path: `/s/${i}/SKILL.md`,
+    mtime: 1,
+  }));
+
+  it("persists each batch of at most 16 as soon as it lands", async () => {
+    let calls = 0;
+    const client: EmbeddingClient = {
+      dim: 3,
+      model: "warm",
+      isAvailable: async () => true,
+      embed: async (texts) => {
+        calls++;
+        if (calls === 2) throw new Error("process died here");
+        expect(texts.length).toBeLessThanOrEqual(16);
+        return texts.map(vec);
+      },
+    };
+    await rankSkillsSemantic(many, { embeddings: client, vector: [1, 0, 0] }, 12, dir);
+
+    const file = (await readdir(dir)).find((f) => f.startsWith("skill-vectors-"))!;
+    const saved = JSON.parse(await readFile(join(dir, file), "utf-8"));
+    expect(Object.keys(saved)).toHaveLength(16);
+  });
+
+  it("stops warming past the budget and still ranks with what exists", async () => {
+    const { client, calls } = fakeEmbeddings("budget");
+    let t = 0;
+    const top = await rankSkillsSemantic(many, { embeddings: client, vector: [1, 0, 0] }, 12, dir, () => (t += 500));
+
+    expect(calls).toHaveLength(1);
+    expect(top!.length).toBe(12);
   });
 });
 
