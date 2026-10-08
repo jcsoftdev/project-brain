@@ -1,5 +1,5 @@
 import { RERANK_TIMEOUT_MS } from "../constants.js";
-import { ask, type NoulQuestion, type TypesafeFetchFn } from "../typesafe/client.js";
+import { askDetailed, type AskFailure, type NoulQuestion, type TypesafeFetchFn } from "../typesafe/client.js";
 
 /** One item eligible for reranking: enough for Jev to judge relevance without shipping the whole chunk. */
 export interface RerankCandidate {
@@ -15,7 +15,11 @@ export interface RerankCandidate {
  */
 export interface Reranker {
   rerank(query: string, candidates: RerankCandidate[]): Promise<number[] | null>;
+  /** Same call as `rerank`, but names why it failed. Optional so existing implementations stay valid. */
+  rerankWithReason?(query: string, candidates: RerankCandidate[]): Promise<RerankOutcome>;
 }
+
+export type RerankOutcome = { scores: number[] } | { reason: AskFailure };
 
 /** Injectable fetch-like function — matches src/embeddings/factory.ts's DI pattern so tests never stub global fetch. */
 export type JevFetchFn = TypesafeFetchFn;
@@ -53,7 +57,12 @@ export class JevReranker implements Reranker {
   }
 
   async rerank(query: string, candidates: RerankCandidate[]): Promise<number[] | null> {
-    if (candidates.length === 0) return [];
+    const outcome = await this.rerankWithReason(query, candidates);
+    return "scores" in outcome ? outcome.scores : null;
+  }
+
+  async rerankWithReason(query: string, candidates: RerankCandidate[]): Promise<RerankOutcome> {
+    if (candidates.length === 0) return { scores: [] };
 
     const stateCandidates: Record<string, { file: string; symbol?: string; content: string }> = {};
     const questions: Record<string, NoulQuestion> = {};
@@ -73,14 +82,14 @@ export class JevReranker implements Reranker {
       };
     });
 
-    const answers = await ask(this.token, { query, candidates: stateCandidates }, questions, {
+    const outcome = await askDetailed(this.token, { query, candidates: stateCandidates }, questions, {
       fetchFn: this.fetchFn,
       timeoutMs: this.timeoutMs,
     });
-    // ask() already guarantees every key resolves to a valid noul answer, or
-    // the whole call is null — never a partial reorder on a partial response.
-    if (!answers) return null;
+    // askDetailed() already guarantees every key resolves to a valid noul answer, or
+    // the whole call fails — never a partial reorder on a partial response.
+    if (!outcome.ok) return { reason: outcome.reason };
 
-    return candidates.map((_, i) => answers[`c${i}`]!.noul);
+    return { scores: candidates.map((_, i) => outcome.answers[`c${i}`]!.noul) };
   }
 }

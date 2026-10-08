@@ -5,6 +5,8 @@ import { EMBEDDING_MODEL, VERSION } from "../constants.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
 import { readLastError, type LastError } from "../store/error-state.js";
 import { HOOK_TIMEOUT_MS } from "./search.js";
+import { formatRerankerProbeLine, probeReranker, type RerankerProbe } from "../rerank/probe.js";
+import type { Reranker } from "../rerank/jev.js";
 import { formatLastSyncLine, readSyncStatus, type SyncStatusReport } from "./sync-status.js";
 
 /** Whether <root>/CLAUDE.md's project-brain block matches the current template; "missing" when there is no `.project-brain/project.json` to compare it against. */
@@ -32,6 +34,10 @@ export interface HealthOptions {
   rerankerTokenSource?: "env" | "file";
   /** File path the token was read from — set only when rerankerTokenSource is "file". */
   rerankerTokenPath?: string;
+  /** The reranker to probe live (one tiny call). Omitted → no probe unless `reranker` is "off". */
+  rerankerClient?: Reranker;
+  /** Clock for the probe's latency. Defaults to performance.now. */
+  now?: () => number;
   /**
    * Staleness of the project CLAUDE.md block, resolved by the caller via
    * {@link readProjectRulesState} — same pattern as `manifestChunks`: `health`
@@ -66,6 +72,8 @@ export interface HealthResult {
   rerankerTokenSource?: "env" | "file";
   /** File path the token was read from — present only when rerankerTokenSource is "file". */
   rerankerTokenPath?: string;
+  /** Live Jev probe result; omitted when a token resolved but no client was supplied to probe. */
+  rerankerProbe?: RerankerProbe;
   /** Omitted when the caller did not resolve it (no root available). */
   projectRules?: ProjectRulesState;
 }
@@ -93,11 +101,15 @@ export async function measureEmbedLatency(embeddings: EmbeddingClient): Promise<
 export async function runHealth(options: HealthOptions): Promise<HealthResult> {
   const { projectId, store, embeddings, dbPath, manifestChunks, lastSync } = options;
 
-  const [embeddingsAvailable, chunks, lastError, embedLatencyMs] = await Promise.all([
+  const rerankerOff = (options.reranker ?? "off") === "off";
+  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, rerankerProbe] = await Promise.all([
     embeddings.isAvailable(),
     store.countChunks(projectId),
     readLastError(dbPath, projectId),
     measureEmbedLatency(embeddings),
+    options.rerankerClient || rerankerOff
+      ? probeReranker(rerankerOff ? undefined : options.rerankerClient, options.now)
+      : Promise.resolve(undefined),
   ]);
 
   return {
@@ -114,6 +126,7 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
     reranker: options.reranker ?? "off",
     ...(options.rerankerTokenSource ? { rerankerTokenSource: options.rerankerTokenSource } : {}),
     ...(options.rerankerTokenPath ? { rerankerTokenPath: options.rerankerTokenPath } : {}),
+    ...(rerankerProbe ? { rerankerProbe } : {}),
     ...(lastSync ? { lastSync } : {}),
     ...(options.projectRules !== undefined ? { projectRules: options.projectRules } : {}),
   };
@@ -204,14 +217,14 @@ export async function execute(args: string[]): Promise<void> {
   const store = new LanceDbStore(DB_PATH);
   const { readTableMeta } = await import("../store/meta.js");
   const { resolveSyncModel } = await import("./sync.js");
-  const { resolveRerankerTokenWithSource } = await import("../rerank/token.js");
+  const { createRerankerWithSource } = await import("../rerank/factory.js");
   const storedMeta = await readTableMeta(DB_PATH, projectId);
   const embeddings = await createEmbeddingClient(
     resolveSyncModel({ envModel: process.env.BRAIN_EMBED_MODEL || undefined, storedMeta }),
     { host: OLLAMA_HOST, autoPull: false }
   );
-  // Env/file read only — never a network call, per the health contract.
-  const resolvedToken = await resolveRerankerTokenWithSource();
+  // Token resolution is an env/file read; the only network call is the one tiny probe in runHealth.
+  const resolvedReranker = await createRerankerWithSource();
 
   const result = await runHealth({
     projectId,
@@ -220,9 +233,10 @@ export async function execute(args: string[]): Promise<void> {
     dbPath: DB_PATH,
     manifestChunks: await readManifestChunks(root),
     lastSync: (await readSyncStatus(root)) ?? undefined,
-    reranker: resolvedToken ? "on" : "off",
-    rerankerTokenSource: resolvedToken?.source,
-    rerankerTokenPath: resolvedToken?.path,
+    reranker: resolvedReranker ? "on" : "off",
+    rerankerTokenSource: resolvedReranker?.source,
+    rerankerTokenPath: resolvedReranker?.path,
+    rerankerClient: resolvedReranker?.reranker,
     projectRules: await readProjectRulesState(root),
   });
 
@@ -245,6 +259,8 @@ export async function execute(args: string[]): Promise<void> {
     );
   }
   console.log(`  ${formatRerankerLine(result)}`);
+  const probeLine = result.rerankerProbe && formatRerankerProbeLine(result.rerankerProbe);
+  if (probeLine) console.log(`  ${probeLine}`);
   console.log(`  Version:    ${result.version}`);
   if (result.lastSync) {
     console.log(`  Last sync:  ${formatLastSyncLine(result.lastSync)}`);

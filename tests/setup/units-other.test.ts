@@ -72,6 +72,10 @@ describe("Jev reranker unit", () => {
     expect(u.defaultSelected).toBe(false);
     expect(u.group).toBe("Other");
     expect(u.description).toContain("TypeSafe");
+    expect(u.description).toContain("api.typesafe.ai");
+    expect(u.description).toContain("84.3%");
+    expect(u.description).toContain("0.894");
+    expect(u.description).not.toContain("\n");
   });
 
   it("is absent until a token is written, then current, then absent again on remove", async () => {

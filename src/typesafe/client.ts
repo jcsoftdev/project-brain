@@ -132,19 +132,23 @@ function coerceAnswer(question: TypesafeQuestion, raw: unknown): TypesafeAnswer 
   };
 }
 
+/** Why an {@link askDetailed} call produced no answers — never carries the token or any response body. */
+export type AskFailure = "timeout" | "network error" | "malformed response" | `http ${number}`;
+
+export type AskOutcome<Q extends Record<string, TypesafeQuestion>> =
+  | { ok: true; answers: AnswersFor<Q> }
+  | { ok: false; reason: AskFailure };
+
 /**
- * Fans a batch of independently-answered questions out to Jev in one request.
- *
- * Returns null on ANY failure — see the module doc for the full list. A
- * non-null result is guaranteed to carry a validly-shaped answer for every
- * key in `questions`, typed per that question's declared `type`.
+ * Like {@link ask}, but names why a failed call failed so health can tell an
+ * expired token (401) from a slow network (timeout). Never throws.
  */
-export async function ask<Q extends Record<string, TypesafeQuestion>>(
+export async function askDetailed<Q extends Record<string, TypesafeQuestion>>(
   token: string,
   state: unknown,
   questions: Q,
   options: AskOptions = {}
-): Promise<AnswersFor<Q> | null> {
+): Promise<AskOutcome<Q>> {
   const fetchFn = options.fetchFn ?? fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const model = options.model ?? DEFAULT_MODEL;
@@ -160,30 +164,48 @@ export async function ask<Q extends Record<string, TypesafeQuestion>>(
       body: JSON.stringify({ model, state, questions }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch {
+  } catch (err) {
     // Network error, abort, or timeout — treat as opt-out, not a crash.
-    return null;
+    const name = (err as { name?: string } | null)?.name;
+    return { ok: false, reason: name === "TimeoutError" || name === "AbortError" ? "timeout" : "network error" };
   }
 
-  if (!response.ok) return null;
+  if (!response.ok) return { ok: false, reason: `http ${response.status}` };
 
   let data: unknown;
   try {
     data = await response.json();
   } catch {
-    return null;
+    return { ok: false, reason: "malformed response" };
   }
 
   const rawAnswers = isPlainObject(data) ? data.answers : undefined;
-  if (!isPlainObject(rawAnswers)) return null;
+  if (!isPlainObject(rawAnswers)) return { ok: false, reason: "malformed response" };
 
   const result: Record<string, TypesafeAnswer> = {};
   for (const key of Object.keys(questions)) {
     const answer = coerceAnswer(questions[key]!, rawAnswers[key]);
     // One missing/malformed answer invalidates the whole batch — a caller
     // must never see a partially-typed result.
-    if (!answer) return null;
+    if (!answer) return { ok: false, reason: "malformed response" };
     result[key] = answer;
   }
-  return result as AnswersFor<Q>;
+  return { ok: true, answers: result as AnswersFor<Q> };
+}
+
+/**
+ * Fans a batch of independently-answered questions out to Jev in one request.
+ *
+ * Returns null on ANY failure — see the module doc for the full list. A
+ * non-null result is guaranteed to carry a validly-shaped answer for every
+ * key in `questions`, typed per that question's declared `type`.
+ */
+export async function ask<Q extends Record<string, TypesafeQuestion>>(
+  token: string,
+  state: unknown,
+  questions: Q,
+  options: AskOptions = {}
+): Promise<AnswersFor<Q> | null> {
+  const outcome = await askDetailed(token, state, questions, options);
+  return outcome.ok ? outcome.answers : null;
 }
