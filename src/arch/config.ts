@@ -19,6 +19,8 @@ export interface ArchRule {
 export interface LayerMatcher {
   /** Repo-relative POSIX globs matched against a file or a resolved import. */
   globs: Bun.Glob[];
+  /** The source text of `globs`, index for index; `layersOfPath` reads their literal segments. */
+  patterns: string[];
   /** Bare package names (`pkg:pg`), the one way a layer can own a third-party import. */
   packages: string[];
 }
@@ -49,17 +51,16 @@ const PACKAGE_PREFIX = "pkg:";
 
 /**
  * The hexagonal/clean preset written by `arch init` and by setup as the global
- * default. Several spellings per layer, so it fits a tree it has never seen; a
- * tree matching none of them is simply unchecked. Warn, not block: a fresh
- * install must never stop an edit.
- *
- * Layer order is the tie-break (see `layersOfPath`), so it runs innermost-first.
+ * default. Only unambiguous folder names: `core`, `entities` and `adapters`
+ * mean other things in too many trees (TypeORM entities, a shared `core/`), so
+ * a project that uses them adds them to its own file. A tree matching no layer
+ * is simply unchecked. Warn, not block: a fresh install must never stop an edit.
  */
 export const HEXAGONAL_PRESET = {
   layers: {
-    domain: ["**/domain/**", "**/core/**", "**/entities/**"],
+    domain: ["**/domain/**"],
     application: ["**/application/**", "**/use-cases/**", "**/usecases/**"],
-    infrastructure: ["**/infrastructure/**", "**/infra/**", "**/adapters/**"],
+    infrastructure: ["**/infrastructure/**", "**/infra/**"],
   },
   forbid: [
     { from: "domain", to: ["application", "infrastructure"] },
@@ -79,12 +80,15 @@ function toStrings(value: unknown): string[] | null {
 }
 
 function buildMatcher(patterns: string[]): LayerMatcher {
-  const matcher: LayerMatcher = { globs: [], packages: [] };
+  const matcher: LayerMatcher = { globs: [], patterns: [], packages: [] };
   for (const pattern of patterns) {
     const trimmed = pattern.trim();
     if (trimmed === "") continue;
     if (trimmed.startsWith(PACKAGE_PREFIX)) matcher.packages.push(trimmed.slice(PACKAGE_PREFIX.length));
-    else matcher.globs.push(new Bun.Glob(trimmed));
+    else {
+      matcher.globs.push(new Bun.Glob(trimmed));
+      matcher.patterns.push(trimmed);
+    }
   }
   return matcher;
 }
@@ -137,18 +141,36 @@ export function parseArchConfig(raw: unknown): ParsedArchConfig {
   return { config: { layers, forbid, mode }, mode, warnings };
 }
 
+const GLOB_CHARS = /[*?[\]{}]/;
+
+/**
+ * Where in the path a matching glob "lands": the index of the last occurrence
+ * of the glob's last literal directory segment (`domain` for `**\/domain/**`).
+ * A glob with no literal segment lands at -1, behind any that has one.
+ */
+function matchDepth(pattern: string, segments: string[]): number {
+  const literal = pattern.split("/").filter((s) => s !== "" && !GLOB_CHARS.test(s)).pop();
+  return literal === undefined ? -1 : segments.lastIndexOf(literal);
+}
+
 /**
  * The layer a repo-relative POSIX path belongs to, as a list of at most one.
  *
- * A path can match several layers (`src/infra/domain/x.ts`). The FIRST layer
- * declared wins, so the answer never depends on glob specificity and the
- * preset's innermost-first order makes the strictest layer win.
+ * A path can match several layers (`src/infra/domain/x.ts`). The layer whose
+ * matched directory is INNERMOST (closest to the file) wins; a tie at the same
+ * depth goes to the layer declared first, so the answer is always deterministic.
  */
 export function layersOfPath(config: ArchConfig, repoPath: string): string[] {
+  const segments = repoPath.split("/");
+  let best: { name: string; depth: number } | null = null;
   for (const [name, matcher] of config.layers) {
-    if (matcher.globs.some((g) => g.match(repoPath))) return [name];
+    matcher.globs.forEach((glob, i) => {
+      if (!glob.match(repoPath)) return;
+      const depth = matchDepth(matcher.patterns[i] ?? "", segments);
+      if (best === null || depth > best.depth) best = { name, depth };
+    });
   }
-  return [];
+  return best ? [(best as { name: string }).name] : [];
 }
 
 /** Names of every layer that explicitly claims a bare package specifier. */

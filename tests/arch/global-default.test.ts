@@ -83,20 +83,40 @@ describe("hexagonal preset", () => {
 
   it.each([
     ["src/domain/user.ts", "domain"],
-    ["packages/api/src/core/user.ts", "domain"],
-    ["src/entities/user.ts", "domain"],
+    ["packages/api/src/domain/user.ts", "domain"],
     ["src/use-cases/create.ts", "application"],
     ["app/usecases/create.ts", "application"],
     ["src/infra/db.ts", "infrastructure"],
-    ["src/adapters/http/client.ts", "infrastructure"],
     ["src/infrastructure/db.ts", "infrastructure"],
   ])("places %s in %s", (path, expected) => {
     expect(layer(path)).toBe(expected);
   });
 
-  it("resolves a multi-layer path to the first declared layer", () => {
-    expect(layersOfPath(config, "src/infra/domain/x.ts")).toEqual(["domain"]);
-    expect(layersOfPath(config, "src/application/adapters/x.ts")).toEqual(["application"]);
+  it("resolves a multi-layer path to the innermost matching directory", () => {
+    expect(layer("src/infra/domain/x.ts")).toBe("domain");
+    expect(layer("src/domain/infra/x.ts")).toBe("infrastructure");
+    expect(layer("packages/x/src/application/svc.ts")).toBe("application");
+  });
+
+  it("breaks a same-depth tie by declaration order", () => {
+    const tie = parseArchConfig({ layers: { b: "x/**", a: "**/x/**" }, forbid: [{ from: "a", to: "b" }] }).config!;
+    expect(layersOfPath(tie, "x/f.ts")).toEqual(["b"]);
+  });
+
+  // Names common outside hexagonal code must not read as a layer.
+  it.each([
+    "src/infrastructure/entities/user.entity.ts",
+    "src/adapters/core/x.ts",
+    "src/lib/core/utils.ts",
+    "app/core/config.py",
+  ])("does not misclassify %s as domain", (path) => {
+    expect(layer(path)).not.toBe("domain");
+  });
+
+  it("still catches a violation under packages/core/src/application", async () => {
+    const files = { [GLOBAL]: PRESET, [`${ROOT}/packages/core/src/infra/db.ts`]: "export {};\n" };
+    const d = await archGuardDecision(write("packages/core/src/application/svc.ts", 'import "../infra/db";\n'), ctx(files));
+    expect(d.reason).toContain('"application" must not depend on "infrastructure"');
   });
 
   it("is a no-op for a repo whose paths match no layer", async () => {
@@ -105,9 +125,9 @@ describe("hexagonal preset", () => {
     expect(d).toEqual({ block: false });
   });
 
-  it("flags application -> infrastructure across spelling variants", async () => {
-    const files = { [GLOBAL]: PRESET, [`${ROOT}/src/adapters/db.ts`]: "export {};\n" };
-    const d = await archGuardDecision(write("src/use-cases/create.ts", 'import "../adapters/db";\n'), ctx(files));
+  it("flags application -> infrastructure across the use-cases spelling", async () => {
+    const files = { [GLOBAL]: PRESET, [`${ROOT}/src/infra/db.ts`]: "export {};\n" };
+    const d = await archGuardDecision(write("src/use-cases/create.ts", 'import "../infra/db";\n'), ctx(files));
     expect(d.reason).toContain('"application" must not depend on "infrastructure"');
   });
 });
@@ -140,7 +160,7 @@ describe("hooks:arch-guard unit and the global file", () => {
     return guidanceUnits().find((u) => u.id === "hooks:arch-guard")!;
   }
 
-  it("apply seeds the preset; remove keeps the file; inspect needs both hook and file", async () => {
+  it("apply seeds the preset on first install; remove keeps the file", async () => {
     const c = await context();
     const u = await unit();
     const path = join(c.dataDir, "architecture.json");
@@ -149,13 +169,21 @@ describe("hooks:arch-guard unit and the global file", () => {
     expect(JSON.parse(await readFile(path, "utf8")).mode).toBe("warn");
     expect(await u.inspect(c)).toBe("current");
 
-    await rm(path);
-    expect(await u.inspect(c)).toBe("stale");
-
-    await u.apply(c);
     await u.remove(c);
     expect(await u.inspect(c)).toBe("absent");
     expect(await Bun.file(path).exists()).toBe(true);
+  });
+
+  it("does not recreate a global file the user deleted, and inspect stays current", async () => {
+    const c = await context();
+    const u = await unit();
+    const path = join(c.dataDir, "architecture.json");
+
+    await u.apply(c);
+    await rm(path);
+    expect(await u.inspect(c)).toBe("current");
+    await u.apply(c);
+    expect(await Bun.file(path).exists()).toBe(false);
   });
 
   it("apply never overwrites a global file the user edited", async () => {
