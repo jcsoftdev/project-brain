@@ -572,7 +572,7 @@ export function otherUnits(): SetupUnit[] {
       group: "Other",
       label: "Jev reranker",
       description:
-        "reorders search results with TypeSafe's Jev model — sends the query and candidate code/doc snippets to api.typesafe.ai",
+        "reranks search results with TypeSafe's Jev: recall@1 66.0% → 84.3%, MRR 0.761 → 0.894 on the 332-query bench — sends each query and candidate code/doc snippets to api.typesafe.ai; needs a TYPESAFE token",
       // Ships unchecked: unlike every other unit here, this one sends the
       // content of every search — the query AND candidate code/doc snippets —
       // to a third-party API. That is a real disclosure decision, not a
