@@ -346,3 +346,59 @@ export function removeWorktreeHooks(existing: object | null): object {
 
   return { ...base, hooks };
 }
+
+const ARCH_GUARD_COMMAND = "project-brain arch-guard";
+
+/** The tools that write a file. Every one is listed: a matcher missing one is a guard with a hole in it. */
+const EDIT_TOOL_MATCHER = "Edit|Write|MultiEdit";
+
+/**
+ * Add the architecture guard to a parsed settings object.
+ *
+ * PreToolUse on the edit tools, because the point is to stop the edit rather than report
+ * it afterwards. The timeout leaves room for the Jev call the guard may make when a
+ * TypeSafe token exists; the deterministic layer alone finishes in well under a second.
+ *
+ * Pure, non-mutating and idempotent, like its siblings.
+ */
+export function upsertArchGuardHooks(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  addGroup(hooks, "PreToolUse", ARCH_GUARD_COMMAND, {
+    matcher: EDIT_TOOL_MATCHER,
+    hooks: [
+      {
+        type: "command",
+        command: ARCH_GUARD_COMMAND,
+        timeout: 5,
+        statusMessage: "project-brain: checking architecture boundaries",
+      },
+    ],
+  });
+
+  return { ...base, hooks };
+}
+
+/**
+ * Remove the architecture guard from a parsed settings object.
+ *
+ * The inverse of {@link upsertArchGuardHooks}, narrow for {@link removeRoutingHooks}'
+ * reason: the routing and worktree guards share `PreToolUse` and must survive.
+ */
+export function removeArchGuardHooks(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "PreToolUse", [ARCH_GUARD_COMMAND]);
+
+  return { ...base, hooks };
+}
