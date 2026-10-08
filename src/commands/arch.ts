@@ -30,6 +30,6 @@ export async function execute(args: string[]): Promise<void> {
     process.exit(1);
   }
   console.log(`Wrote ${join(root, ARCH_CONFIG_PATH)} (hexagonal preset, mode "warn").`);
-  console.log('Edit the layer globs to match your tree, then set "mode": "block" to enforce.');
+  console.log('Edit the layer globs to match your tree, then set "mode": "block" to enforce (anything else only warns).');
   console.log("Enforcement needs the hook: project-brain setup --with=hooks:arch-guard");
 }

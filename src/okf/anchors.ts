@@ -1,4 +1,5 @@
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { statSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Bundle } from "./bundle.js";
 import type { OkfFrontmatter } from "./types.js";
 
@@ -113,6 +114,15 @@ export function anchorCovers(anchor: Pick<Anchor, "path" | "directory">, repoPat
   return anchor.directory ? repoPath.startsWith(`${anchor.path}/`) : anchor.path === repoPath;
 }
 
+/** A resource written without the trailing slash still means a directory when that is what is on disk. */
+function isDirectory(absolute: string): boolean {
+  try {
+    return statSync(absolute).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** ISO timestamp of the newest attestation, whichever field carries it. */
 function newestAttestation(frontmatter: OkfFrontmatter): string | null {
   const candidates: string[] = [];
@@ -184,7 +194,7 @@ export function collectAnchors(bundle: Bundle, layout: BundleLayout): Anchor[] {
         path,
         symbol: parsed.symbol,
         lines: parsed.lines,
-        ...(parsed.path.endsWith("/") ? { directory: true as const } : {}),
+        ...(parsed.path.endsWith("/") || isDirectory(join(layout.repoRoot, path)) ? { directory: true as const } : {}),
         origin,
         attestedAt,
         staleAfter,

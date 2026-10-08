@@ -5,8 +5,10 @@
  * Same verified channel as `routing-guard`: exit code 2 blocks the call and hands
  * stderr to the model as the reason, which is the retry prompt we want (the JSON
  * `permissionDecision: "deny"` has been reported as ignored). `warn` mode exits 0
- * with the reason on stderr — PreToolUse has no `additionalContext`, so stderr is
- * the only feedback channel it has, and it is only surfaced in verbose mode.
+ * and prints `hookSpecificOutput.additionalContext` on stdout, which Claude Code
+ * delivers next to the tool result; stderr on exit 0 never reaches the model.
+ * `warn` is also the default: only an explicit `"mode": "block"` blocks, and with no
+ * architecture.json the Jev layer can only warn.
  *
  * Two layers. The deterministic one checks the imports an edit newly introduces
  * against `.project-brain/architecture.json`. The fuzzy one asks Jev whether the
@@ -22,7 +24,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { checkBoundaries, type BoundaryViolation, type ResolveEnv } from "../arch/boundaries.js";
-import { ARCH_CONFIG_PATH, parseArchConfig, type ArchConfig } from "../arch/config.js";
+import { ARCH_CONFIG_PATH, parseArchConfig, type ArchConfig, type ArchMode } from "../arch/config.js";
 import { findProjectRoot } from "../commands/resolve-project.js";
 import { resolveRerankerToken } from "../rerank/token.js";
 import type { TypesafeFetchFn } from "../typesafe/client.js";
@@ -120,13 +122,20 @@ export function postEditContent(tool: string, input: Record<string, unknown>, cu
   return content;
 }
 
-function loadConfig(root: string, ctx: ArchGuardContext): ArchConfig | null {
+interface LoadedConfig {
+  config: ArchConfig | null;
+  /** "warn" unless the file explicitly says "block"; also "warn" when there is no usable file at all. */
+  mode: ArchMode;
+}
+
+function loadConfig(root: string, ctx: ArchGuardContext): LoadedConfig {
   const raw = ctx.readFile(join(root, ARCH_CONFIG_PATH));
-  if (raw === null) return null;
+  if (raw === null) return { config: null, mode: "warn" };
   try {
-    return parseArchConfig(JSON.parse(raw)).config;
+    const { config, mode } = parseArchConfig(JSON.parse(raw));
+    return { config, mode };
   } catch {
-    return null;
+    return { config: null, mode: "warn" };
   }
 }
 
@@ -146,6 +155,8 @@ function boundaryReason(file: string, violations: BoundaryViolation[]): string {
 }
 
 function snapshotOf(tool: string, input: Record<string, unknown>): EditSnapshot {
+  // Follow-up: a Write sends the whole file, so Jev re-judges code that did not change.
+  // Diffing against the current content would narrow the question to what the edit adds.
   if (tool === "Write") return { tool, content: typeof input.content === "string" ? input.content : "" };
   if (tool === "Edit") {
     return { tool, oldString: String(input.old_string ?? ""), newString: String(input.new_string ?? "") };
@@ -202,7 +213,7 @@ export async function archGuardDecision(payload: unknown, ctx: ArchGuardContext)
     const file = relative(root, abs).split(sep).join("/");
     if (file === "" || file.startsWith("..")) return ALLOW;
 
-    const config = loadConfig(root, ctx);
+    const { config, mode } = loadConfig(root, ctx);
     if (!config && !ctx.jev) return ALLOW;
 
     const fileExists = ctx.exists(abs);
@@ -224,7 +235,7 @@ export async function archGuardDecision(payload: unknown, ctx: ArchGuardContext)
       const violations = checkBoundaries({ config, file, before: current, after, env });
       if (violations.length > 0) {
         reasons.push(boundaryReason(file, violations));
-        block = config.mode === "block";
+        block = mode === "block";
       }
     }
 
@@ -233,7 +244,7 @@ export async function archGuardDecision(payload: unknown, ctx: ArchGuardContext)
       const fuzzy = await jevViolations(ctx.jev, root, file, snapshotOf(tool, input), startedAt);
       if (fuzzy.length > 0) {
         reasons.push(constraintReason(fuzzy));
-        block = (config?.mode ?? "block") === "block";
+        block = mode === "block";
       }
     }
 
@@ -278,6 +289,14 @@ export async function execute(): Promise<void> {
   }
 
   const decision = await archGuardDecision(payload, readGuardContext());
-  if (decision.reason) process.stderr.write(`${decision.reason}\n`);
-  process.exit(decision.block ? 2 : 0);
+  if (decision.block) {
+    process.stderr.write(`${decision.reason}\n`);
+    process.exit(2);
+  }
+  if (decision.reason) {
+    // Stderr on exit 0 never reaches the model; additionalContext is delivered next to the tool result.
+    const output = { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: decision.reason } };
+    process.stdout.write(`${JSON.stringify(output)}\n`);
+  }
+  process.exit(0);
 }

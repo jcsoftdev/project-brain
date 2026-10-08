@@ -31,6 +31,11 @@ export interface ArchConfig {
 export interface ParsedArchConfig {
   /** Null means "no deterministic check": the file is unusable, or declares nothing enforceable. */
   config: ArchConfig | null;
+  /**
+   * Read on its own, so a config too broken to enforce still says how loudly the
+   * Jev layer may speak. Only an explicit `"block"` blocks; everything else warns.
+   */
+  mode: ArchMode;
   warnings: string[];
 }
 
@@ -75,7 +80,14 @@ function buildMatcher(patterns: string[]): LayerMatcher {
 
 export function parseArchConfig(raw: unknown): ParsedArchConfig {
   const warnings: string[] = [];
-  if (!isPlainObject(raw)) return { config: null, warnings: ["architecture.json must be a JSON object"] };
+  if (!isPlainObject(raw)) {
+    return { config: null, mode: "warn", warnings: ["architecture.json must be a JSON object"] };
+  }
+
+  const mode: ArchMode = raw.mode === "block" ? "block" : "warn";
+  if (raw.mode !== undefined && raw.mode !== "block" && raw.mode !== "warn") {
+    warnings.push('"mode" must be "block" or "warn"; using "warn"');
+  }
 
   const layers = new Map<string, LayerMatcher>();
   if (!isPlainObject(raw.layers)) {
@@ -106,15 +118,11 @@ export function parseArchConfig(raw: unknown): ParsedArchConfig {
     if (layers.has(rule.from) && known.length > 0) forbid.push({ from: rule.from, to: known });
   });
 
-  let mode: ArchMode = "block";
-  if (raw.mode === "warn" || raw.mode === "block") mode = raw.mode;
-  else if (raw.mode !== undefined) warnings.push('"mode" must be "block" or "warn"; using "block"');
-
   if (forbid.length === 0) {
     warnings.push("no enforceable forbid rule; deterministic check is off");
-    return { config: null, warnings };
+    return { config: null, mode, warnings };
   }
-  return { config: { layers, forbid, mode }, warnings };
+  return { config: { layers, forbid, mode }, mode, warnings };
 }
 
 /** Names of every layer a repo-relative POSIX path belongs to. */

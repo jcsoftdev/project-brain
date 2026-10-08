@@ -31,7 +31,7 @@ describe("parseArchConfig", () => {
     });
     expect(cfg.layers.get("domain")!.globs).toHaveLength(2);
     expect(cfg.layers.get("db")!.packages).toEqual(["pg"]);
-    expect(cfg.mode).toBe("block");
+    expect(cfg.mode).toBe("warn"); // a missing mode never blocks
   });
 
   // Each case is a bad config that must neither throw nor yield a check.
@@ -59,8 +59,17 @@ describe("parseArchConfig", () => {
       mode: "loud",
     });
     expect(parsed.config?.forbid).toEqual([{ from: "a", to: ["b"] }]);
-    expect(parsed.config?.mode).toBe("block");
+    expect(parsed.config?.mode).toBe("warn");
     expect(parsed.warnings.length).toBe(3);
+  });
+
+  it("reads mode on its own: only an explicit block blocks, even when nothing is enforceable", () => {
+    expect(parseArchConfig({ mode: "block" })).toMatchObject({ config: null, mode: "block" });
+    expect(parseArchConfig({ layers: 3, mode: "block" }).mode).toBe("block");
+    expect(parseArchConfig({ mode: "warn" }).mode).toBe("warn");
+    expect(parseArchConfig({}).mode).toBe("warn");
+    expect(parseArchConfig({ mode: "BLOCK" }).mode).toBe("warn");
+    expect(parseArchConfig("nope").mode).toBe("warn");
   });
 });
 
@@ -78,6 +87,19 @@ describe("extractImports", () => {
     ["go single and block imports", "go",
       `package x\nimport "fmt"\nimport alias "a/b"\nimport (\n  "os"\n  _ "side/effect"\n  m "mod/internal/domain"\n)\n`,
       ["fmt", "a/b", "os", "side/effect", "mod/internal/domain"]],
+    // Import syntax inside a string or docstring is data, not a dependency.
+    ["a template literal holding an import", "ts",
+      "export const fixture = `\nimport { db } from \"../infra/db\";\n`;", []],
+    ["a template literal with a nested ${} string", "ts",
+      "const a = `x ${f(`y \"}\"`)} import q from \"./no\"`;\nimport r from \"./yes\";", ["./yes"]],
+    ["an import inside a double-quoted string", "ts", `const s = "import { db } from '../infra/db'";`, []],
+    ["an import inside a single-quoted string", "ts", `const s = 'import x from "../infra/db"';`, []],
+    ["a block comment opener inside a string", "ts", `const g = "src/*";\nimport a from "./kept";\nconst h = "*/";`, ["./kept"]],
+    ["a stray apostrophe does not eat the next line", "ts", `// it's\nconst s = "don't";\nimport a from "./kept";`, ["./kept"]],
+    ["a go raw string holding an import", "go", "package x\nvar s = `import \"mod/internal/infra\"`\nimport \"real/pkg\"\n", ["real/pkg"]],
+    ["a python docstring holding an import", "py",
+      'def f():\n    """\n    from ..infra.db import x\n    import os\n    """\nimport sys\n', ["sys"]],
+    ["a python triple-single-quote string and a # comment", "py", "s = \'\'\'\nimport nope\n\'\'\'\n# import also_nope\nimport yes\n", ["yes"]],
     ["python import and from-import", "py",
       `import os, sys as s\nimport a.b.c\nfrom d.e import f\nfrom .rel import g\nfrom .. import h, i as j\n# import nope\n`,
       ["os", "sys", "a.b.c", "d.e", ".rel", "..h", "..i"]],
@@ -182,6 +204,26 @@ describe("checkBoundaries", () => {
     const pyRaw = { layers: { domain: "app/domain/**", infra: "app/infra/**" }, forbid: [{ from: "domain", to: ["infra"] }] };
     const p = check("app/domain/a.py", "", `from app.infra.db import conn`, { "app/infra/db.py": "" }, pyRaw);
     expect(p.map((x) => x.resolved)).toEqual(["app/infra/db.py"]);
+  });
+
+  it("does not treat a respelled import as new", () => {
+    const files = { "src/infra/db.ts": "" };
+    const spellings = ["../infra/db", "../infra/db.js", "../infra/db.ts", "../infra/db/index"];
+    for (const a of spellings) {
+      for (const b of spellings) {
+        if (a === b) continue;
+        const v = check("src/domain/user.ts", `import { db } from "${a}";\n`, `import { db } from "${b}";\n`, files);
+        expect(v).toEqual([]);
+      }
+    }
+    // The twin: a genuinely different target is still caught.
+    const other = check("src/domain/user.ts", `import { db } from "../infra/db.js";\n`, `import { x } from "../infra/other.js";\n`, files);
+    expect(other).toHaveLength(1);
+  });
+
+  it("does not flag an import that only appears inside a string in the new content", () => {
+    const after = "export const fixture = `\nimport { db } from \"../infra/db\";\n`;\n";
+    expect(check("src/domain/user.ts", "", after, { "src/infra/db.ts": "" })).toEqual([]);
   });
 
   it("reports one violation per rule even when several candidates match", () => {

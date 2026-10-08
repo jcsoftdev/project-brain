@@ -99,6 +99,13 @@ export function resolveImport(lang: ImportLang, specifier: string, fromFile: str
   return existing ? [existing] : candidates;
 }
 
+/** Spelling-independent identity of an import's target: extension and `/index` dropped, bare packages kept as written. */
+function targetKey(lang: ImportLang, specifier: string, fromFile: string, env: ResolveEnv): string {
+  const [first] = resolveImport(lang, specifier, fromFile, env);
+  if (first === undefined) return `pkg:${specifier}`;
+  return first.replace(/\.(?:[mc]?[jt]sx?|py)$/, "").replace(/\/(?:index|__init__)$/, "");
+}
+
 /**
  * Violations of the forbid rules among the imports an edit NEWLY introduces.
  *
@@ -114,8 +121,10 @@ export function checkBoundaries(input: BoundaryInput): BoundaryViolation[] {
   const fromLayers = layersOfPath(config, file);
   if (fromLayers.length === 0) return [];
 
-  const existing = new Set(extractImports(lang, before));
-  const introduced = extractImports(lang, after).filter((s) => !existing.has(s));
+  // Compared by what the specifier points at, not how it is spelled: `../infra/db`
+  // becoming `../infra/db.js` is the same dependency and must not read as new.
+  const existing = new Set(extractImports(lang, before).map((s) => targetKey(lang, s, file, env)));
+  const introduced = extractImports(lang, after).filter((s) => !existing.has(targetKey(lang, s, file, env)));
 
   const violations: BoundaryViolation[] = [];
   const seen = new Set<string>();

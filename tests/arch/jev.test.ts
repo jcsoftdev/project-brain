@@ -74,6 +74,26 @@ function answer(yes: number): ChoiceAnswer {
   return { type: "choice", choice: yes > 0.5 ? "yes" : "no", confidence: Math.max(yes, 1 - yes), probabilities: { yes, no: 1 - yes } };
 }
 
+describe("loadCoveringConstraints, selection", () => {
+  it("treats a directory anchor written without a trailing slash as a directory", async () => {
+    const root = await project({ "constraints/d.md": concept("Constraint", "Dir", "../src/domain") });
+    await mkdir(join(root, "src", "domain"), { recursive: true });
+    expect((await loadCoveringConstraints(root, "src/domain/deep/x.ts")).map((c) => c.title)).toEqual(["Dir"]);
+  });
+
+  it("sends at most 10 constraints, the most specific anchors first", async () => {
+    const concepts: Record<string, string> = {};
+    for (let i = 0; i < 12; i++) concepts[`constraints/broad${i}.md`] = concept("Constraint", `broad${i}`, "../src/");
+    concepts["constraints/deep.md"] = concept("Constraint", "deep", "../src/domain/model/");
+    concepts["constraints/file.md"] = concept("Constraint", "file", "../src/domain/model/u.ts");
+    const root = await project(concepts);
+
+    const found = await loadCoveringConstraints(root, "src/domain/model/u.ts");
+    expect(found).toHaveLength(10);
+    expect(found.slice(0, 2).map((c) => c.title)).toEqual(["file", "deep"]);
+  });
+});
+
 describe("judgeConstraints", () => {
   const edit = { tool: "Edit", oldString: "a", newString: "b" };
 
@@ -140,7 +160,10 @@ describe("archGuardDecision, Jev layer", () => {
     tool_input: { file_path: `${ROOT}/src/domain/u.ts`, old_string: "u = 1", new_string: "u = db.read()" },
   };
 
-  function ctx(jev: Partial<JevContext> | undefined, extra: Record<string, string> = {}): ArchGuardContext {
+  // Only an explicit "block" blocks; this config enforces nothing but still sets the mode.
+  const BLOCK_MODE = { [`${ROOT}/.project-brain/architecture.json`]: '{"mode":"block"}' };
+
+  function ctx(jev: Partial<JevContext> | undefined, extra: Record<string, string> = BLOCK_MODE): ArchGuardContext {
     const all = { ...files, ...extra };
     return {
       findRoot: () => ROOT,
@@ -161,6 +184,15 @@ describe("archGuardDecision, Jev layer", () => {
     expect(d.reason).toContain('"A"');
     expect(d.reason).toContain("okf/constraints/a.md");
     expect(d.reason).toContain("Fix:");
+  });
+
+  it("only warns when there is no architecture.json, or its mode is not an explicit block", async () => {
+    const confident = { ask: async () => ({ c0: answer(0.99) }) };
+    for (const extra of [{}, { [`${ROOT}/.project-brain/architecture.json`]: "{}" }, { [`${ROOT}/.project-brain/architecture.json`]: "{nope" }]) {
+      const d = await archGuardDecision(payload, ctx(confident, extra));
+      expect(d.block).toBe(false);
+      expect(d.reason).toContain('"A"');
+    }
   });
 
   it("allows below the threshold", async () => {

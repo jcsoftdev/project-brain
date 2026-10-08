@@ -114,6 +114,11 @@ describe("archGuardDecision", () => {
     expect(await archGuardDecision(write("src/domain/a.ts", violating), { ...memCtx(files), findRoot: () => null })).toEqual(allow);
     expect(await archGuardDecision(write("src/domain/a.ts", violating), memCtx({}))).toEqual(allow);
     expect(await archGuardDecision(write("src/domain/a.ts", violating), memCtx({ [`${ROOT}/.project-brain/architecture.json`]: "{nope" }))).toEqual(allow);
+    // A config with no explicit mode warns instead of blocking.
+    const noMode = JSON.stringify({ layers: { domain: "src/domain/**", infrastructure: "src/infra/**" }, forbid: [{ from: "domain", to: ["infrastructure"] }] });
+    const d = await archGuardDecision(write("src/domain/a.ts", violating), memCtx({ [`${ROOT}/.project-brain/architecture.json`]: noMode, [`${ROOT}/src/infra/db.ts`]: "" }));
+    expect(d.block).toBe(false);
+    expect(d.reason).toContain("Architecture boundary violation");
     // A throwing context.
     const boom = { ...memCtx(files), readFile: () => { throw new Error("disk"); } };
     expect(await archGuardDecision(write("src/domain/a.ts", violating), boom)).toEqual(allow);
@@ -175,8 +180,8 @@ describe("arch-guard CLI entry", () => {
       stderr: "pipe",
       env: { ...process.env, BRAIN_NO_UPDATE_CHECK: "1", BRAIN_NO_SKILL_REFRESH: "1", TYPESAFE_API_KEY: "" },
     });
-    const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
-    return { stderr, code };
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { stdout, stderr, code };
   }
 
   const violating = { tool_name: "Write", tool_input: { content: `import { db } from "../infra/db";\n` } };
@@ -187,9 +192,19 @@ describe("arch-guard CLI entry", () => {
     expect(stderr).toContain("Architecture boundary violation");
   });
 
-  it("exits 0 in warn mode and still writes the reason to stderr", async () => {
-    const { stderr, code } = await run(violating, "warn");
+  it("in warn mode exits 0 and delivers the reason as additionalContext on stdout, not stderr", async () => {
+    const { stdout, stderr, code } = await run(violating, "warn");
     expect(code).toBe(0);
-    expect(stderr).toContain("Architecture boundary violation");
+    expect(stderr).toBe("");
+    const out = JSON.parse(stdout);
+    expect(out.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(out.hookSpecificOutput.additionalContext).toContain("Architecture boundary violation");
+    expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
+  });
+
+  it("exits 0 silently on a string that merely looks like an import", async () => {
+    const fixture = { tool_name: "Write", tool_input: { content: 'export const f = `\nimport { db } from "../infra/db";\n`;\n' } };
+    const { stdout, stderr, code } = await run(fixture, "block");
+    expect([code, stdout, stderr]).toEqual([0, "", ""]);
   });
 });

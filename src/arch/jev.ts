@@ -41,6 +41,12 @@ export type ArchAsk = (
   options?: AskOptions
 ) => Promise<Record<string, ChoiceAnswer> | null>;
 
+/**
+ * At most this many constraints go to Jev per edit, most specific anchor first.
+ * Every one is another question in the same request, and a directory that dozens
+ * of broad constraints cover would otherwise make each edit slow and costly.
+ */
+const MAX_CONSTRAINTS = 10;
 const MAX_BODY_CHARS = 2000;
 const MAX_EDIT_CHARS = 4000;
 
@@ -60,12 +66,18 @@ export async function loadCoveringConstraints(root: string, file: string): Promi
   }
 
   const anchors = collectAnchors(bundle, { bundleRoot: bundle.root, repoRoot: root });
-  const covering = new Set(anchors.filter((a) => anchorCovers(a, file)).map((a) => a.concept));
+  // A file anchor beats any directory anchor; among directories the deeper one is more specific.
+  const specificity = new Map<string, number>();
+  for (const a of anchors) {
+    if (!anchorCovers(a, file)) continue;
+    const score = a.directory ? a.path.split("/").length : Number.MAX_SAFE_INTEGER;
+    specificity.set(a.concept, Math.max(specificity.get(a.concept) ?? 0, score));
+  }
 
   const out: CoveringConstraint[] = [];
   for (const entry of bundle.files) {
     if (entry.kind !== "concept" || entry.document.frontmatter.type !== "Constraint") continue;
-    if (!covering.has(entry.path)) continue;
+    if (!specificity.has(entry.path)) continue;
     const title = entry.document.frontmatter.title;
     out.push({
       concept: entry.path,
@@ -73,7 +85,8 @@ export async function loadCoveringConstraints(root: string, file: string): Promi
       body: entry.document.body,
     });
   }
-  return out;
+  const rank = (c: CoveringConstraint) => specificity.get(c.concept) ?? 0;
+  return out.sort((a, b) => rank(b) - rank(a)).slice(0, MAX_CONSTRAINTS);
 }
 
 function snapshotState(edit: EditSnapshot): Record<string, unknown> {
