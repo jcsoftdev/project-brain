@@ -7,6 +7,7 @@ import { readLastError } from "../store/error-state.js";
 import { measureEmbedLatency, readManifestChunks, readProjectRulesState } from "../commands/health.js";
 import { readSyncStatus } from "../commands/sync-status.js";
 import { HOOK_TIMEOUT_MS } from "../commands/search.js";
+import { probeReranker } from "../rerank/probe.js";
 
 /** Handle check_health logic (exported for testing). */
 export async function handleHealth(
@@ -15,12 +16,13 @@ export async function handleHealth(
 ): Promise<ToolResult> {
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(args.project) : deps.embeddings;
 
-  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, manifestChunks, lastSync, projectRules] =
+  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, rerankerProbe, manifestChunks, lastSync, projectRules] =
     await Promise.all([
       emb.isAvailable(),
       deps.store.countChunks(args.project),
       deps.dbPath ? readLastError(deps.dbPath, args.project) : Promise.resolve(null),
       measureEmbedLatency(emb),
+      probeReranker(deps.reranker),
       deps.projectRoot ? readManifestChunks(deps.projectRoot) : Promise.resolve(undefined),
       deps.projectRoot ? readSyncStatus(deps.projectRoot) : Promise.resolve(null),
       deps.projectRoot ? readProjectRulesState(deps.projectRoot) : Promise.resolve(undefined),
@@ -37,6 +39,7 @@ export async function handleHealth(
     reranker: deps.reranker ? "on" : "off",
     ...(deps.rerankerTokenSource ? { tokenSource: deps.rerankerTokenSource } : {}),
     ...(deps.rerankerTokenPath ? { tokenPath: deps.rerankerTokenPath } : {}),
+    rerankerProbe,
     ...(lastError ? { lastError } : {}),
     ...(embedLatencyMs !== undefined ? { embedLatencyMs } : {}),
     slowEmbeddings: embedLatencyMs !== undefined && embedLatencyMs > HOOK_TIMEOUT_MS,
@@ -68,6 +71,11 @@ export function register(server: McpServer, deps: ToolDeps): void {
         reranker: z.enum(["off", "on"]),
         tokenSource: z.enum(["env", "file"]).optional(),
         tokenPath: z.string().optional(),
+        rerankerProbe: z.object({
+          status: z.enum(["reachable", "degraded", "not-configured"]),
+          latencyMs: z.number().optional(),
+          reason: z.string().optional(),
+        }),
         lastError: z
           .object({ phase: z.string(), message: z.string(), timestamp: z.number() })
           .optional(),
