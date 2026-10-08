@@ -19,6 +19,33 @@ describe("upsertCommitCheckHooks", () => {
     expect(group.hooks[0]).toMatchObject({ type: "command", command: "project-brain commit-check", timeout: 5 });
   });
 
+  it("gates the hook with a broad git `if` so other Bash calls spawn nothing", () => {
+    const [group] = preToolUse(upsertCommitCheckHooks(null));
+    expect(group.hooks[0].if).toBe("Bash(git *)");
+  });
+
+  it("upgrades an entry installed without `if`, in place, and removal still works", () => {
+    const legacy = {
+      hooks: {
+        PreToolUse: [
+          { matcher: "Edit", hooks: [{ type: "command", command: "other" }] },
+          { matcher: "Bash", hooks: [{ type: "command", command: "project-brain commit-check", timeout: 5 }] },
+          { matcher: "Task", hooks: [{ type: "command", command: "later" }] },
+        ],
+      },
+    };
+    const upgraded: any = upsertCommitCheckHooks(legacy);
+    const groups = preToolUse(upgraded);
+    expect(groups).toHaveLength(3);
+    expect(groups[1].hooks[0].if).toBe("Bash(git *)");
+    expect(groups.map((g: any) => g.hooks[0].command)).toEqual(["other", "project-brain commit-check", "later"]);
+    expect(upsertCommitCheckHooks(upgraded)).toEqual(upgraded);
+    expect(legacy.hooks.PreToolUse[1]!.hooks[0]).not.toHaveProperty("if");
+
+    const removed: any = removeCommitCheckHooks(upgraded);
+    expect(preToolUse(removed).map((g: any) => g.hooks[0].command)).toEqual(["other", "later"]);
+  });
+
   it("is idempotent and does not mutate its input", () => {
     const once = upsertCommitCheckHooks(null);
     expect(upsertCommitCheckHooks(once)).toEqual(once);

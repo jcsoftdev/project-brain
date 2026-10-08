@@ -408,11 +408,13 @@ const COMMIT_CHECK_COMMAND = "project-brain commit-check";
 /**
  * Add the commit pre-filter to a parsed settings object.
  *
- * PreToolUse on Bash. No `if: "Bash(git commit *)"` filter: no other hook here uses the field,
- * and the hook parses the command itself anyway, so a pattern that misses `git -C x commit` or a
- * chained `&& git commit` would be a silent hole. Every other Bash call exits at once.
+ * PreToolUse on Bash, gated by `if: "Bash(git *)"` so Claude Code does not spawn a process
+ * (~60-80 ms) for every shell command just to exit 0. The gate is deliberately broad: a narrower
+ * `git commit *` would miss `git -C x commit`. It is only a cheap pre-filter; the hook's own
+ * command parsing stays the authoritative check.
  *
- * Pure, non-mutating and idempotent, like its siblings.
+ * An entry installed before the gate existed is upgraded in place, since `addGroup` alone would
+ * keep it. Pure, non-mutating and idempotent, like its siblings.
  */
 export function upsertCommitCheckHooks(existing: object | null): object {
   const base: Record<string, unknown> =
@@ -422,17 +424,24 @@ export function upsertCommitCheckHooks(existing: object | null): object {
 
   const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
 
-  addGroup(hooks, "PreToolUse", COMMIT_CHECK_COMMAND, {
+  const group = {
     matcher: "Bash",
     hooks: [
       {
         type: "command",
         command: COMMIT_CHECK_COMMAND,
+        if: "Bash(git *)",
         timeout: 5,
         statusMessage: "project-brain: pre-commit check",
       },
     ],
-  });
+  };
+  const current: Array<Record<string, unknown>> = Array.isArray(hooks.PreToolUse)
+    ? (hooks.PreToolUse as Array<Record<string, unknown>>)
+    : [];
+  hooks.PreToolUse = current.some((g) => groupHasCommand(g, COMMIT_CHECK_COMMAND))
+    ? current.map((g) => (groupHasCommand(g, COMMIT_CHECK_COMMAND) ? group : g))
+    : [...current, group];
 
   return { ...base, hooks };
 }
