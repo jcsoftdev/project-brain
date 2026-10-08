@@ -89,10 +89,29 @@ describe("getModelRoutingSection", () => {
     }
   });
 
-  it("prices the tiers at today's ratios, not the 25x gap of older lineups", async () => {
+  it("prices the tiers at today's ratios, not the stale 1x/2x/4x multipliers", async () => {
     const content = await getModelRoutingSection(registrars[0]!, mergeRoutingConfig(null));
-    expect(content).toContain("balanced ≈ 2×");
-    expect(content).not.toContain("deep ≈ 25×");
+    expect(content).toContain("about 20×");
+    expect(content).toContain("2.5× Opus");
+    expect(content).not.toContain("balanced ≈ 2×");
+    expect(content).not.toContain("deep ≈ 4×");
+  });
+
+  it("documents the advisor launch recipe only for Claude Code", async () => {
+    for (const r of eligible) {
+      const content = await getModelRoutingSection(r, mergeRoutingConfig(null));
+      const hasAdvisor = content.includes("--advisor");
+      expect(hasAdvisor).toBe(r.routing!.hostKey === "claude");
+    }
+  });
+
+  it("states the advisor's cost and the env var's limits", async () => {
+    const claude = eligible.find((r) => r.name === "Claude Code")!;
+    const content = await getModelRoutingSection(claude, mergeRoutingConfig(null));
+    expect(content).toContain("CLAUDE_CODE_SUBAGENT_MODEL=haiku claude --model sonnet --advisor opus");
+    expect(content).toContain("not a free second opinion");
+    expect(content).toContain("Explore and Plan");
+    expect(content).toContain("still win");
   });
 
   it("names Claude Code's model above deep only as an escalation", async () => {

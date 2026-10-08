@@ -333,7 +333,7 @@ export const MODEL_ROUTING: ReadonlyArray<{
  * a user who accepted the section once kept that text forever, and every later
  * improvement stopped at their machine.
  */
-export const ROUTING_CONTENT_VERSION = 3;
+export const ROUTING_CONTENT_VERSION = 4;
 
 /** Concrete model id per tier for one host. `null` = no verifiable stable name. */
 export type HostRoutingModels = Record<RoutingTier, string | null>;

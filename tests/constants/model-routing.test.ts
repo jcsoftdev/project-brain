@@ -38,6 +38,10 @@ describe("MODEL_ROUTING tiers", () => {
   it("carries a content version so a stale written section can be detected", () => {
     expect(ROUTING_CONTENT_VERSION).toBeGreaterThan(0);
   });
+
+  it("is at least 4, so sections written before the advisor/price rewrite read as stale", () => {
+    expect(ROUTING_CONTENT_VERSION).toBeGreaterThanOrEqual(4);
+  });
 });
 
 describe("DEFAULT_HOST_MODELS", () => {

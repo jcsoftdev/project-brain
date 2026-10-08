@@ -51,6 +51,7 @@ export async function getModelRoutingSection(
     .replace(/\{\{hostName\}\}/g, registrar.name)
     .replace(/\{\{howToApply\}\}/g, routing.howToApply)
     .replace(/\{\{labelRule\}\}/g, renderLabelRule(routing.labelField))
+    .replace(/\{\{advisorRule\}\}/g, routing.hostKey === "claude" ? ADVISOR_RULE : "")
     .replace(/\{\{configPath\}\}/g, ROUTING_CONFIG_PATH);
 }
 
@@ -93,6 +94,31 @@ Keep it to the bare model id. That field is meant to be 3–5 words, so
 \`[deep/opus]\` spends two tokens to say what one already said.
 `;
 }
+
+/**
+ * Claude Code only: `--advisor` is a Claude Code flag (hidden from `--help`),
+ * so no other host can act on it. Documented, not written to settings — the
+ * advisor is billed per call and the user opts in per session.
+ */
+const ADVISOR_RULE = `
+### Advisor (optional, Claude Code)
+
+The user can start a session with a stronger model on call:
+\`CLAUDE_CODE_SUBAGENT_MODEL=haiku claude --model sonnet --advisor opus\`
+(also \`/advisor opus|off\` and the \`advisorModel\` setting). The main model
+decides when to call it; the advisor reads the full transcript and returns
+guidance (https://code.claude.com/docs/en/advisor.md). It must rank at or above
+the main model, and it works on the Anthropic API only.
+
+It earns a call at decision points: reviewing a plan before a long build,
+unblocking a failure that repeated, and a final completeness check before
+declaring done. It is not a free second opinion — each call sends the whole
+transcript and is billed at the advisor model's rates.
+
+\`CLAUDE_CODE_SUBAGENT_MODEL\` is only a default: the Agent call's \`model\` and an
+agent's frontmatter \`model:\` still win, and the built-in Explore and Plan
+sub-agents ignore it (https://code.claude.com/docs/en/sub-agents.md).
+`;
 
 // Deliberately no re-export of a zero-arg variant. A caller who does not know
 // which host they are writing for cannot produce correct guidance, and a
