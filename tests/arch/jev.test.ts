@@ -188,7 +188,8 @@ describe("archGuardDecision, Jev layer", () => {
 
   it("only warns when there is no architecture.json, or its mode is not an explicit block", async () => {
     const confident = { ask: async () => ({ c0: answer(0.99) }) };
-    for (const extra of [{}, { [`${ROOT}/.project-brain/architecture.json`]: "{}" }, { [`${ROOT}/.project-brain/architecture.json`]: "{nope" }]) {
+    const variants: Record<string, string>[] = [{}, { [`${ROOT}/.project-brain/architecture.json`]: "{}" }, { [`${ROOT}/.project-brain/architecture.json`]: "{nope" }];
+    for (const extra of variants) {
       const d = await archGuardDecision(payload, ctx(confident, extra));
       expect(d.block).toBe(false);
       expect(d.reason).toContain('"A"');
