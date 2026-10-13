@@ -26,6 +26,9 @@ export const SKILL_MIN_COSINE = 0.67;
 /** Vector cache entries kept before the file is reset; bounds growth across projects and edits. */
 const MAX_CACHED_VECTORS = 5000;
 
+/** Batches between writes during an unbounded (background) warm. */
+const WARM_PERSIST_EVERY = 10;
+
 /** Precision kept per component — plenty for ranking, and roughly halves the file. */
 const VECTOR_DECIMALS = 5;
 
@@ -96,6 +99,7 @@ async function fillVectors<T>(
 ): Promise<void> {
   const missing = items.filter((s) => !vectors[spec.key(s)]);
   const warmStart = now();
+  let unsaved = false;
   for (let i = 0; i < missing.length; i += SKILL_EMBED_BATCH) {
     if (i > 0 && now() - warmStart >= budgetMs) break;
     const batch = missing.slice(i, i + SKILL_EMBED_BATCH);
@@ -104,12 +108,23 @@ async function fillVectors<T>(
     batch.forEach((s, j) => {
       vectors[spec.key(s)] = round(embedded[j]!);
     });
-    try {
-      await mkdir(cacheDir, { recursive: true });
-      await writeFile(file, JSON.stringify(vectors));
-    } catch {
-      // Unwritable cache → re-embed next time.
+    // The hook may be cut off at any moment, so it persists every batch; an
+    // unbounded warm would rewrite a multi-MB file ~80 times, so it persists in steps.
+    unsaved = true;
+    if (budgetMs !== Number.POSITIVE_INFINITY || (i / SKILL_EMBED_BATCH) % WARM_PERSIST_EVERY === WARM_PERSIST_EVERY - 1) {
+      await persist(cacheDir, file, vectors);
+      unsaved = false;
     }
+  }
+  if (unsaved) await persist(cacheDir, file, vectors);
+}
+
+async function persist(cacheDir: string, file: string, vectors: Record<string, number[]>): Promise<void> {
+  try {
+    await mkdir(cacheDir, { recursive: true });
+    await writeFile(file, JSON.stringify(vectors));
+  } catch {
+    // Unwritable cache → re-embed next time.
   }
 }
 
