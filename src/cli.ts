@@ -104,6 +104,7 @@ Commands:
   worktree           Show this worktree's brain + port identity, or reclaim dead ones
                        status [--json]   identity for project-brain and mcp-port-registry
                        prune [--dry-run] drop indexes of worktrees git no longer lists
+  tool-catalog refresh  Rebuild the MCP tool catalog behind the "Suggested tool" hints
   arch init          Write .project-brain/architecture.json (hexagonal preset) [--force]
   compact            Reclaim storage from old versions + deleted rows [--project <id>]
   bench <file.jsonl> Measure retrieval quality (recall@k, MRR) for this index
@@ -374,6 +375,12 @@ switch (command) {
   case "prune": {
     const { pruneCommand } = await import("./commands/prune.js");
     await pruneCommand({ dryRun: args.includes("--dry-run") });
+    break;
+  }
+
+  case "tool-catalog": {
+    const { execute } = await import("./commands/tool-catalog.js");
+    await execute(args);
     break;
   }
 
