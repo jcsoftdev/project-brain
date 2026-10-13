@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runWithSkillPick } from "../../src/commands/search.js";
 import type { SkillInfo } from "../../src/skills/discovery.js";
 import { pickSkill, pickSuggestions, prefilterTools, toolPickerEnabled, SKILL_CONFIDENCE_THRESHOLD } from "../../src/skills/picker.js";
 import { modelsWithVectors, warmVectors } from "../../src/skills/semantic.js";
@@ -189,14 +188,6 @@ describe("tool shortlist and flags", () => {
     expect(toolPickerEnabled({})).toBe(true);
     expect(toolPickerEnabled({ BRAIN_TOOL_PICKER: "0" })).toBe(false);
     expect(toolPickerEnabled({ BRAIN_SKILL_PICKER: "0" })).toBe(true);
-  });
-});
-
-describe("runWithSkillPick with several lines", () => {
-  it("prints every suggestion line after the search", async () => {
-    const printed: string[] = [];
-    await runWithSkillPick(async () => {}, async () => ["Suggested skill: a", "Suggested tool: b"], (l) => printed.push(l));
-    expect(printed).toEqual(["Suggested skill: a", "Suggested tool: b"]);
   });
 });
 

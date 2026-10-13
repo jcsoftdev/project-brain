@@ -115,6 +115,7 @@ Commands:
                          added lines mostly didn't survive to HEAD, per git blame)
   health             Check system health and staleness
   search "<query>"   Search indexed context (used by hooks); prints compact results
+  suggest --stdin    Skill/tool suggestion hook (UserPromptSubmit, global; works in any directory)
   update             Update project-brain to the latest published version
 
 Knowledge bundles (Open Knowledge Format v0.2 — the *why*, not the *what*):
@@ -409,6 +410,13 @@ switch (command) {
     // running in the background keeps this process alive well past the
     // race (observed: 10s+ in createEmbeddingClient alone), defeating the
     // whole point of the hook's "must never hang a prompt" guarantee.
+    process.exit(0);
+    break;
+  }
+  case "suggest": {
+    const { execute } = await import("./commands/suggest.js");
+    await execute(args);
+    // Same reason as `search`: the self-timeout does not cancel a hung Ollama/Jev call.
     process.exit(0);
     break;
   }
