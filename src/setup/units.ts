@@ -328,6 +328,9 @@ function hookUnit(spec: {
     upsert: (existing: object | null, options: { strict: boolean }) => object;
     remove: (existing: object | null) => object;
   }>;
+  /** Runs after the settings were written, e.g. to record a state marker. */
+  afterApply?: (ctx: SetupContext) => Promise<void>;
+  afterRemove?: (ctx: SetupContext) => Promise<void>;
 }): SetupUnit {
   return {
     id: spec.id,
@@ -354,14 +357,16 @@ function hookUnit(spec: {
       const { upsert } = await spec.load();
       const next = upsert(settings, { strict: spec.strictOf(ctx) });
       await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+      await spec.afterApply?.(ctx);
     },
 
     async remove(ctx) {
       const settings = await readClaudeSettings(ctx.claudeSettingsPath);
-      if (settings === "unparseable" || settings === null) return;
-      const { remove } = await spec.load();
-      const next = remove(settings);
-      await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+      if (settings !== "unparseable" && settings !== null) {
+        const { remove } = await spec.load();
+        await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(remove(settings), null, 2)}\n`);
+      }
+      await spec.afterRemove?.(ctx);
     },
   };
 }
@@ -540,6 +545,24 @@ export function guidanceUnits(): SetupUnit[] {
         },
       })
     ),
+
+    hookUnit({
+      id: "hooks:suggest",
+      label: "Skill/tool suggestions",
+      description:
+        "suggests the best-fitting skill and MCP tool on every prompt, in any project, indexed or not " +
+        "(Claude Code only); needs no token to install and stays silent without one — with a TypeSafe token it asks " +
+        "Jev, sending the prompt plus the shortlisted names and descriptions to api.typesafe.ai; BRAIN_SKILL_PICKER=0 / BRAIN_TOOL_PICKER=0 turn each half off",
+      probe: "project-brain suggest --stdin",
+      strictOf: () => false,
+      load: async () => {
+        const m = await import("../hooks/claude-settings.js");
+        return { upsert: m.upsertSuggestHook, remove: m.removeSuggestHook };
+      },
+      // The marker is what stops the SessionStart self-install from re-adding what the user dropped.
+      afterApply: async (ctx) => (await import("../hooks/suggest-hook.js")).writeSuggestMarker(ctx.dataDir, "installed"),
+      afterRemove: async (ctx) => (await import("../hooks/suggest-hook.js")).writeSuggestMarker(ctx.dataDir, "opted-out"),
+    }),
 
     hookUnit({
       id: "hooks:commit-check",

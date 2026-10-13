@@ -22,6 +22,26 @@ async function context(): Promise<SetupContext> {
   };
 }
 
+describe("suggest hook unit", () => {
+  it("installs the global hook with a marker, and records an opt-out when removed", async () => {
+    const { guidanceUnits } = await import("../../src/setup/units.js");
+    const { readSuggestMarker } = await import("../../src/hooks/suggest-hook.js");
+    const unit = guidanceUnits().find((u) => u.id === "hooks:suggest")!;
+    const ctx = await context();
+
+    expect(unit.defaultSelected).toBe(true);
+    expect(await unit.inspect(ctx)).toBe("absent");
+
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("current");
+    expect(await readSuggestMarker(ctx.dataDir)).toBe("installed");
+
+    await unit.remove(ctx);
+    expect(await unit.inspect(ctx)).toBe("absent");
+    expect(await readSuggestMarker(ctx.dataDir)).toBe("opted-out");
+  });
+});
+
 describe("guidance units", () => {
   it("declares every guidance unit selected by default except commit-check, which defaults on only with a token", async () => {
     const { guidanceUnits } = await import("../../src/setup/units.js");
@@ -33,6 +53,7 @@ describe("guidance units", () => {
       "hooks:commit-check",
       "hooks:routing",
       "hooks:session-title",
+      "hooks:suggest",
       "hooks:worktree",
     ]);
     const optIn = guidanceUnits().filter((u) => !u.defaultSelected).map((u) => u.id);
