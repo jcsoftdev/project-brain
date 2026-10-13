@@ -387,6 +387,14 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     .map((r) => r.id);
   await saveSelection(ctx.selectionPath, chosenIds, selectableIds, VERSION);
 
+  // The SessionStart self-install of the suggest hook must never undo a decline, and a unit left
+  // unticked and absent produces no `remove`, so the opt-out is recorded from the final choice.
+  if (selectableIds.includes("hooks:suggest") && !failed.has("hooks:suggest")) {
+    const { readSuggestMarker, writeSuggestMarker } = await import("../hooks/suggest-hook.js");
+    if (!chosen.has("hooks:suggest")) await writeSuggestMarker(dataDir, "opted-out");
+    else if ((await readSuggestMarker(dataDir)) === null) await writeSuggestMarker(dataDir, "installed");
+  }
+
   return buildResult(ctx, env, dataDir, plan, manualInstructions, failed);
 }
 

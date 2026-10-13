@@ -511,3 +511,64 @@ export function removeJevEnvHooks(existing: object | null): object {
 
   return { ...base, hooks };
 }
+
+/** What identifies the hook in settings.json, whichever form of the command is installed. */
+export const SUGGEST_COMMAND = "project-brain suggest --stdin";
+
+/**
+ * What gets installed. The suffix keeps an older binary on PATH (where `suggest` is an unknown
+ * command and exits 1) or a settings.json shared with another machine from raising a hook error
+ * on every prompt. Matching is on {@link SUGGEST_COMMAND}, so the bare form older builds wrote is
+ * still recognised as installed and removed.
+ */
+const SUGGEST_HOOK_COMMAND = `${SUGGEST_COMMAND} 2>/dev/null || true`;
+
+/**
+ * Add the global skill/tool suggestion hook to a parsed settings object.
+ *
+ * UserPromptSubmit in the USER settings, so it fires in every project, indexed or
+ * not; the project-level hook `init` writes keeps only retrieval. The timeout sits
+ * well above the command's own ~5s self-timeout.
+ *
+ * Pure, non-mutating and idempotent, like its siblings.
+ */
+export function upsertSuggestHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  addGroup(hooks, "UserPromptSubmit", SUGGEST_COMMAND, {
+    hooks: [
+      {
+        type: "command",
+        command: SUGGEST_HOOK_COMMAND,
+        timeout: 10,
+        statusMessage: "project-brain: suggesting skill/tool",
+      },
+    ],
+  });
+
+  return { ...base, hooks };
+}
+
+/**
+ * Remove the suggestion hook from a parsed settings object.
+ *
+ * The inverse of {@link upsertSuggestHook}, narrow for {@link removeRoutingHooks}' reason:
+ * the project-level context hook shares `UserPromptSubmit` and must survive.
+ */
+export function removeSuggestHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "UserPromptSubmit", [SUGGEST_COMMAND]);
+
+  return { ...base, hooks };
+}

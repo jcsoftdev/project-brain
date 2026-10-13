@@ -221,14 +221,17 @@ export async function loadCatalogForHook(opts: CatalogOptions & { spawn?: (parts
   try {
     const cacheDir = opts.cacheDir ?? DATA_DIR;
     const now = (opts.now ?? Date.now)();
-    const [user, project, configs] = await Promise.all([
+    const [user, configs] = await Promise.all([
       readCatalogFile(cacheDir, "user", opts.projectDir),
-      readCatalogFile(cacheDir, "project", opts.projectDir),
       discoverMcpConfigs({ home: opts.home, projectDir: opts.projectDir }),
     ]);
+    // A directory with no project-scoped servers (no local-scope entry, no approved .mcp.json)
+    // has no project part: no file is read and no refresh is spawned for it.
+    const hasProject = configs.project.length > 0 || configs.disabled.length > 0;
+    const project = hasProject ? await readCatalogFile(cacheDir, "project", opts.projectDir) : null;
     const stale: Part[] = [];
     if (isCatalogStale(user, fingerprintConfigs(configs.user), now)) stale.push("user");
-    if (isCatalogStale(project, fingerprintConfigs(configs.project, configs.disabled), now)) stale.push("project");
+    if (hasProject && isCatalogStale(project, fingerprintConfigs(configs.project, configs.disabled), now)) stale.push("project");
     const claimed: Part[] = [];
     for (const part of stale) if (await claimRefreshSlot(cacheDir, part, opts.projectDir, now)) claimed.push(part);
     if (claimed.length > 0) (opts.spawn ?? spawnRefresh)(claimed);

@@ -81,10 +81,26 @@ export async function buildRoutingReminder(configPath?: string, rulesPath?: stri
   });
 }
 
-/** CLI entry point: print the payload for the SessionStart hook. */
-export async function execute(): Promise<void> {
+/**
+ * CLI entry point: print the payload for the SessionStart hook.
+ *
+ * Also the carrier of the one-time suggest-hook upgrade (see hooks/suggest-hook.ts).
+ * It stays silent: stdout is the hook's JSON payload.
+ */
+export async function execute(
+  selfInstall: () => Promise<unknown> = async () => {
+    const { DATA_DIR } = await import("../constants.js");
+    const { selfInstallSuggestHook } = await import("./suggest-hook.js");
+    return selfInstallSuggestHook({
+      // BRAIN_CLAUDE_SETTINGS exists because Bun's homedir() ignores a runtime HOME (see commands/setup.ts).
+      settingsPath: process.env.BRAIN_CLAUDE_SETTINGS ?? join(homedir(), ".claude", "settings.json"),
+      dataDir: DATA_DIR,
+    });
+  }
+): Promise<void> {
   // Never let a hook failure interrupt a session start — print nothing and go.
   try {
+    await selfInstall().catch(() => {});
     console.log(await buildRoutingReminder());
   } catch {
     process.exit(0);

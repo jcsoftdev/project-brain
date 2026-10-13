@@ -36,9 +36,6 @@ export const SKILL_CONFIDENCE_THRESHOLD = 0.7;
  */
 export const SKILL_JEV_TIMEOUT_MS = 1000;
 
-/** How long past the end of retrieval the hook will still wait for the pick. */
-export const SKILL_PICK_GRACE_MS = 250;
-
 const NONE = "none";
 
 const STOPWORDS = new Set([
@@ -91,8 +88,7 @@ export interface SkillPickDeps {
   env?: Record<string, string | undefined>;
   jevTimeoutMs?: number;
   /**
-   * Resolves to the prompt embedding the search path already computed, or null
-   * when embeddings are unavailable. Present → semantic shortlist (works across
+   * Resolves to the prompt embedding, or null when embeddings are unavailable. Present → semantic shortlist (works across
    * languages); null/absent → keyword fallback.
    */
   queryEmbedding?: () => Promise<SharedQuery | null>;

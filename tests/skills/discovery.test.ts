@@ -77,6 +77,19 @@ describe("discoverSkills", () => {
     expect((await discoverSkills({ home, projectDir: project, cacheDir }))[0]!.description).toBe("from cache");
   });
 
+  it("shares one user-level cache across directories without project skills", async () => {
+    await skill(join(home, ".claude", "skills"), "a", doc("alpha", "one"));
+    const other = join(root, "other");
+    await mkdir(other, { recursive: true });
+    await discoverSkills({ home, projectDir: project, cacheDir });
+    await discoverSkills({ home, projectDir: other, cacheDir });
+    expect((await readdir(cacheDir)).filter((f) => f.startsWith("skills-"))).toHaveLength(1);
+
+    await skill(join(other, ".claude", "skills"), "b", doc("beta", "two"));
+    expect((await discoverSkills({ home, projectDir: other, cacheDir })).map((s) => s.name).sort()).toEqual(["alpha", "beta"]);
+    expect((await readdir(cacheDir)).filter((f) => f.startsWith("skills-"))).toHaveLength(2);
+  });
+
   it("invalidates when an existing SKILL.md is edited in place", async () => {
     const dir = join(home, ".claude", "skills");
     await skill(dir, "a", doc("alpha", "one"));

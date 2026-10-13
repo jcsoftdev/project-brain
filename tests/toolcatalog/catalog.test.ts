@@ -275,6 +275,7 @@ describe("staleness", () => {
 
 describe("loadCatalogForHook", () => {
   it("returns the stale cache at once and spawns a refresh at most once per interval", async () => {
+    await json(join(home, ".claude.json"), { projects: { [project]: { mcpServers: { local: { command: "local-server" } } } } });
     await mkdir(cache, { recursive: true });
     const tools = [{ name: "mcp__a__b", server: "a", description: "d" }];
     await json(join(cache, "tool-catalog.json"), { builtAt: 0, fingerprint: "old", tools });
@@ -290,6 +291,7 @@ describe("loadCatalogForHook", () => {
   });
 
   it("spawns only for the stale part: another project's overlay does not invalidate the user part", async () => {
+    await json(join(home, ".claude.json"), { projects: { [project]: { mcpServers: { local: { command: "local-server" } } } } });
     const configs = await discoverMcpConfigs({ home, projectDir: project });
     await mkdir(cache, { recursive: true });
     await json(join(cache, "tool-catalog.json"), { builtAt: 1000, fingerprint: fingerprintConfigs(configs.user), tools: [] });
@@ -307,11 +309,21 @@ describe("loadCatalogForHook", () => {
     expect(spawns).toBe(0);
   });
 
+  it("has no project part for a directory without project-scoped servers: no read, no spawn for it", async () => {
+    const configs = await discoverMcpConfigs({ home, projectDir: project });
+    await mkdir(cache, { recursive: true });
+    await json(join(cache, "tool-catalog.json"), { builtAt: 0, fingerprint: "old", tools: [] });
+    const spawned: Part[][] = [];
+    await loadCatalogForHook({ home, projectDir: project, cacheDir: cache, now: () => 1_000_000, spawn: (p) => void spawned.push(p) });
+    expect(configs.project).toEqual([]);
+    expect(spawned).toEqual([["user"]]);
+  });
+
   it("spawns with no cache at all and returns []", async () => {
     let spawns = 0;
     const out = await loadCatalogForHook({ home, projectDir: project, cacheDir: cache, spawn: () => void spawns++ });
     expect(out).toEqual([]);
-    expect(spawns).toBe(1);
+    expect(spawns).toBe(1); // user part only
   });
 });
 
