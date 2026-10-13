@@ -6,11 +6,12 @@
  * learn anything changed. SessionStart records the version here; the first prompt afterwards that
  * runs a newer binary gets one notice (see commands/suggest.ts) and is marked notified.
  *
- * One small JSON file, rewritten atomically. Two sessions starting in the same instant can lose
- * one entry to a read-modify-write race; the cost is a missed notice, never a wrong one.
+ * One small file per session under `<dataDir>/sessions/`, written atomically. Two sessions never
+ * share a file, so marking one notified cannot undo another's SessionStart record (a shared file
+ * rewritten read-modify-write did exactly that), and the prompt hook reads one tiny file.
  */
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { writeFileAtomic } from "../atomic-write.js";
 import { isNewer } from "../notifier.js";
 
@@ -23,8 +24,6 @@ export interface SessionEntry {
   notified?: boolean;
 }
 
-type SessionVersions = Record<string, SessionEntry>;
-
 export interface SwapRecord {
   /** The server's working directory, which is the project the host opened it for. */
   cwd: string;
@@ -33,7 +32,9 @@ export interface SwapRecord {
   at: number;
 }
 
-const sessionsFile = (dataDir: string) => join(dataDir, "session-versions.json");
+const sessionsDir = (dataDir: string) => join(dataDir, "sessions");
+// A session id is the host's, so it is made safe to use as a file name rather than trusted to be.
+const sessionFile = (dataDir: string, id: string) => join(sessionsDir(dataDir), `${id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 120)}.json`);
 const swapsFile = (dataDir: string) => join(dataDir, "mcp-swaps.json");
 
 async function readJson<T>(file: string, fallback: T): Promise<T> {
@@ -44,10 +45,13 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
   }
 }
 
-function pruned(all: SessionVersions, now: number): SessionVersions {
-  return Object.fromEntries(
-    Object.entries(all).filter(([, e]) => e && typeof e.version === "string" && now - e.at < RETAIN_MS)
-  );
+async function pruneOld(dataDir: string, now: number): Promise<void> {
+  const dir = sessionsDir(dataDir);
+  for (const name of await readdir(dir).catch(() => [] as string[])) {
+    const file = join(dir, name);
+    const at = (await readJson<Partial<SessionEntry>>(file, {})).at ?? (await stat(file).then((s) => s.mtimeMs, () => now));
+    if (now - at >= RETAIN_MS) await rm(file, { force: true }).catch(() => {});
+  }
 }
 
 /** Remember the version a session started on. A repeat SessionStart (resume, compact) replaces it: CLAUDE.md just reloaded. */
@@ -57,35 +61,38 @@ export async function recordSession(
   version: string,
   now: number = Date.now()
 ): Promise<void> {
-  const all = pruned(await readJson<SessionVersions>(sessionsFile(dataDir), {}), now);
-  all[sessionId] = { version, at: now };
-  await writeFileAtomic(sessionsFile(dataDir), `${JSON.stringify(all, null, 2)}\n`);
+  const entry: SessionEntry = { version, at: now };
+  await writeFileAtomic(sessionFile(dataDir, sessionId), `${JSON.stringify(entry)}\n`);
+  await pruneOld(dataDir, now);
+}
+
+export interface UpgradeNotice {
+  from: string;
+  since: number;
+  /** Mark it delivered. Call after the notice was written out, so a failure repeats it rather than losing it. */
+  commit: () => Promise<void>;
 }
 
 /**
- * The version this session started on, once, if the running binary is newer. Marks it notified
- * before returning, so a failed write means no notice rather than a notice on every prompt.
+ * The version this session started on, if the running binary is newer and it was not told yet.
  * An unknown session costs one small read and nothing else.
  */
 export async function takeUpgradeNotice(
   dataDir: string,
   sessionId: string,
-  currentVersion: string,
-  now: number = Date.now()
-): Promise<{ from: string; since: number } | null> {
-  const all = await readJson<SessionVersions>(sessionsFile(dataDir), {});
-  const entry = all[sessionId];
-  if (!entry || entry.notified || !isNewer(currentVersion, entry.version)) return null;
-  all[sessionId] = { ...entry, notified: true };
-  try {
-    await writeFileAtomic(sessionsFile(dataDir), `${JSON.stringify(pruned(all, now), null, 2)}\n`);
-  } catch {
-    return null;
-  }
-  return { from: entry.version, since: entry.at };
+  currentVersion: string
+): Promise<UpgradeNotice | null> {
+  const file = sessionFile(dataDir, sessionId);
+  const entry = await readJson<SessionEntry | null>(file, null);
+  if (!entry || entry.notified || typeof entry.version !== "string" || !isNewer(currentVersion, entry.version)) return null;
+  return {
+    from: entry.version,
+    since: entry.at,
+    commit: () => writeFileAtomic(file, `${JSON.stringify({ ...entry, notified: true })}\n`),
+  };
 }
 
-/** Called by the MCP server after it hands its client to a newer binary. */
+/** Called by the supervisor after it hands its client to a newer binary. */
 export async function recordSwap(dataDir: string, swap: SwapRecord): Promise<void> {
   const prior = await readJson<SwapRecord[]>(swapsFile(dataDir), []);
   const kept = prior.filter((s) => swap.at - s.at < RETAIN_MS).slice(-49);

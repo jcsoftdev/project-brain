@@ -118,7 +118,14 @@ export async function execute(
 /** The hook's JSON arrives on stdin; a terminal (someone running the command by hand) has none to wait for. */
 async function readSessionIdFromStdin(): Promise<string | undefined> {
   if (process.stdin.isTTY) return undefined;
-  const raw = await Promise.race([Bun.stdin.text(), new Promise<string>((resolve) => setTimeout(() => resolve(""), 500))]);
+  // The host closes the pipe right after writing, so this normally returns at once; the timer only
+  // bounds a pipe that stays open, and is cleared so it never outlives the read.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const raw = await Promise.race([
+    Bun.stdin.text().catch(() => ""),
+    new Promise<string>((resolve) => (timer = setTimeout(() => resolve(""), 500))),
+  ]);
+  clearTimeout(timer);
   try {
     const id = (JSON.parse(raw) as { session_id?: unknown }).session_id;
     return typeof id === "string" && id !== "" ? id : undefined;

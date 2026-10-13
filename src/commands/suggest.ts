@@ -86,7 +86,7 @@ export interface SuggestDeps {
   queryEmbedding?: (prompt: string, projectDir: string) => Promise<SharedQuery | null>;
   embedBudgetMs?: number;
   /** The one-time "project-brain updated" block for this session, or null. Injectable for tests. */
-  upgradeNotice?: (input: HookInput) => Promise<string | null>;
+  upgradeNotice?: (input: HookInput) => Promise<{ text: string; commit: () => Promise<void> } | null>;
 }
 
 /**
@@ -98,7 +98,7 @@ export async function upgradeNoticeFor(
   { sessionId, cwd }: HookInput,
   dataDir?: string,
   version?: string
-): Promise<string | null> {
+): Promise<{ text: string; commit: () => Promise<void> } | null> {
   if (!sessionId) return null;
   const constants = await import("../constants.js");
   const dir = dataDir ?? constants.DATA_DIR;
@@ -114,11 +114,12 @@ export async function upgradeNoticeFor(
   const reminder = JSON.parse(await buildRoutingReminder(undefined, undefined, true)) as {
     hookSpecificOutput?: { additionalContext?: string };
   };
-  return [
+  const text = [
     `project-brain updated ${notice.from} → ${current} in this session: hooks and skills are already live; ${server}.`,
     "",
     reminder.hookSpecificOutput?.additionalContext ?? "",
   ].join("\n");
+  return { text, commit: notice.commit };
 }
 
 /**
@@ -135,7 +136,11 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
     // Independent of the pickers and of the prompt: it needs no token, no index and no embedding.
     try {
       const notice = await (deps.upgradeNotice ?? upgradeNoticeFor)(input);
-      if (notice) print(notice);
+      if (notice) {
+        // Printed first, marked after: a failed mark repeats the notice once more instead of losing it.
+        print(notice.text);
+        await notice.commit();
+      }
     } catch {
       // A notice is a courtesy; it must never cost the suggestions.
     }

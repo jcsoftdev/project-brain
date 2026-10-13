@@ -1,9 +1,9 @@
 import { describe, it, expect } from "bun:test";
 import { join } from "node:path";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { runSuggest, upgradeNoticeFor, parseHookInput } from "../../src/commands/suggest.js";
-import { recordSession, recordSwap } from "../../src/hooks/session-versions.js";
+import { recordSession, recordSwap, takeUpgradeNotice } from "../../src/hooks/session-versions.js";
 
 const NOW = Date.UTC(2026, 9, 13);
 
@@ -81,8 +81,18 @@ describe("one-time update notice", () => {
     await recordSession(h.dataDir, "old", "0.38.0", NOW - 8 * 24 * 3600_000);
     await recordSession(h.dataDir, "new", "0.39.0", NOW);
 
-    const saved = JSON.parse(await readFile(join(h.dataDir, "session-versions.json"), "utf8"));
-    expect(Object.keys(saved)).toEqual(["new"]);
+    expect(await readdir(join(h.dataDir, "sessions"))).toEqual(["new.json"]);
+  });
+
+  it("marking one session notified cannot undo a session recorded in between", async () => {
+    const h = await harness();
+    await recordSession(h.dataDir, "a", "0.39.0", NOW);
+    const taken = await takeUpgradeNotice(h.dataDir, "a", "0.40.0");
+    await recordSession(h.dataDir, "b", "0.39.0", NOW + 1); // another session starts before a is marked
+    await taken!.commit();
+
+    expect(await takeUpgradeNotice(h.dataDir, "a", "0.40.0")).toBeNull();
+    expect((await takeUpgradeNotice(h.dataDir, "b", "0.40.0"))?.from).toBe("0.39.0");
   });
 
   it("reads session_id from the hook JSON", () => {

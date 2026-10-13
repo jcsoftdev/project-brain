@@ -2,6 +2,33 @@
 
 const [command, ...args] = process.argv.slice(2);
 
+// Stdio `serve` runs as a thin supervisor around a worker (`serve --worker`) so a running session can
+// move to a newer binary after `project-brain update` without `/mcp reconnect`. Decided before the
+// preamble below and before anything heavy loads: the supervisor stays small, the worker does the work.
+// BRAIN_MCP_HOT_SWAP=0 serves in-process, as before.
+if (
+  (command === undefined || command === "serve") &&
+  !args.includes("--http") &&
+  !args.includes("--worker") &&
+  process.env.BRAIN_MCP_HOT_SWAP !== "0"
+) {
+  const { runSupervisor, resolveLauncher } = await import("./server/supervisor.js");
+  const { VERSION, DATA_DIR } = await import("./constants.js");
+  const cwd = process.cwd();
+  const code = await runSupervisor({
+    launcher: resolveLauncher(),
+    args: ["serve", ...args],
+    version: VERSION,
+    orphanCheckMs: Number(process.env.BRAIN_ORPHAN_CHECK_MS) || undefined,
+    // Left for the next prompt's notice, which can then say the server is already on the new version.
+    onSwapped: async (swap) => {
+      const { recordSwap } = await import("./hooks/session-versions.js");
+      await recordSwap(DATA_DIR, { cwd, ...swap, at: Date.now() });
+    },
+  });
+  process.exit(code);
+}
+
 // Update notifier: instant (reads a cached result only, no network) and
 // fail-silent. Skipped for hidden/internal commands so the detached background
 // refresh never re-triggers itself. Opt out with BRAIN_NO_UPDATE_CHECK=1.
@@ -257,25 +284,10 @@ switch (command) {
       // process, not to keep it running.
       orphanCheck.unref?.();
 
-      // Lets this process hand its client to a newer binary after `project-brain update`, so the
-      // session needs no `/mcp reconnect`. Opt out with BRAIN_MCP_HOT_SWAP=0.
-      let transport: import("@modelcontextprotocol/sdk/shared/transport.js").Transport;
-      if (process.env.BRAIN_MCP_HOT_SWAP === "0") {
-        transport = new StdioServerTransport();
-      } else {
-        const { HotSwapTransport, resolveSelfLaunch } = await import("./server/hot-swap.js");
-        const { VERSION } = await import("./constants.js");
-        // Once swapped, only the new code may touch the project: release the watcher so its election
-        // retry hands the root to the child, and close the graph handles. Never exits.
-        const release = createShutdownHandler(watcher, () => {}, [graph, foreignGraphs]);
-        // The swap is recorded so the next prompt's notice can say the server is already on the new version.
-        const onSwapped = async (swap: { from: string; to: string }) => {
-          const { recordSwap } = await import("./hooks/session-versions.js");
-          const { DATA_DIR } = await import("./constants.js");
-          await recordSwap(DATA_DIR, { cwd, ...swap, at: Date.now() });
-        };
-        transport = new HotSwapTransport({ ...resolveSelfLaunch(), version: VERSION, onSwitched: release, onSwapped });
-      }
+      const transport = new StdioServerTransport();
+      // A worker run by the supervisor also ends when the supervisor's pipe closes; the orphan
+      // check above covers the supervisor being killed outright (it watches the supervisor's pid).
+      if (args.includes("--worker")) process.stdin.once("end", () => void shutdown());
       await server.connect(transport);
     }
     break;
@@ -295,7 +307,8 @@ switch (command) {
   case "routing-rules": {
     const { execute } = await import("./hooks/routing-rules.js");
     await execute();
-    break;
+    // An unread stdin must not keep a hook that has already printed its answer alive.
+    process.exit(0);
   }
   case "routing-guard": {
     const { execute } = await import("./hooks/routing-guard.js");

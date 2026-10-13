@@ -137,6 +137,25 @@ describe("runUpdate re-applies setup", () => {
     expect(h.calls).toEqual(["apply"]);
   });
 
+  it("skips the re-apply, with a message, when the binary on PATH is not the version just installed", async () => {
+    const h = deps({ installedVersion: async () => "0.6.0" });
+    await runUpdate(h.deps);
+    expect(h.calls).toEqual(["install"]);
+    expect(h.logged.join("\n")).toContain("reports 0.6.0, expected 0.7.0");
+  });
+
+  it("applies when the binary reports the version just installed", async () => {
+    const h = deps({ installedVersion: async () => "0.7.0" });
+    await runUpdate(h.deps);
+    expect(h.calls).toEqual(["install", "apply"]);
+  });
+
+  it("--apply-only skips when no installed binary can report a version", async () => {
+    const h = deps({ applyOnly: true, installedVersion: async () => null });
+    await runUpdate(h.deps);
+    expect(h.calls).toEqual([]);
+  });
+
   it("says setup can add more when there is no saved selection", async () => {
     const h = deps({ hasSavedSelection: () => false });
     await runUpdate(h.deps);
