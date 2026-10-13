@@ -257,7 +257,19 @@ switch (command) {
       // process, not to keep it running.
       orphanCheck.unref?.();
 
-      const transport = new StdioServerTransport();
+      // Lets this process hand its client to a newer binary after `project-brain update`, so the
+      // session needs no `/mcp reconnect`. Opt out with BRAIN_MCP_HOT_SWAP=0.
+      let transport: import("@modelcontextprotocol/sdk/shared/transport.js").Transport;
+      if (process.env.BRAIN_MCP_HOT_SWAP === "0") {
+        transport = new StdioServerTransport();
+      } else {
+        const { HotSwapTransport, resolveSelfLaunch } = await import("./server/hot-swap.js");
+        const { VERSION } = await import("./constants.js");
+        // Once swapped, only the new code may touch the project: release the watcher so its election
+        // retry hands the root to the child, and close the graph handles. Never exits.
+        const release = createShutdownHandler(watcher, () => {}, [graph, foreignGraphs]);
+        transport = new HotSwapTransport({ ...resolveSelfLaunch(), version: VERSION, onSwitched: release });
+      }
       await server.connect(transport);
     }
     break;
