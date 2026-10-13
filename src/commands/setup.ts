@@ -81,6 +81,15 @@ export interface SetupOptions {
   /** Non-interactive override for the unit checklist, from `parseUnitFlags`. */
   units?: { mode: "default" | "explicit"; selected: string[] };
   /**
+   * Re-apply the saved selection with no prompts (what `update` runs after an
+   * install). Selected units are refreshed, declined ones are left exactly as
+   * they are, and a unit never offered is touched only if it is already
+   * installed — an upgrade never installs something nobody chose.
+   */
+  applySaved?: boolean;
+  /** Suppress the plan table (the caller prints its own summary). */
+  quiet?: boolean;
+  /**
    * Injectable for testing; defaults to the real `promptUnitSelection` from
    * `src/interactive.js`. Every other prompt in this file is injectable and the
    * existing suite depends on that, so this one is too.
@@ -318,7 +327,13 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     );
 
   let chosenIds: string[];
-  if (options.units?.mode === "explicit") {
+  if (options.applySaved) {
+    // hasSelection=true, defaultSelected=false: selected -> on, declined -> off,
+    // unseen -> on only when already on disk.
+    chosenIds = inspected
+      .filter((r) => initialChecked(r.state, r.membership, false, true))
+      .map((r) => r.id);
+  } else if (options.units?.mode === "explicit") {
     chosenIds = options.units.selected;
   } else {
     // The checklist is seeded from `seed`, not `chosen`: a first run shows
@@ -336,17 +351,19 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
 
   const chosen = new Set(chosenIds);
   const plan = computePlan(inspected.map((row) => ({ ...row, chosen: chosen.has(row.id) })));
+  // A declined unit found on disk was put there by hand; re-applying a selection must not delete it.
+  if (options.applySaved) for (const row of plan) if (row.action === "remove") row.action = "unchanged";
 
   // 6.5. Show the diff before a single write happens, and — in a real
   // interactive session, and only when the plan actually does something —
   // require explicit consent. `blocked` rows are informational (a foreign
   // directory we already refuse to touch), not something to confirm, so they
   // do not count as "work" any more than `unchanged` does.
-  console.log(`\n${renderPlan(plan)}`);
+  if (!options.quiet) console.log(`\n${renderPlan(plan)}`);
   const hasWork = plan.some(
     (p) => p.action === "install" || p.action === "update" || p.action === "remove"
   );
-  if (hasWork && isInteractive()) {
+  if (hasWork && isInteractive() && !options.applySaved) {
     const clack = await import("@clack/prompts");
     const proceed = await clack.confirm({ message: "Apply?", initialValue: false });
     if (clack.isCancel(proceed) || proceed !== true) {
@@ -382,8 +399,11 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   // could not be applied HERE (no Ollama, no detected host, a foreign
   // directory) was never actually offered a real choice, and must stay
   // `unseen` so it is offered again once the blocker goes away.
+  // Applying a saved selection offers nothing new, so an id never seen stays unseen unless it was
+  // installed (and so chosen); otherwise saveSelection would record it as declined.
   const selectableIds = inspected
     .filter((r) => r.state !== "unavailable" && r.state !== "foreign")
+    .filter((r) => !options.applySaved || r.membership !== "unseen" || chosen.has(r.id))
     .map((r) => r.id);
   await saveSelection(ctx.selectionPath, chosenIds, selectableIds, VERSION);
 
@@ -461,6 +481,11 @@ export async function probeContext(options: {
 
 /** CLI entry point for the setup command. */
 export async function execute(args: string[]): Promise<void> {
+  if (args.includes("--apply-saved")) {
+    await executeApplySaved();
+    return;
+  }
+
   const recordConnection = parseRecordConnectionFlag(args);
   const routingHook = parseRoutingHookFlag(args);
   const worktreeHook = parseWorktreeHookFlag(args);
@@ -561,4 +586,18 @@ export async function execute(args: string[]): Promise<void> {
   console.log(`\nSelection saved to ${result.selectionPath}`);
 
   console.log("\nSetup complete. Run `project-brain init` in a project.");
+}
+
+/** What `update` runs on the freshly installed binary: the saved selection, re-applied quietly. */
+async function executeApplySaved(): Promise<void> {
+  const result = await runSetup({ applySaved: true, quiet: true });
+  const changed = result.units.filter((u) => u.action === "install" || u.action === "update");
+  console.log(
+    changed.length > 0
+      ? `Refreshed ${changed.length} setup unit(s): ${changed.map((u) => u.id).join(", ")}`
+      : "Setup is already current for this version."
+  );
+  if (result.manualInstructions.length > 0) {
+    console.log(`Manual setup needed:\n${result.manualInstructions.join("\n\n")}`);
+  }
 }

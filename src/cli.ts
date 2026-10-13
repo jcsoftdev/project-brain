@@ -116,7 +116,9 @@ Commands:
   health             Check system health and staleness
   search "<query>"   Search indexed context (used by hooks); prints compact results
   suggest --stdin    Skill/tool suggestion hook (UserPromptSubmit, global; works in any directory)
-  update             Update project-brain to the latest published version
+  update             Update project-brain to the latest published version, then re-apply your
+                       saved setup selection with the new binary (no prompts)
+                       --apply-only  skip the install (after brew/npm upgraded it for you)
 
 Knowledge bundles (Open Knowledge Format v0.2 — the *why*, not the *what*):
   okf validate [dir]       Check bundle conformance (SPEC §11). Offline.
