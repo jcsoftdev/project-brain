@@ -24,7 +24,7 @@ export const SKILL_WARM_BUDGET_MS = 400;
 export const SKILL_MIN_COSINE = 0.67;
 
 /** Vector cache entries kept before the file is reset; bounds growth across projects and edits. */
-const MAX_CACHED_VECTORS = 2000;
+const MAX_CACHED_VECTORS = 5000;
 
 /** Precision kept per component — plenty for ranking, and roughly halves the file. */
 const VECTOR_DECIMALS = 5;
@@ -57,8 +57,8 @@ function vectorKey(skill: SkillInfo): string {
   return `${skill.path ?? skill.name}|${skill.mtime ?? 0}`;
 }
 
-function cachePath(cacheDir: string, model: string): string {
-  return join(cacheDir, `skill-vectors-${model.replace(/[^A-Za-z0-9._-]/g, "_") || "default"}.json`);
+function cachePath(cacheDir: string, prefix: string, model: string): string {
+  return join(cacheDir, `${prefix}-${model.replace(/[^A-Za-z0-9._-]/g, "_") || "default"}.json`);
 }
 
 async function loadVectors(file: string): Promise<Record<string, number[]>> {
@@ -72,51 +72,101 @@ async function loadVectors(file: string): Promise<Record<string, number[]>> {
 
 const round = (v: number[]): number[] => v.map((x) => Number(x.toFixed(VECTOR_DECIMALS)));
 
+/** What differs between ranking skills and ranking tools: the text embedded, the cache identity, and the cache file. */
+export interface RankSpec<T> {
+  /** Vector cache file prefix: `skill-vectors`, `tool-vectors`. */
+  filePrefix: string;
+  text: (item: T) => string;
+  key: (item: T) => string;
+}
+
 /**
- * Top `topN` skills by cosine to the prompt vector that clear
- * {@link SKILL_MIN_COSINE} ([] when none do), or null when embeddings can't
- * help (no vectors for any skill) so the caller falls back to keywords.
- * Skill vectors are cached on disk by path + mtime + model; a cold cache is
- * warmed {@link SKILL_EMBED_BATCH} skills at a time, persisted per batch, for
- * at most {@link SKILL_WARM_BUDGET_MS}. Never throws.
+ * Embeds the items that have no cached vector, a batch at a time, persisting
+ * after each batch. `budgetMs` bounds time spent past the first batch.
  */
-export async function rankSkillsSemantic(
+async function fillVectors<T>(
+  items: T[],
+  spec: RankSpec<T>,
+  embeddings: EmbeddingClient,
+  vectors: Record<string, number[]>,
+  file: string,
+  cacheDir: string,
+  now: () => number,
+  budgetMs = SKILL_WARM_BUDGET_MS
+): Promise<void> {
+  const missing = items.filter((s) => !vectors[spec.key(s)]);
+  const warmStart = now();
+  for (let i = 0; i < missing.length; i += SKILL_EMBED_BATCH) {
+    if (i > 0 && now() - warmStart >= budgetMs) break;
+    const batch = missing.slice(i, i + SKILL_EMBED_BATCH);
+    const embedded = await embeddings.embed(batch.map(spec.text));
+    if (!embedded || embedded.length !== batch.length) break;
+    batch.forEach((s, j) => {
+      vectors[spec.key(s)] = round(embedded[j]!);
+    });
+    try {
+      await mkdir(cacheDir, { recursive: true });
+      await writeFile(file, JSON.stringify(vectors));
+    } catch {
+      // Unwritable cache → re-embed next time.
+    }
+  }
+}
+
+/** Embeds every uncached item with no time budget — for background refreshes, never the hook. Never throws. */
+export async function warmVectors<T>(items: T[], spec: RankSpec<T>, embeddings: EmbeddingClient, cacheDir: string = DATA_DIR): Promise<void> {
+  try {
+    const file = cachePath(cacheDir, spec.filePrefix, embeddings.model ?? "");
+    const vectors = await loadVectors(file);
+    await fillVectors(items, spec, embeddings, vectors, file, cacheDir, Date.now, Number.POSITIVE_INFINITY);
+  } catch {
+    // Warming is best-effort.
+  }
+}
+
+/**
+ * Top `topN` items by cosine to the prompt vector that clear
+ * {@link SKILL_MIN_COSINE} ([] when none do), or null when embeddings can't
+ * help (no vectors for any item) so the caller falls back to keywords.
+ * Vectors are cached on disk by `spec.key` + model; a cold cache is warmed
+ * {@link SKILL_EMBED_BATCH} items at a time, persisted per batch, for at most
+ * {@link SKILL_WARM_BUDGET_MS}. Never throws.
+ */
+export async function rankSemantic<T>(
+  items: T[],
+  spec: RankSpec<T>,
+  query: SharedQuery,
+  topN: number,
+  cacheDir: string = DATA_DIR,
+  now: () => number = Date.now
+): Promise<T[] | null> {
+  try {
+    const file = cachePath(cacheDir, spec.filePrefix, query.embeddings.model ?? "");
+    let vectors = await loadVectors(file);
+    if (Object.keys(vectors).length > MAX_CACHED_VECTORS) vectors = {};
+
+    await fillVectors(items, spec, query.embeddings, vectors, file, cacheDir, now);
+
+    const scored = items
+      .filter((s) => vectors[spec.key(s)])
+      .map((s) => ({ item: s, score: cosine(query.vector, vectors[spec.key(s)]!) }))
+      .sort((a, b) => b.score - a.score);
+    if (scored.length === 0) return null;
+    return scored.filter((s) => s.score >= SKILL_MIN_COSINE).slice(0, topN).map((s) => s.item);
+  } catch {
+    return null;
+  }
+}
+
+const SKILL_SPEC: RankSpec<SkillInfo> = { filePrefix: "skill-vectors", text: skillText, key: vectorKey };
+
+/** {@link rankSemantic} over installed skills. */
+export function rankSkillsSemantic(
   skills: SkillInfo[],
   query: SharedQuery,
   topN: number,
   cacheDir: string = DATA_DIR,
   now: () => number = Date.now
 ): Promise<SkillInfo[] | null> {
-  try {
-    const file = cachePath(cacheDir, query.embeddings.model ?? "");
-    let vectors = await loadVectors(file);
-    if (Object.keys(vectors).length > MAX_CACHED_VECTORS) vectors = {};
-
-    const missing = skills.filter((s) => !vectors[vectorKey(s)]);
-    const warmStart = now();
-    for (let i = 0; i < missing.length; i += SKILL_EMBED_BATCH) {
-      if (i > 0 && now() - warmStart >= SKILL_WARM_BUDGET_MS) break;
-      const batch = missing.slice(i, i + SKILL_EMBED_BATCH);
-      const embedded = await query.embeddings.embed(batch.map(skillText));
-      if (!embedded || embedded.length !== batch.length) break;
-      batch.forEach((s, j) => {
-        vectors[vectorKey(s)] = round(embedded[j]!);
-      });
-      try {
-        await mkdir(cacheDir, { recursive: true });
-        await writeFile(file, JSON.stringify(vectors));
-      } catch {
-        // Unwritable cache → re-embed next time.
-      }
-    }
-
-    const scored = skills
-      .filter((s) => vectors[vectorKey(s)])
-      .map((s) => ({ skill: s, score: cosine(query.vector, vectors[vectorKey(s)]!) }))
-      .sort((a, b) => b.score - a.score);
-    if (scored.length === 0) return null;
-    return scored.filter((s) => s.score >= SKILL_MIN_COSINE).slice(0, topN).map((s) => s.skill);
-  } catch {
-    return null;
-  }
+  return rankSemantic(skills, SKILL_SPEC, query, topN, cacheDir, now);
 }
