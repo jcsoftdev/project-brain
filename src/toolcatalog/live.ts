@@ -1,4 +1,4 @@
-import { normalizeServerName, type McpServerConfig } from "./config.js";
+import { expandServer, normalizeServerName, type McpServerConfig } from "./config.js";
 
 export interface ToolEntry {
   /** Claude Code's tool id: `mcp__<server>__<tool>`. */
@@ -20,7 +20,11 @@ export const LIST_CONCURRENCY = 4;
 
 const MAX_LIST_PAGES = 5;
 
-const collapse = (text: string): string => text.replace(/\s+/g, " ").trim();
+/** Control characters out (they would reach Jev and the injected context), whitespace collapsed. */
+export const collapse = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim();
+
+/** Tool names that cannot be a real MCP tool id are dropped rather than suggested. */
+export const VALID_TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function toolId(server: string, tool: string): string {
   return `mcp__${normalizeServerName(server)}__${tool}`;
@@ -32,12 +36,37 @@ function mergedEnv(extra: Record<string, string> | undefined): Record<string, st
 }
 
 /**
+ * `npx`/`uvx`-style servers run the real process as a grandchild that the
+ * transport's SIGTERM to the direct child does not reach, and the SDK gives no
+ * way to start the child as a group leader. Best effort: signal the
+ * descendants before the transport closes. No-op on Windows or without pgrep.
+ */
+function killDescendants(pid: number | null): void {
+  if (!pid || process.platform === "win32") return;
+  try {
+    const out = Bun.spawnSync(["pgrep", "-P", String(pid)]).stdout.toString();
+    for (const child of out.split("\n").map(Number).filter(Boolean)) {
+      killDescendants(child);
+      try {
+        process.kill(child, "SIGTERM");
+      } catch {
+        // Already gone.
+      }
+    }
+  } catch {
+    // Best effort.
+  }
+}
+
+/**
  * Connects with the MCP SDK client, pages through `tools/list` and always
  * closes the transport (which kills a stdio child). HTTP servers are tried
  * without credentials, so an OAuth-protected one fails with 401 and is skipped
- * by the caller.
+ * by the caller. `${VAR}` references in the config are expanded first; an
+ * unset one fails the server like Claude Code does.
  */
-export const listServerTools: ToolLister = async (server) => {
+export const listServerTools: ToolLister = async (configured) => {
+  const server = expandServer(configured);
   const [{ Client }, { StdioClientTransport }, { StreamableHTTPClientTransport }] = await Promise.all([
     import("@modelcontextprotocol/sdk/client/index.js"),
     import("@modelcontextprotocol/sdk/client/stdio.js"),
@@ -62,6 +91,7 @@ export const listServerTools: ToolLister = async (server) => {
       for (let page = 0; page < MAX_LIST_PAGES; page++) {
         const res = await client.listTools(cursor ? { cursor } : undefined);
         for (const t of res.tools) {
+          if (!VALID_TOOL_NAME.test(t.name)) continue;
           tools.push({ name: toolId(server.name, t.name), server: normalizeServerName(server.name), description: collapse(t.description ?? "") });
         }
         cursor = res.nextCursor;
@@ -77,6 +107,7 @@ export const listServerTools: ToolLister = async (server) => {
     return await Promise.race([run, timeout]);
   } finally {
     clearTimeout(timer);
+    killDescendants(transport instanceof StdioClientTransport ? transport.pid : null);
     await transport.close().catch(() => {});
     await client.close().catch(() => {});
   }

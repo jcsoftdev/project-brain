@@ -8,8 +8,8 @@ const text = (tool: ToolEntry): string => `${tool.name}: ${tool.description}`.sl
 /** The description is part of the key, so an edited tool is re-embedded while an unchanged one never is. */
 const key = (tool: ToolEntry): string => `${tool.name}|${createHash("sha1").update(tool.description).digest("hex").slice(0, 8)}`;
 
-/** Tool vectors live apart from skill vectors: different size, different churn. */
-export const TOOL_SPEC: RankSpec<ToolEntry> = { filePrefix: "tool-vectors", text, key };
+/** Tool vectors live apart from skill vectors: different size, different churn. Binary, and never embedded on the hook path — the background refresh warms them. */
+export const TOOL_SPEC: RankSpec<ToolEntry> = { filePrefix: "tool-vectors", text, key, format: "bin", warmOnHook: false };
 
 export function rankToolsSemantic(
   tools: ToolEntry[],

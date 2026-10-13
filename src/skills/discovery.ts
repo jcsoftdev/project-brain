@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { writeFileAtomic } from "../atomic-write.js";
 import { DATA_DIR } from "../constants.js";
 import { parseDocument } from "../okf/frontmatter.js";
 
@@ -140,8 +141,7 @@ export async function discoverSkills(opts: DiscoverOptions): Promise<SkillInfo[]
   const read = await Promise.all(files.map((f) => readSkill(f.file, f.prefix)));
   const skills = dedupeByName(read.filter((s): s is SkillInfo => s !== null));
   try {
-    await mkdir(cacheDir, { recursive: true });
-    await writeFile(cacheFile, JSON.stringify({ builtAt: now, fingerprint, skills } satisfies CacheFile));
+    await writeFileAtomic(cacheFile, JSON.stringify({ builtAt: now, fingerprint, skills } satisfies CacheFile));
   } catch {
     // An unwritable cache only costs a rescan next time.
   }

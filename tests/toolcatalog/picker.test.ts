@@ -1,8 +1,13 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runWithSkillPick } from "../../src/commands/search.js";
 import type { SkillInfo } from "../../src/skills/discovery.js";
 import { pickSkill, pickSuggestions, prefilterTools, toolPickerEnabled, SKILL_CONFIDENCE_THRESHOLD } from "../../src/skills/picker.js";
+import { modelsWithVectors, warmVectors } from "../../src/skills/semantic.js";
 import type { ToolEntry } from "../../src/toolcatalog/live.js";
+import { rankToolsSemantic, TOOL_SPEC } from "../../src/toolcatalog/shortlist.js";
 
 const SKILLS: SkillInfo[] = [{ name: "brain-commit", description: "Writes a git commit message in the repository convention" }];
 const TOOLS: ToolEntry[] = [
@@ -115,13 +120,26 @@ describe("pickSuggestions", () => {
     expect(JSON.stringify(await pickSuggestions(PROMPT, setup(BOTH).deps))).not.toContain("secret-token");
   });
 
-  it("never throws when the catalog loader does", async () => {
+  it("a throwing catalog loader costs only the tool question", async () => {
     const { deps } = setup(BOTH, {
       loadTools: async () => {
         throw new Error("boom");
       },
     });
-    expect(await pickSuggestions(PROMPT, deps)).toEqual([]);
+    expect(await pickSuggestions(PROMPT, deps)).toEqual([expect.stringMatching(/^Suggested skill: /)]);
+  });
+
+  it("sends the skill question alone when the tool shortlist misses its budget", async () => {
+    const { deps, calls } = setup(BOTH, {
+      toolBudgetMs: 20,
+      loadTools: async () => {
+        await new Promise((r) => setTimeout(r, 200));
+        return TOOLS;
+      },
+    });
+    const lines = await pickSuggestions(PROMPT, deps);
+    expect(Object.keys(calls[0]!.body.questions)).toEqual(["pick"]);
+    expect(lines).toEqual([expect.stringMatching(/^Suggested skill: /)]);
   });
 
   it("BRAIN_TOOL_PICKER=0 drops the tool question but keeps skills", async () => {
@@ -182,35 +200,76 @@ describe("runWithSkillPick with several lines", () => {
   });
 });
 
-describe("tool vector ranking", () => {
-  it("ranks by cosine, caches tool vectors in their own file and re-embeds only changed descriptions", async () => {
-    const { mkdtemp, readdir, rm } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { rankToolsSemantic } = await import("../../src/toolcatalog/shortlist.js");
-    const dir = await mkdtemp(join(tmpdir(), "toolvec-"));
-    let embedded = 0;
-    const vec = (t: string) => (t.startsWith("mcp__claude_ai_Slack") ? [1, 0] : [0, 1]);
-    const embeddings = {
-      dim: 2,
-      model: "m",
-      isAvailable: async () => true,
-      embed: async (texts: string[]) => {
-        embedded += texts.length;
-        return texts.map(vec);
-      },
-    };
-    const query = { embeddings, vector: [1, 0] };
-    try {
-      expect((await rankToolsSemantic(TOOLS, query, 12, dir))!.map((t) => t.server)).toEqual(["claude_ai_Slack"]);
-      expect(embedded).toBe(2);
-      await rankToolsSemantic(TOOLS, query, 12, dir);
-      expect(embedded).toBe(2);
-      await rankToolsSemantic([{ ...TOOLS[1]!, description: "changed" }], query, 12, dir);
-      expect(embedded).toBe(3);
-      expect(await readdir(dir)).toEqual(["tool-vectors-m.json"]);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+describe("tool vector store", () => {
+  let dir: string;
+  let embedded: number;
+  const vec = (t: string) => (t.startsWith("mcp__claude_ai_Slack") ? [1, 0] : [0, 1]);
+  const embeddings = {
+    dim: 2,
+    model: "m:1",
+    isAvailable: async () => true,
+    embed: async (texts: string[]) => {
+      embedded += texts.length;
+      return texts.map(vec);
+    },
+  };
+  const query = { embeddings, vector: [1, 0] };
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "toolvec-"));
+    embedded = 0;
+  });
+  afterEach(() => rm(dir, { recursive: true, force: true }));
+
+  it("never embeds on the hook path: ranks only with vectors the background warm wrote", async () => {
+    expect(await rankToolsSemantic(TOOLS, query, 12, dir)).toBeNull();
+    expect(embedded).toBe(0);
+    expect(await readdir(dir)).toEqual([]);
+
+    await warmVectors(TOOLS, TOOL_SPEC, embeddings, dir);
+    expect(embedded).toBe(2);
+    expect(await readdir(dir)).toEqual(["tool-vectors-m_1.bin"]);
+    expect((await rankToolsSemantic(TOOLS, query, 12, dir))!.map((t) => t.server)).toEqual(["claude_ai_Slack"]);
+    expect(embedded).toBe(2);
+  });
+
+  it("re-embeds only changed descriptions and prunes vectors of tools that are gone", async () => {
+    await warmVectors(TOOLS, TOOL_SPEC, embeddings, dir);
+    await warmVectors(TOOLS, TOOL_SPEC, embeddings, dir);
+    expect(embedded).toBe(2);
+    await warmVectors([TOOLS[0]!, { ...TOOLS[1]!, description: "changed" }], TOOL_SPEC, embeddings, dir);
+    expect(embedded).toBe(3);
+    await warmVectors([TOOLS[0]!], TOOL_SPEC, embeddings, dir);
+    expect(embedded).toBe(3);
+    // The dropped tool no longer ranks.
+    expect((await rankToolsSemantic(TOOLS, query, 12, dir))!.map((t) => t.server)).toEqual(["claude_ai_Slack"]);
+    expect(await modelsWithVectors("tool-vectors", dir)).toEqual(["m:1"]);
+  });
+
+  it("a truncated vector file is neither ranked from nor overwritten", async () => {
+    await warmVectors(TOOLS, TOOL_SPEC, embeddings, dir);
+    const file = join(dir, "tool-vectors-m_1.bin");
+    const whole = await readFile(file);
+    await writeFile(file, whole.subarray(0, whole.length - 5));
+    const truncated = await readFile(file);
+
+    expect(await rankToolsSemantic(TOOLS, query, 12, dir)).toBeNull();
+    await warmVectors(TOOLS, TOOL_SPEC, embeddings, dir);
+    expect(Buffer.compare(await readFile(file), truncated)).toBe(0);
+    expect(embedded).toBe(2);
+  });
+
+  it("a truncated JSON skill vector file is left untouched too", async () => {
+    const { rankSkillsSemantic } = await import("../../src/skills/semantic.js");
+    const file = join(dir, "skill-vectors-m_1.json");
+    await writeFile(file, '{"a|0":[0.1,0.');
+    expect(await rankSkillsSemantic([{ name: "a", description: "d" }], query, 12, dir)).toBeNull();
+    expect(await readFile(file, "utf-8")).toBe('{"a|0":[0.1,0.');
+    expect(embedded).toBe(0);
+  });
+
+  it("writes cache files atomically: no temp files are left behind", async () => {
+    await warmVectors(TOOLS, TOOL_SPEC, embeddings, dir);
+    expect((await readdir(dir)).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 });

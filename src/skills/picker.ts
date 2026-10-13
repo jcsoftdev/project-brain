@@ -14,6 +14,12 @@ import { rankToolsSemantic } from "../toolcatalog/shortlist.js";
  */
 export const MAX_SKILL_CANDIDATES = 12;
 
+/**
+ * The tool shortlist must not hold up the skill question: once the prompt
+ * vector has arrived it gets this long, then the request goes without tools.
+ */
+export const TOOL_SHORTLIST_BUDGET_MS = 50;
+
 /** Same cap for MCP tools, for the same latency reason. */
 export const MAX_TOOL_CANDIDATES = 12;
 
@@ -98,6 +104,8 @@ export interface SkillPickDeps {
   loadTools?: () => Promise<ToolEntry[]>;
   /** Where tool vectors are cached. Defaults to the data dir. */
   toolVectorCacheDir?: string;
+  /** How long the tool shortlist may take once the prompt vector is in. Defaults to {@link TOOL_SHORTLIST_BUDGET_MS}. */
+  toolBudgetMs?: number;
 }
 
 export function toolPickerEnabled(env: Record<string, string | undefined> = process.env): boolean {
@@ -166,6 +174,10 @@ async function pickLines(
   const token = await (deps.getToken ?? (() => resolveRerankerToken()))();
   if (!token) return none;
 
+  // The catalog read does not need the prompt vector, so it runs while the vector is still being computed.
+  const catalog = wantTools
+    ? (deps.loadTools ?? (() => loadCatalogForHook({ projectDir: deps.projectDir })))().catch((): ToolEntry[] => [])
+    : Promise.resolve([] as ToolEntry[]);
   const shared = await (deps.queryEmbedding?.() ?? Promise.resolve(null));
 
   const shortlistSkills = async (): Promise<SkillInfo[]> => {
@@ -175,12 +187,22 @@ async function pickLines(
     return semantic ?? prefilterSkills(prompt, skills);
   };
   const shortlistTools = async (): Promise<ToolEntry[]> => {
-    if (!wantTools) return [];
-    const tools = await (deps.loadTools ?? (() => loadCatalogForHook({ projectDir: deps.projectDir })))();
+    const tools = await catalog;
     const semantic = shared ? await rankToolsSemantic(tools, shared, MAX_TOOL_CANDIDATES, deps.toolVectorCacheDir) : null;
     return semantic ?? prefilterTools(prompt, tools);
   };
-  const [skillCandidates, toolCandidates] = await Promise.all([shortlistSkills(), shortlistTools()]);
+  // The tool shortlist is the optional half: past its budget the skill question goes alone.
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+  const toolsInBudget = wantTools
+    ? Promise.race([
+        shortlistTools().catch((): ToolEntry[] => []),
+        new Promise<ToolEntry[]>((resolve) => {
+          budgetTimer = setTimeout(() => resolve([]), deps.toolBudgetMs ?? TOOL_SHORTLIST_BUDGET_MS);
+        }),
+      ])
+    : Promise.resolve([] as ToolEntry[]);
+  const [skillCandidates, toolCandidates] = await Promise.all([shortlistSkills(), toolsInBudget]);
+  clearTimeout(budgetTimer);
   const skills = describe(skillCandidates);
   const tools = describe(toolCandidates);
   if (skills.length === 0 && tools.length === 0) return none;
