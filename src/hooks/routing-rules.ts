@@ -123,7 +123,7 @@ async function readSessionIdFromStdin(): Promise<string | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const raw = await Promise.race([
     Bun.stdin.text().catch(() => ""),
-    new Promise<string>((resolve) => (timer = setTimeout(() => resolve(""), 500))),
+    new Promise<string>((resolve) => (timer = setTimeout(() => resolve(""), 200))),
   ]);
   clearTimeout(timer);
   try {
