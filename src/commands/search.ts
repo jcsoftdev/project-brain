@@ -2,7 +2,7 @@ import type { EmbeddingClient, VectorStore } from "../types.js";
 import type { Reranker } from "../rerank/jev.js";
 import { handleSearch } from "../tools/search.js";
 import { isTrivialPrompt } from "./trivial-prompt.js";
-import { pickSkill, SKILL_JEV_TIMEOUT_MS, SKILL_PICK_GRACE_MS } from "../skills/picker.js";
+import { pickSuggestions, SKILL_JEV_TIMEOUT_MS, SKILL_PICK_GRACE_MS } from "../skills/picker.js";
 import type { SharedQuery } from "../skills/semantic.js";
 
 /**
@@ -143,8 +143,8 @@ export interface SkillPickTiming {
 }
 
 /**
- * Runs retrieval and the skill pick side by side, so the hook's latency is
- * max(search, pick) rather than their sum, then prints the suggestion after
+ * Runs retrieval and the skill/tool pick side by side, so the hook's latency is
+ * max(search, pick) rather than their sum, then prints the suggestion lines after
  * the retrieved context.
  *
  * The pick is not given a fixed budget from hook start: it can't even begin
@@ -154,7 +154,7 @@ export interface SkillPickTiming {
  */
 export async function runWithSkillPick(
   search: () => Promise<void>,
-  pick: () => Promise<string | null>,
+  pick: () => Promise<string | string[] | null>,
   print: (line: string) => void = console.log,
   timing: SkillPickTiming = {}
 ): Promise<void> {
@@ -173,13 +173,13 @@ export async function runWithSkillPick(
   const deadline = Math.min(start + capMs, Math.max(searchDoneAt + graceMs, (vectorAt === undefined ? 0 : vectorAt + jevBudgetMs)));
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const line = await Promise.race([
+    const result = await Promise.race([
       picked,
       new Promise<null>((resolve) => {
         timer = setTimeout(() => resolve(null), Math.max(0, deadline - Date.now()));
       }),
     ]);
-    if (line) print(line);
+    for (const line of [result ?? []].flat()) if (line) print(line);
   } finally {
     clearTimeout(timer);
   }
@@ -323,7 +323,7 @@ export async function execute(
         await runSearch({ query, project, limit, queryVector }, { store, embeddings: searchEmbeddings, dbPath: DB_PATH, reranker });
       };
 
-      // Only the hook path suggests a skill; `project-brain search "<q>"` stays retrieval-only.
+      // Only the hook path suggests a skill or tool; `project-brain search "<q>"` stays retrieval-only.
       if (hookPrompt === undefined) {
         await searchPart();
       } else {
@@ -335,7 +335,7 @@ export async function execute(
         await runWithSkillPick(
           // Resolve null on any exit so the pick never waits on a search that bailed out early.
           () => searchPart(publish).finally(() => publish(null)),
-          () => pickSkill(prompt, { projectDir: process.cwd(), queryEmbedding: () => sharedQuery }),
+          () => pickSuggestions(prompt, { projectDir: process.cwd(), queryEmbedding: () => sharedQuery }),
           console.log,
           { vectorSettled: sharedQuery }
         );
