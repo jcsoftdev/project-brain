@@ -9,8 +9,12 @@ import type { SharedQuery } from "../skills/semantic.js";
  */
 export const SUGGEST_TIMEOUT_MS = 5000;
 
-/** How long the prompt embed may take before the keyword shortlist is used instead. */
-export const EMBED_BUDGET_MS = 2500;
+/**
+ * How long the prompt embed may take before the keyword shortlist is used instead. Short on
+ * purpose: Ollama serves one request at a time, so under load embeds queue and the keyword
+ * shortlist is the better answer than waiting behind them.
+ */
+export const EMBED_BUDGET_MS = 800;
 
 export interface HookInput {
   prompt: string;
@@ -78,6 +82,7 @@ export interface SuggestDeps {
   print?: (line: string) => void;
   pick?: typeof pickSuggestions;
   queryEmbedding?: (prompt: string, projectDir: string) => Promise<SharedQuery | null>;
+  embedBudgetMs?: number;
 }
 
 /**
@@ -86,19 +91,26 @@ export interface SuggestDeps {
  * any failure prints nothing.
  */
 export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<void> {
-  const { print = console.log, pick = pickSuggestions, queryEmbedding = sharedQueryFor } = deps;
+  const { print = console.log, pick = pickSuggestions, queryEmbedding = sharedQueryFor, embedBudgetMs = EMBED_BUDGET_MS } = deps;
   try {
     const { prompt, cwd } = parseHookInput(raw);
     if (!prompt.trim() || isTrivialPrompt(prompt)) return;
     const projectDir = cwd ?? process.cwd();
 
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const vector = new Promise<SharedQuery | null>((resolve) => {
-      timer = setTimeout(() => resolve(null), EMBED_BUDGET_MS);
-      queryEmbedding(prompt, projectDir).then(resolve, () => resolve(null));
-    }).finally(() => clearTimeout(timer));
+    // Started only when the picker awaits it, i.e. after its token and picker-flag checks, so a
+    // user without a token (or with both pickers off) never touches Ollama.
+    let started: Promise<SharedQuery | null> | undefined;
+    const vector = (): Promise<SharedQuery | null> =>
+      (started ??= new Promise<SharedQuery | null>((resolve) => {
+        const done = (value: SharedQuery | null) => {
+          clearTimeout(timer);
+          resolve(value);
+        };
+        const timer = setTimeout(() => done(null), embedBudgetMs);
+        queryEmbedding(prompt, projectDir).then(done, () => done(null));
+      }));
 
-    const lines = await pick(prompt, { projectDir, queryEmbedding: () => vector });
+    const lines = await pick(prompt, { projectDir, queryEmbedding: vector });
     for (const line of lines) if (line) print(line);
   } catch {
     // A suggestion hook must never disturb the prompt.

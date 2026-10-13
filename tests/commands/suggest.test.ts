@@ -1,15 +1,17 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execute, parseHookInput, runSuggest } from "../../src/commands/suggest.js";
+import { pickSuggestions } from "../../src/skills/picker.js";
 
+const PROMPT = "haz el commit de estos cambios";
 const hook = (over: Record<string, unknown> = {}) =>
-  JSON.stringify({ prompt: "haz el commit de estos cambios", cwd: "/somewhere", hook_event_name: "UserPromptSubmit", ...over });
+  JSON.stringify({ prompt: PROMPT, cwd: "/somewhere", hook_event_name: "UserPromptSubmit", ...over });
 
 describe("parseHookInput", () => {
   it("reads prompt and cwd", () => {
-    expect(parseHookInput(hook())).toEqual({ prompt: "haz el commit de estos cambios", cwd: "/somewhere" });
+    expect(parseHookInput(hook())).toEqual({ prompt: PROMPT, cwd: "/somewhere" });
   });
 
   it("returns an empty prompt for malformed input", () => {
@@ -31,7 +33,7 @@ describe("runSuggest", () => {
       },
     });
     expect(printed).toEqual(["Suggested skill: brain-commit — x", "Suggested tool: mcp__slack__send — y"]);
-    expect(seen).toEqual([{ prompt: "haz el commit de estos cambios", projectDir: dir }]);
+    expect(seen).toEqual([{ prompt: PROMPT, projectDir: dir }]);
   });
 
   it("skips trivial prompts without calling the picker", async () => {
@@ -44,10 +46,35 @@ describe("runSuggest", () => {
     const printed: string[] = [];
     await runSuggest(hook(), {
       print: (l) => printed.push(l),
+      embedBudgetMs: 20,
       queryEmbedding: () => new Promise(() => {}),
       pick: async (_p, deps) => ((await deps.queryEmbedding!()) === null ? ["Suggested skill: kw"] : []),
     });
     expect(printed).toEqual(["Suggested skill: kw"]);
+  });
+
+  const stubs = { discover: async () => [{ name: "brain-commit", description: "write the commit message" }], loadTools: async () => [] };
+
+  it("never starts the embed when there is no token or both pickers are off", async () => {
+    let embeds = 0;
+    const queryEmbedding = async () => ((embeds += 1), null);
+
+    await runSuggest(hook(), { queryEmbedding, pick: (p, d) => pickSuggestions(p, { ...d, ...stubs, env: {}, getToken: async () => null }) });
+    await runSuggest(hook(), {
+      queryEmbedding,
+      pick: (p, d) => pickSuggestions(p, { ...d, ...stubs, env: { BRAIN_SKILL_PICKER: "0", BRAIN_TOOL_PICKER: "0" }, getToken: async () => "t" }),
+    });
+    expect(embeds).toBe(0);
+  });
+
+  it("starts the embed once, when the picker asks for it", async () => {
+    let embeds = 0;
+    await runSuggest(hook(), {
+      queryEmbedding: async () => ((embeds += 1), null),
+      pick: (p, d) =>
+        pickSuggestions(p, { ...d, ...stubs, env: {}, getToken: async () => "t", fetchFn: async () => new Response("{}") }),
+    });
+    expect(embeds).toBe(1);
   });
 
   it("prints nothing and does not throw when the picker throws", async () => {
@@ -77,9 +104,30 @@ describe("execute", () => {
 });
 
 describe("search --stdin no longer suggests", () => {
-  it("search.ts does not reach the pickers", async () => {
-    const src = await readFile(join(import.meta.dir, "../../src/commands/search.ts"), "utf-8");
-    expect(src).not.toContain("pickSuggestions");
-    expect(src).not.toContain("skills/picker");
+  it("makes no Jev request and prints no Suggested line, even with a token", async () => {
+    const { execute: search } = await import("../../src/commands/search.js");
+    const realFetch = globalThis.fetch;
+    const realLog = console.log;
+    const realKey = process.env.TYPESAFE_API_KEY;
+    const calls: string[] = [];
+    const logs: string[] = [];
+    process.env.TYPESAFE_API_KEY = "test-token";
+    globalThis.fetch = (async (url: string) => {
+      calls.push(String(url));
+      return new Response("{}");
+    }) as unknown as typeof fetch;
+    console.log = (...a: unknown[]) => void logs.push(a.join(" "));
+    let retrieved = "";
+    try {
+      await search(["--stdin"], async () => hook(), async (q) => void (retrieved = q));
+    } finally {
+      globalThis.fetch = realFetch;
+      console.log = realLog;
+      if (realKey === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = realKey;
+    }
+    expect(retrieved).toBe(PROMPT);
+    expect(calls).toEqual([]);
+    expect(logs.filter((l) => l.includes("Suggested"))).toEqual([]);
   });
 });

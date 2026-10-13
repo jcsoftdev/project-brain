@@ -119,9 +119,12 @@ export async function discoverSkills(opts: DiscoverOptions): Promise<SkillInfo[]
   const now = (opts.now ?? Date.now)();
   const cacheDir = opts.cacheDir ?? DATA_DIR;
   const registry = join(home, ".claude", "plugins", "installed_plugins.json");
-  const cacheFile = join(cacheDir, `skills-${createHash("sha1").update(opts.projectDir).digest("hex").slice(0, 12)}.json`);
-
   const roots = await skillRoots(home, opts.projectDir, registry);
+  // Only a directory with its own project skills gets its own cache; every other cwd shares the
+  // user-level one, so the global hook does not leave a skills-<sha>.json behind per directory.
+  const projectScoped = await stat(roots[0]!.dir).then((st) => st.isDirectory(), () => false);
+  const cacheKey = projectScoped ? opts.projectDir : "";
+  const cacheFile = join(cacheDir, `skills-${createHash("sha1").update(cacheKey).digest("hex").slice(0, 12)}.json`);
   const files = (await Promise.all(roots.map(listSkillFiles))).flat();
   // Per-file mtimes, not directory ones: an in-place edit of a SKILL.md
   // leaves its directory's mtime untouched.

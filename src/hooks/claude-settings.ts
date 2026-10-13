@@ -512,7 +512,16 @@ export function removeJevEnvHooks(existing: object | null): object {
   return { ...base, hooks };
 }
 
+/** What identifies the hook in settings.json, whichever form of the command is installed. */
 export const SUGGEST_COMMAND = "project-brain suggest --stdin";
+
+/**
+ * What gets installed. The suffix keeps an older binary on PATH (where `suggest` is an unknown
+ * command and exits 1) or a settings.json shared with another machine from raising a hook error
+ * on every prompt. Matching is on {@link SUGGEST_COMMAND}, so the bare form older builds wrote is
+ * still recognised as installed and removed.
+ */
+const SUGGEST_HOOK_COMMAND = `${SUGGEST_COMMAND} 2>/dev/null || true`;
 
 /**
  * Add the global skill/tool suggestion hook to a parsed settings object.
@@ -535,7 +544,7 @@ export function upsertSuggestHook(existing: object | null): object {
     hooks: [
       {
         type: "command",
-        command: SUGGEST_COMMAND,
+        command: SUGGEST_HOOK_COMMAND,
         timeout: 10,
         statusMessage: "project-brain: suggesting skill/tool",
       },

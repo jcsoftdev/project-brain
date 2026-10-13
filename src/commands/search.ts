@@ -135,7 +135,9 @@ export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<voi
 export async function execute(
   args: string[],
   /** Optional DI seam for reading stdin — defaults to Bun.stdin.text(). */
-  readStdin: () => Promise<string> = () => Bun.stdin.text()
+  readStdin: () => Promise<string> = () => Bun.stdin.text(),
+  /** Optional DI seam replacing the retrieval step (store + embeddings), so tests need neither. */
+  retrieve?: (query: string) => Promise<void>
 ): Promise<void> {
   // Hard self-timeout: race against HOOK_TIMEOUT_MS so a hung ollama never blocks a prompt
   const timeoutPromise = new Promise<void>((resolve) => {
@@ -254,7 +256,7 @@ export async function execute(
 
       // Skill/tool suggestions are not made here: `project-brain suggest --stdin` owns them,
       // as a global hook that also reaches projects without an index.
-      await searchPart();
+      await (retrieve ? retrieve(query) : searchPart());
     } catch (err) {
       // Any setup error → print nothing
       if (project) {
