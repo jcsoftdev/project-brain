@@ -268,7 +268,13 @@ switch (command) {
         // Once swapped, only the new code may touch the project: release the watcher so its election
         // retry hands the root to the child, and close the graph handles. Never exits.
         const release = createShutdownHandler(watcher, () => {}, [graph, foreignGraphs]);
-        transport = new HotSwapTransport({ ...resolveSelfLaunch(), version: VERSION, onSwitched: release });
+        // The swap is recorded so the next prompt's notice can say the server is already on the new version.
+        const onSwapped = async (swap: { from: string; to: string }) => {
+          const { recordSwap } = await import("./hooks/session-versions.js");
+          const { DATA_DIR } = await import("./constants.js");
+          await recordSwap(DATA_DIR, { cwd, ...swap, at: Date.now() });
+        };
+        transport = new HotSwapTransport({ ...resolveSelfLaunch(), version: VERSION, onSwitched: release, onSwapped });
       }
       await server.connect(transport);
     }

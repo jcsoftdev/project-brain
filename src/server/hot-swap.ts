@@ -69,6 +69,8 @@ export interface HotSwapOptions extends SelfLaunch {
   backoffMs?: number;
   /** Runs once the child has answered `initialize`, just before the switch: release what only the old code needs. */
   onSwitched?: () => Promise<void> | void;
+  /** Called once the relay is live; used to leave a trace for the session notice. Errors are ignored. */
+  onSwapped?: (swap: { from: string; to: string }) => Promise<void> | void;
   /** Reports `<base> --version`; null when it cannot be run (e.g. mid-install). */
   readVersion?: (base: string[]) => Promise<string | null>;
   log?: (message: string) => void;
@@ -406,6 +408,7 @@ export class HotSwapTransport implements Transport {
     if (this.capabilities.prompts) notify("notifications/prompts/list_changed");
     if (this.capabilities.resources) notify("notifications/resources/list_changed");
 
+    void (async () => this.opts.onSwapped?.({ from: this.opts.version, to: target }))().catch(() => {});
     this.log(`hot-swapped ${this.opts.version} -> ${target} in ${this.now() - startedAt}ms`);
   }
 }

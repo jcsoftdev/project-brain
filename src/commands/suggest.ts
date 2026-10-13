@@ -19,20 +19,22 @@ export const EMBED_BUDGET_MS = 800;
 export interface HookInput {
   prompt: string;
   cwd: string | undefined;
+  sessionId?: string;
 }
 
 /** `prompt` and `cwd` from the UserPromptSubmit JSON; empty/undefined on any malformed input. Never throws. */
 export function parseHookInput(raw: string): HookInput {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { prompt: "", cwd: undefined };
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { prompt: "", cwd: undefined, sessionId: undefined };
     const obj = parsed as Record<string, unknown>;
     return {
       prompt: typeof obj.prompt === "string" ? obj.prompt : "",
       cwd: typeof obj.cwd === "string" && obj.cwd !== "" ? obj.cwd : undefined,
+      sessionId: typeof obj.session_id === "string" && obj.session_id !== "" ? obj.session_id : undefined,
     };
   } catch {
-    return { prompt: "", cwd: undefined };
+    return { prompt: "", cwd: undefined, sessionId: undefined };
   }
 }
 
@@ -83,6 +85,40 @@ export interface SuggestDeps {
   pick?: typeof pickSuggestions;
   queryEmbedding?: (prompt: string, projectDir: string) => Promise<SharedQuery | null>;
   embedBudgetMs?: number;
+  /** The one-time "project-brain updated" block for this session, or null. Injectable for tests. */
+  upgradeNotice?: (input: HookInput) => Promise<string | null>;
+}
+
+/**
+ * Printed once, on the first prompt of a session that started on an older version than the binary
+ * now running. Hooks and skills are already live; CLAUDE.md is not reloaded, so the routing
+ * guidance is repeated here in full. One small file read when the session is unknown or current.
+ */
+export async function upgradeNoticeFor(
+  { sessionId, cwd }: HookInput,
+  dataDir?: string,
+  version?: string
+): Promise<string | null> {
+  if (!sessionId) return null;
+  const constants = await import("../constants.js");
+  const dir = dataDir ?? constants.DATA_DIR;
+  const current = version ?? constants.VERSION;
+  const { takeUpgradeNotice, serverSwapped } = await import("../hooks/session-versions.js");
+  const notice = await takeUpgradeNotice(dir, sessionId, current);
+  if (!notice) return null;
+
+  const server = (await serverSwapped(dir, cwd, current, notice.since))
+    ? "the MCP server already swapped to it"
+    : "if project-brain tools look stale, run /mcp reconnect";
+  const { buildRoutingReminder } = await import("../hooks/routing-rules.js");
+  const reminder = JSON.parse(await buildRoutingReminder(undefined, undefined, true)) as {
+    hookSpecificOutput?: { additionalContext?: string };
+  };
+  return [
+    `project-brain updated ${notice.from} → ${current} in this session: hooks and skills are already live; ${server}.`,
+    "",
+    reminder.hookSpecificOutput?.additionalContext ?? "",
+  ].join("\n");
 }
 
 /**
@@ -93,7 +129,17 @@ export interface SuggestDeps {
 export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<void> {
   const { print = console.log, pick = pickSuggestions, queryEmbedding = sharedQueryFor, embedBudgetMs = EMBED_BUDGET_MS } = deps;
   try {
-    const { prompt, cwd } = parseHookInput(raw);
+    const input = parseHookInput(raw);
+    const { prompt, cwd } = input;
+
+    // Independent of the pickers and of the prompt: it needs no token, no index and no embedding.
+    try {
+      const notice = await (deps.upgradeNotice ?? upgradeNoticeFor)(input);
+      if (notice) print(notice);
+    } catch {
+      // A notice is a courtesy; it must never cost the suggestions.
+    }
+
     if (!prompt.trim() || isTrivialPrompt(prompt)) return;
     const projectDir = cwd ?? process.cwd();
 

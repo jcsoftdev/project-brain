@@ -32,11 +32,16 @@ import { readWrittenRoutingVersion } from "../registrars/routing-section.js";
  * `rulesPath` is injectable for tests, which must not read or write the real
  * `~/.claude/CLAUDE.md` — the same reason `configPath` is injectable.
  */
-export async function buildRoutingReminder(configPath?: string, rulesPath?: string): Promise<string> {
+export async function buildRoutingReminder(
+  configPath?: string,
+  rulesPath?: string,
+  /** Spell out the table even when the rules file is current: a session that predates an update never reloaded it. */
+  forceFull = false
+): Promise<string> {
   const resolvedRulesPath = rulesPath ?? join(homedir(), ".claude", "CLAUDE.md");
   const writtenVersion = await readWrittenRoutingVersion(resolvedRulesPath);
 
-  if (writtenVersion !== null && writtenVersion >= ROUTING_CONTENT_VERSION) {
+  if (!forceFull && writtenVersion !== null && writtenVersion >= ROUTING_CONTENT_VERSION) {
     return JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "SessionStart",
@@ -96,13 +101,37 @@ export async function execute(
       settingsPath: process.env.BRAIN_CLAUDE_SETTINGS ?? join(homedir(), ".claude", "settings.json"),
       dataDir: DATA_DIR,
     });
-  }
+  },
+  readSessionId: () => Promise<string | undefined> = readSessionIdFromStdin,
+  dataDir?: string
 ): Promise<void> {
   // Never let a hook failure interrupt a session start — print nothing and go.
   try {
     await selfInstall().catch(() => {});
+    await recordThisSession(readSessionId, dataDir).catch(() => {});
     console.log(await buildRoutingReminder());
   } catch {
     process.exit(0);
   }
+}
+
+/** The hook's JSON arrives on stdin; a terminal (someone running the command by hand) has none to wait for. */
+async function readSessionIdFromStdin(): Promise<string | undefined> {
+  if (process.stdin.isTTY) return undefined;
+  const raw = await Promise.race([Bun.stdin.text(), new Promise<string>((resolve) => setTimeout(() => resolve(""), 500))]);
+  try {
+    const id = (JSON.parse(raw) as { session_id?: unknown }).session_id;
+    return typeof id === "string" && id !== "" ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Remember which version this session started on, so the first prompt after an update can say so once. */
+async function recordThisSession(readSessionId: () => Promise<string | undefined>, dataDir?: string): Promise<void> {
+  const sessionId = await readSessionId();
+  if (!sessionId) return;
+  const { DATA_DIR, VERSION } = await import("../constants.js");
+  const { recordSession } = await import("./session-versions.js");
+  await recordSession(dataDir ?? DATA_DIR, sessionId, VERSION);
 }
