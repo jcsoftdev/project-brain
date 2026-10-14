@@ -21,3 +21,4 @@ ARCHIVE-REPORT-CONTENT.md
 --skip-index/
 .atl/
 .claude/
+*.bun-build
