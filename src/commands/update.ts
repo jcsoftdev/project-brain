@@ -43,7 +43,7 @@ async function reapplySetup(deps: UpdateDeps, expected: string | null): Promise<
   // earlier on PATH): applying the OLD binary's units would quietly do nothing useful, so check first.
   if (deps.installedVersion) {
     const found = await deps.installedVersion();
-    const ok = found !== null && (expected ? found === expected : deps.applyOnly || isNewer(found, deps.currentVersion));
+    const ok = found !== null && (expected ? found === expected : deps.applyOnly ? !isNewer(deps.currentVersion, found) : isNewer(found, deps.currentVersion));
     if (!ok) {
       deps.log(
         `The project-brain on your PATH reports ${found ?? "no version"}${expected ? `, expected ${expected}` : ""}; setup was not re-applied.\n` +

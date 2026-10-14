@@ -184,6 +184,16 @@ describe("runUpdate re-applies setup", () => {
     expect(h.calls).toEqual(["install", "apply"]);
   });
 
+  it("--apply-only skips when the installed binary is older than the running one, applies when it is not", async () => {
+    const older = deps({ applyOnly: true, installedVersion: async () => "0.5.0" });
+    await runUpdate(older.deps);
+    expect(older.calls).toEqual([]);
+
+    const same = deps({ applyOnly: true, installedVersion: async () => "0.6.0" });
+    await runUpdate(same.deps);
+    expect(same.calls).toEqual(["apply"]);
+  });
+
   it("--apply-only skips when no installed binary can report a version", async () => {
     const h = deps({ applyOnly: true, installedVersion: async () => null });
     await runUpdate(h.deps);

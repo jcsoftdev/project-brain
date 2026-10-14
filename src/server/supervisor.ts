@@ -78,9 +78,11 @@ export class LineFramer {
     let rest = chunk;
     for (let nl = rest.indexOf(10); nl !== -1; nl = rest.indexOf(10)) {
       const head = rest.subarray(0, nl);
-      onLine(this.len ? Buffer.concat([...this.parts, head]) : head);
+      const line = this.len ? Buffer.concat([...this.parts, head]) : head;
+      // Reset first: the callback may inspect `clean`, and the line it is handed is already complete.
       this.parts = [];
       this.len = 0;
+      onLine(line);
       rest = rest.subarray(nl + 1);
     }
     if (rest.length) {
@@ -140,6 +142,9 @@ interface Worker {
   proc: ChildProcess;
   version: string;
   retired: boolean;
+  /** Output the worker produced after answering the replayed `initialize` but before it became active. */
+  early: Buffer[];
+  live: boolean;
 }
 
 async function defaultReadVersion(launcher: Launcher): Promise<string | null> {
@@ -255,7 +260,6 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       else if (!m.method && m.id !== undefined) {
         inbound.delete(key(m.id));
         if (initReq && m.id === initReq.id && m.result?.capabilities) capabilities = m.result.capabilities;
-        maybeCutover();
       }
     };
 
@@ -275,6 +279,9 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
           w.proc.stdout!.pause();
           stdout.once("drain", () => w.proc.stdout!.resume());
         }
+        // Only now, with the whole chunk forwarded: a response must reach the client before the
+        // list_changed it enables, and a half-sent line in this chunk must finish on this worker.
+        maybeCutover();
       });
       w.proc.on("exit", (code, signal) => {
         workers.delete(w);
@@ -318,6 +325,9 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
     let preparing = false;
     let ready: Worker | null = null;
     const backoff = new Map<string, number>();
+    // A version that keeps failing is given up on for this session instead of being retried forever.
+    const attempts = new Map<string, number>();
+    const MAX_ATTEMPTS = 2;
 
     const check = async () => {
       if (stopping || preparing || ready) return;
@@ -330,7 +340,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
           if (isNewer(version, opts.version)) target = version;
         }
       }
-      if (target && isNewer(target, active.version) && (backoff.get(target) ?? 0) <= now()) void prepare(target);
+      if (target && isNewer(target, active.version) && (backoff.get(target) ?? 0) <= now() && (attempts.get(target) ?? 0) < MAX_ATTEMPTS) void prepare(target);
     };
     const poll = setInterval(() => void check(), opts.checkIntervalMs ?? 30_000);
     poll.unref?.();
@@ -340,7 +350,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       preparing = true;
       const startedAt = now();
       const proc = spawnWorker();
-      const next: Worker = { proc, version: to, retired: false };
+      const next: Worker = { proc, version: to, retired: false, early: [], live: false };
       workers.add(next);
       try {
         await handshake(next);
@@ -356,6 +366,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         workers.delete(next);
         proc.kill("SIGKILL");
         backoff.set(to, now() + (opts.backoffMs ?? 10 * 60_000));
+        attempts.set(to, (attempts.get(to) ?? 0) + 1);
         log(`hot swap to ${to} failed, staying on ${active.version}: ${(error as Error).message}`);
       } finally {
         preparing = false;
@@ -366,7 +377,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
     const handshake = (w: Worker) =>
       new Promise<void>((resolve, reject) => {
         const replayId = `hot-swap-init-${now()}`;
-        const framer = new LineFramer();
+        let acc: Buffer = Buffer.alloc(0);
         const timer = setTimeout(() => fail(new Error("timed out waiting for the new server to initialize")), opts.handoverTimeoutMs ?? 10_000);
         let settled = false;
         const fail = (e: Error) => {
@@ -379,19 +390,27 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         w.proc.on("exit", (code) => fail(new Error(`new server exited early (code ${code})`)));
         w.proc.stdin!.on("error", fail);
         w.proc.stdout!.on("data", (chunk: Buffer) => {
-          if (settled) return;
-          framer.push(chunk, (line) => {
-            const m = parse(line);
-            if (!m || m.id !== replayId || m.method) return;
+          if (w.live) return; // attach() relays from here on
+          if (settled) {
+            w.early.push(chunk);
+            return;
+          }
+          acc = acc.length ? Buffer.concat([acc, chunk]) : chunk;
+          for (let nl = acc.indexOf(10); nl !== -1 && !settled; nl = acc.indexOf(10)) {
+            const m = parse(acc.subarray(0, nl));
+            acc = acc.subarray(nl + 1);
+            if (!m || m.id !== replayId || m.method) continue;
             if (m.error) return fail(new Error(`new server rejected initialize: ${m.error.message ?? "unknown"}`));
             const reported = m.result?.serverInfo?.version;
             if (reported !== w.version) return fail(new Error(`new server reports ${reported}, expected ${w.version}`));
             if (!isNewer(reported, active.version)) return fail(new Error(`${reported} is not newer than ${active.version}`));
             settled = true;
             clearTimeout(timer);
+            // The replayed response is discarded; whatever the worker sends after it is kept for the cutover.
+            if (acc.length) w.early.push(acc);
             w.proc.stdin!.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
             resolve();
-          });
+          }
         });
         w.proc.stdin!.write(`${JSON.stringify({ ...initReq, id: replayId })}\n`);
       });
@@ -403,9 +422,14 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       const old = active;
       active = next;
       ready = null;
-      // From here the relay targets the new worker. Output it produced while waiting is forwarded
-      // by the data handler registered in attach(), which only speaks for the active worker.
+      // From here the relay targets the new worker. What it said while waiting for this moment is
+      // forwarded first, in order; after that attach()'s handler speaks for it.
       attach(next);
+      next.live = true;
+      for (const chunk of next.early.splice(0)) {
+        fromServer.push(chunk, trackServer);
+        stdout.write(chunk);
+      }
       old.proc.stdout!.pause();
       terminate(old);
       stdin.resume();
@@ -420,7 +444,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
 
     // ---- start -----------------------------------------------------------
 
-    active = { proc: spawnWorker(), version: opts.version, retired: false };
+    active = { proc: spawnWorker(), version: opts.version, retired: false, early: [], live: true };
     attach(active);
   });
 }

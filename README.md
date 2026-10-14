@@ -611,7 +611,9 @@ What reaches Claude Code sessions that are already open:
 
 #### Optional: automatic MCP hot swap
 
-Set `BRAIN_MCP_HOT_SWAP=1` in the MCP server's environment and stdio `serve` runs a small supervisor that relays to a worker process. When the binary on disk is newer, it starts a new worker, waits until no request is in flight, switches over, sends `tools/list_changed`, then lets the old worker drain and exit. A failure at any point leaves the old worker serving, and the notice then reports the server as already swapped. It is off by default because the supervisor is a second process per session, about 76 MB of memory each. Servers started before the first release with this feature have no supervisor, so that first update still needs one `/mcp reconnect all`.
+Set `BRAIN_MCP_HOT_SWAP=1` in the MCP server's environment and stdio `serve` runs a small supervisor that relays to a worker process. When the binary on disk is newer, it starts a new worker, waits until no request is in flight, switches over, sends `tools/list_changed`, then lets the old worker drain and exit. A failure at any point leaves the old worker serving, and the notice then says to run `/mcp reconnect all`; after two failed attempts at a version the supervisor stops trying for that session. It is off by default because the supervisor is a second process per session, about 76 MB of memory each. Servers started before the first release with this feature have no supervisor, so that first update still needs one `/mcp reconnect all`.
+
+Limits to know about: a new worker is launched through the same command your tool used (for a brew or npm link, the link, so a retargeted link is picked up), never through the old versioned directory; and when running from source with `bun run`, only the entry script is watched, so a change that touches `package.json` alone is not noticed.
 
 ### `serve`
 

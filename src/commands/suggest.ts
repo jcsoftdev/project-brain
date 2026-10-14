@@ -97,7 +97,8 @@ export interface SuggestDeps {
 export async function upgradeNoticeFor(
   { sessionId, cwd }: HookInput,
   dataDir?: string,
-  version?: string
+  version?: string,
+  hotSwapEnabled?: boolean
 ): Promise<{ text: string; commit: () => Promise<void> } | null> {
   if (!sessionId) return null;
   const constants = await import("../constants.js");
@@ -107,20 +108,40 @@ export async function upgradeNoticeFor(
   const notice = await takeUpgradeNotice(dir, sessionId, current);
   if (!notice) return null;
 
-  const server = (await serverSwapped(dir, cwd, current, notice.since))
-    ? "the MCP server already swapped to it"
-    : "the MCP server is still the old version: run `/mcp reconnect all` (or `/mcp`) to load the new project-brain tools. " +
+  let server: string;
+  if (await serverSwapped(dir, cwd, current, notice.since)) server = "the MCP server already swapped to it";
+  else if (hotSwapEnabled ?? (await hotSwapConfigured())) server = "if project-brain tools look stale, run `/mcp reconnect all`";
+  else
+    server =
+      "the MCP server is still the old version: run `/mcp reconnect all` (or `/mcp`) to load the new project-brain tools. " +
       "To have this happen automatically, start the server with BRAIN_MCP_HOT_SWAP=1 (costs ~76 MB of memory per session)";
-  const { buildRoutingReminder } = await import("../hooks/routing-rules.js");
-  const reminder = JSON.parse(await buildRoutingReminder(undefined, undefined, true)) as {
-    hookSpecificOutput?: { additionalContext?: string };
-  };
-  const text = [
-    `project-brain updated ${notice.from} → ${current} in this session: hooks and skills are already live; ${server}.`,
-    "",
-    reminder.hookSpecificOutput?.additionalContext ?? "",
-  ].join("\n");
-  return { text, commit: notice.commit };
+
+  const lines = [`project-brain updated ${notice.from} → ${current} in this session: hooks and skills are already live; ${server}.`];
+  // /compact and /clear already reloaded CLAUDE.md; only a session that did not needs the table repeated.
+  if (notice.rulesStale) {
+    const { buildRoutingReminder } = await import("../hooks/routing-rules.js");
+    const reminder = JSON.parse(await buildRoutingReminder(undefined, undefined, true)) as {
+      hookSpecificOutput?: { additionalContext?: string };
+    };
+    lines.push("", reminder.hookSpecificOutput?.additionalContext ?? "");
+  }
+  return { text: lines.join("\n"), commit: notice.commit };
+}
+
+/** Whether the user turned the hot swap on: in this environment, or in the MCP entry Claude Code launches. */
+async function hotSwapConfigured(): Promise<boolean> {
+  if (process.env.BRAIN_MCP_HOT_SWAP === "1") return true;
+  try {
+    const { homedir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { readFile } = await import("node:fs/promises");
+    const config = JSON.parse(await readFile(join(homedir(), ".claude.json"), "utf8")) as {
+      mcpServers?: Record<string, { env?: Record<string, string> }>;
+    };
+    return config.mcpServers?.["project-brain"]?.env?.BRAIN_MCP_HOT_SWAP === "1";
+  } catch {
+    return false;
+  }
 }
 
 /**

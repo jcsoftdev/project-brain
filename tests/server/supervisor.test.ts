@@ -32,6 +32,12 @@ else {
       if (msg.method === "initialize") out({ id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fake", version: ${JSON.stringify(mode === "lie" ? "0.0.1" : version)} } } });
       else if (msg.method === "whoami") out({ id: msg.id, result: { v: VERSION, pid: process.pid } });
       else if (msg.method === "echo") out({ id: msg.id, result: { v: VERSION, text: msg.params.text } });
+      else if (msg.method === "notifications/initialized") out({ method: "notifications/message", params: { from: VERSION } });
+      else if (msg.method === "burst") {
+        // A response and the first half of a notification in ONE write; the rest follows later.
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { v: VERSION } }) + "\\n" + '{"jsonrpc":"2.0","method":"notifications/message","params":{"from":"burst-');
+        setTimeout(() => process.stdout.write(VERSION + '"}}\\n'), 300);
+      }
       else if (msg.method === "open-ask") { out({ id: "srv-2", method: "x/ask" }); out({ id: msg.id, result: { v: VERSION } }); }
       else if (msg.method === "emit-cancelled") {
         out({ id: "srv-1", method: "x/ask" });
@@ -52,7 +58,7 @@ afterEach(async () => {
 
 type Env = Record<string, string>;
 
-async function boot(opts: { termMs?: number; handoverMs?: number; env?: Env } = {}) {
+async function boot(opts: { termMs?: number; handoverMs?: number; backoffMs?: number; env?: Env } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "pb-supervisor-"));
   dirs.push(dir);
   const bin = join(dir, "bin");
@@ -80,7 +86,7 @@ async function boot(opts: { termMs?: number; handoverMs?: number; env?: Env } = 
 const link = ${JSON.stringify(join(bin, "project-brain"))};
 const code = await runSupervisor({
   launcher: { argv: [link], watch: link }, args: ["serve"], version: "1.0.0",
-  checkIntervalMs: 50, handoverTimeoutMs: ${opts.handoverMs ?? 5000}, graceMs: 5000, orphanCheckMs: 100,
+  checkIntervalMs: 50, handoverTimeoutMs: ${opts.handoverMs ?? 5000}, graceMs: 5000, orphanCheckMs: 100, backoffMs: ${opts.backoffMs ?? 600000},
 });
 process.exit(code);
 `
@@ -233,6 +239,45 @@ describe("MCP supervisor", () => {
     expect(h.changed()).toBe(0);
     h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: "srv-2", result: {} }) + "\n");
     expect(await h.until(() => h.changed() === 1)).toBe(true);
+  }, 30_000);
+
+  it("does not cut over inside a chunk: the response precedes list_changed and a half-sent server line finishes on the old worker", async () => {
+    const h = await boot();
+    await h.point(await h.install("2.0.0"));
+    expect((await h.call("open-ask")).v).toBe("1.0.0"); // busy, so the new worker waits for an idle moment
+    await Bun.sleep(600);
+    // The burst request goes first, then the answer that would make the session idle.
+    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: 700, method: "burst", params: {} }) + "\n");
+    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: "srv-2", result: {} }) + "\n");
+    expect(await h.until(() => h.lines.some((l) => l.id === 700))).toBe(true);
+    expect(await h.until(() => h.changed() === 1)).toBe(true);
+
+    const at = (pred: (l: any) => boolean) => h.lines.findIndex(pred);
+    const response = at((l) => l.id === 700);
+    const tail = at((l) => l.params?.from === "burst-1.0.0");
+    const changed = at((l) => l.method === "notifications/tools/list_changed");
+    expect(response).toBeGreaterThanOrEqual(0);
+    expect(tail).toBeGreaterThan(response);
+    expect(changed).toBeGreaterThan(tail);
+  }, 30_000);
+
+  it("keeps what the new worker says between its handshake and the cutover", async () => {
+    const h = await boot();
+    await h.point(await h.install("2.0.0"));
+    expect((await h.call("open-ask")).v).toBe("1.0.0"); // keeps the session busy
+    await Bun.sleep(600);
+    expect(h.lines.some((l) => l.params?.from === "2.0.0")).toBe(false); // not forwarded yet
+    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: "srv-2", result: {} }) + "\n");
+    expect(await h.until(() => h.changed() === 1)).toBe(true);
+    expect(h.lines.some((l) => l.params?.from === "2.0.0")).toBe(true);
+  }, 30_000);
+
+  it("gives up on a version after two failed attempts", async () => {
+    const h = await boot({ backoffMs: 50 });
+    await h.point(await h.install("2.0.0", "crash"));
+    await Bun.sleep(2000);
+    expect((await h.log()).filter((l) => l.startsWith("boot 2.0.0")).length).toBe(2);
+    expect((await h.call("whoami")).v).toBe("1.0.0");
   }, 30_000);
 
   it("never cuts over inside a half-sent line, and keeps multi-byte characters intact across chunks", async () => {
