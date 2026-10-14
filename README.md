@@ -361,6 +361,19 @@ project-brain context slim --revert              # restore the latest backup, re
 
 Sections are marked `project-brain`, `other tool` (inside another tool's `<!-- x:start -->`/`<!-- x:end -->` or `<!-- x -->`/`<!-- /x -->` markers) or `yours`. Only `yours` can be moved; content a tool regenerates (for example gentle-ai) is refused, and has to be changed through that tool's own override mechanism. Moved sections become skills named `memory-<heading>` with a description derived from the heading (`--description` overrides it). Backups live in `~/.claude/context-slim/<timestamp>/`.
 
+#### Unused MCP servers
+
+Every enabled MCP server loads its tool list and instructions into every session of every project, used or not. `project-brain mcp prune` reads each project's transcripts (subagents included) and finds the servers that project has not called in 30 days:
+
+```bash
+project-brain mcp prune            # this project: what would be disabled, no changes
+project-brain mcp prune --all      # every project in ~/.claude.json
+project-brain mcp prune --apply    # add them to that project's disabledMcpServers (backup first)
+project-brain mcp prune --revert   # re-enable exactly what --apply disabled
+```
+
+It is per project: usage in one project never disables a server in another, and nothing touches the user-wide list. Git worktrees of a repo pool their usage and history, so a fresh worktree inherits the repo's. A project needs 10 sessions or 14 days of history, and its directory must still exist; new projects are handled by a later setup or update once they have history. project-brain, servers you list in `PROJECT_BRAIN_MCP_PRUNE_KEEP` (comma separated) and servers you switched back on after we disabled them are never touched. Setup (`config:mcp-prune`, checked by default) and `update` run `--apply` for all projects; opt out with `PROJECT_BRAIN_MCP_PRUNE=0`, change the window with `PROJECT_BRAIN_MCP_PRUNE_DAYS`. `~/.claude.json` is backed up under `~/.project-brain/mcp-prune/`, written atomically, and only the disabled lists change. Changes apply from the next session.
+
 #### Auto-compact window
 
 Setup sets Claude Code's `autoCompactWindow` to 400K tokens (`config:auto-compact`, checked by default). Every request re-sends the whole conversation, and those cache reads count against your plan. A 1M-context model left on its default compacts near 967K, so a long session keeps re-reading a far larger context than the work needs. With the cap it compacts near 387K. 200K models aren't affected.

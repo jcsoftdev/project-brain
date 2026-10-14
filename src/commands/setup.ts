@@ -348,8 +348,13 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   if (options.applySaved) {
     // hasSelection=true, defaultSelected=false: selected -> on, declined -> off,
     // unseen -> on only when already on disk.
+    const auto = new Set(units.filter((u) => u.autoOnUpgrade).map((u) => u.id));
     chosenIds = inspected
-      .filter((r) => initialChecked(r.state, r.membership, false, true))
+      .filter(
+        (r) =>
+          initialChecked(r.state, r.membership, false, true) ||
+          (auto.has(r.id) && r.membership === "unseen" && r.state !== "unavailable" && r.state !== "foreign")
+      )
       .map((r) => r.id);
   } else if (options.units?.mode === "explicit") {
     chosenIds = options.units.selected;

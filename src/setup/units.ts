@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import type { AIToolRegistrar } from "../registrars/types.js";
@@ -80,6 +80,9 @@ export interface SetupUnit {
    * `defaultSelected` whenever present; a throw falls back to it.
    */
   defaultWhen?(ctx: SetupContext): Promise<boolean>;
+
+  /** On for a saved selection that never saw this unit, so an upgrade installs it without a prompt. */
+  autoOnUpgrade?: boolean;
 
   inspect(ctx: SetupContext): Promise<UnitState>;
   apply(ctx: SetupContext): Promise<void>;
@@ -1287,5 +1290,56 @@ async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, 
  * Code's.
  */
 export function allUnits(ctx: SetupContext): SetupUnit[] {
-  return [...hostUnits(ctx.installed), ...guidanceUnits(), ...skillUnits(), ...otherUnits()];
+  return [...hostUnits(ctx.installed), ...guidanceUnits(), ...skillUnits(), ...otherUnits(), mcpPruneUnit()];
+}
+
+/** Where Claude Code's `.claude.json` and transcripts live, derived from the settings path so a redirected one stays redirected. */
+function pruneEnvOf(ctx: SetupContext): import("../mcpprune/prune.js").PruneEnv | null {
+  const dir = ctx.claudeSettingsPath ? dirname(ctx.claudeSettingsPath) : "";
+  return basename(dir) === ".claude" ? { home: dirname(dir), dataDir: ctx.dataDir } : null;
+}
+
+const pruneOptedOut = (): boolean => process.env.PROJECT_BRAIN_MCP_PRUNE === "0";
+
+function mcpPruneUnit(): SetupUnit {
+  return {
+    id: "config:mcp-prune",
+    group: "Other",
+    label: "Disable unused MCP servers",
+    description:
+      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions or 14 days of history; never project-brain), so their tool lists and instructions stop loading; `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out",
+    defaultSelected: true,
+    autoOnUpgrade: true,
+
+    async inspect(ctx): Promise<UnitState> {
+      const env = pruneEnvOf(ctx);
+      if (!env) return "unavailable";
+      if (pruneOptedOut()) return "current";
+      const { planPrune, envFromProcess } = await import("../mcpprune/prune.js");
+      const plans = await planPrune({ ...env, ...envFromProcess() });
+      return plans.some((p) => p.candidates.length > 0) ? "absent" : "current";
+    },
+
+    async apply(ctx): Promise<void> {
+      const env = pruneEnvOf(ctx);
+      if (!env || pruneOptedOut()) return;
+      const { planPrune, applyPrune, envFromProcess } = await import("../mcpprune/prune.js");
+      const full = { ...env, ...envFromProcess() };
+      const result = await applyPrune(full, await planPrune(full));
+      if (result.error) console.warn(`Warning: MCP prune changed nothing: ${result.error}`);
+      if (result.added.length === 0) return;
+      const byProject = new Map<string, string[]>();
+      for (const e of result.added) byProject.set(e.project, [...(byProject.get(e.project) ?? []), e.name]);
+      console.log("\nDisabled unused MCP servers (per project):");
+      for (const [project, names] of byProject) console.log(`  ${project}: ${names.join(", ")}`);
+      console.log("Takes effect on the next Claude Code session. Undo with: project-brain mcp prune --revert");
+    },
+
+    async remove(ctx): Promise<void> {
+      const env = pruneEnvOf(ctx);
+      if (!env) return;
+      const { revertPrune } = await import("../mcpprune/prune.js");
+      await revertPrune(env);
+    },
+  };
 }
