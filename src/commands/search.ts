@@ -38,7 +38,11 @@ export function parsePromptFromStdin(raw: string): string {
   }
 }
 
-/** Hook gating defaults; reranked scores in practice span ~0.2-0.85, so 0.5 keeps confident hits only. */
+/**
+ * Hook gating defaults. Reranked scores in practice span ~0.2-0.85, so 0.5 keeps confident hits
+ * only. Without a reranker the store scales its best hit to 1.0, so the floor means nothing there
+ * and only the cap applies.
+ */
 export const HOOK_MIN_SCORE = 0.5;
 export const HOOK_MAX_HITS = 5;
 
@@ -58,7 +62,7 @@ export interface SearchArgs {
   queryVector?: number[];
   project: string;
   limit: number;
-  /** Drop hits scoring below this (hook path only; the CLI and MCP tool keep every hit). */
+  /** Drop hits scoring below this (hook path only; the CLI and MCP tool keep every hit). Ignored without a reranker. */
   minScore?: number;
   /** Keep at most this many hits after the score floor. */
   maxHits?: number;
@@ -105,7 +109,7 @@ export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<voi
       }>;
     };
 
-    const results = (parsed.results ?? []).filter((r) => r.score >= minScore).slice(0, maxHits);
+    const results = (parsed.results ?? []).filter((r) => r.score >= (deps.reranker ? minScore : 0)).slice(0, maxHits);
     if (results.length === 0) return;
 
     // Build compact markdown block

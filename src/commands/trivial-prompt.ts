@@ -27,6 +27,7 @@ const FILLER_WORDS = new Set([
   "great",
   "cool",
   "go",
+  "on",
   "continue",
   "proceed",
   "please",
@@ -58,6 +59,8 @@ const CODE_IDENTIFIER_PATTERNS = [
   /\b[a-z][a-z0-9]*[A-Z][a-zA-Z0-9]*\b/, // camelCase
   /\b[a-z0-9]+_[a-z0-9_]+\b/, // snake_case
   /\b[\w.-]+\/[\w./-]+\b/, // a path
+  /\b\w+\(/, // a call
+  /^\s*at\s.+:\d+(:\d+)?\)?\s*$/m, // a stack frame
 ];
 
 /** True if the prompt names a specific piece of code, even inside a short prompt. */
@@ -102,8 +105,7 @@ const HARNESS_FRAMES = [
   "base directory for this skill",
 ];
 
-const MIN_WORDS = 3;
-const MIN_CHARS = 15;
+const MIN_WORDS = 2;
 
 /** True when most non-empty lines are indented — a pasted log, diff or agent report. */
 function isMostlyIndented(prompt: string): boolean {
@@ -113,8 +115,7 @@ function isMostlyIndented(prompt: string): boolean {
 }
 
 /**
- * Hook-only superset of {@link isTrivialPrompt}: also skips prompts too short to
- * carry a question, filler plus a bare action verb, slash-command echoes and
+ * Hook-only superset of {@link isTrivialPrompt}: also skips single-word prompts, filler plus a bare action verb, slash-command echoes and
  * pasted harness/agent reports. A code identifier always wins over length.
  */
 export function isNonCodePrompt(prompt: string): boolean {
@@ -124,11 +125,11 @@ export function isNonCodePrompt(prompt: string): boolean {
   const lower = trimmed.toLowerCase();
   if (trimmed.startsWith("/") && !/^\/[\w.-]+\/[\w./-]/.test(trimmed)) return true;
   if (HARNESS_FRAMES.some((f) => lower.startsWith(f))) return true;
-  if (isMostlyIndented(prompt)) return true;
 
   if (hasCodeIdentifier(trimmed)) return false;
+  if (isMostlyIndented(prompt)) return true;
 
   const words = tokenize(trimmed);
-  if (words.length < MIN_WORDS || trimmed.length < MIN_CHARS) return true;
+  if (words.length < MIN_WORDS) return true;
   return words.every((w) => FILLER_WORDS.has(w) || ACTION_WORDS.has(w));
 }

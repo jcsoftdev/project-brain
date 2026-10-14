@@ -562,7 +562,7 @@ The hook only injects when it is likely to help. Before any embedding work it sk
 
 | Variable | Default | Effect |
 |---|---|---|
-| `PROJECT_BRAIN_SEARCH_MIN_SCORE` | `0.5` | Minimum score (0-1) a hit needs to be injected |
+| `PROJECT_BRAIN_SEARCH_MIN_SCORE` | `0.5` | Minimum reranker score (0-1) a hit needs to be injected; ignored without a reranker token, where only `PROJECT_BRAIN_SEARCH_MAX_HITS` applies |
 | `PROJECT_BRAIN_SEARCH_MAX_HITS` | `5` | Maximum snippets injected |
 | `PROJECT_BRAIN_SEARCH_PROMPT_FILTER` | on | Set to `0` to search every prompt, including non-code ones |
 
