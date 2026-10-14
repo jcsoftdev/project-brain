@@ -344,9 +344,12 @@ describe("setup command", () => {
           return ["guidance:model-routing"];
         },
       });
-      // Nothing on disk yet, so nothing is pre-ticked — every install below is
-      // something the user actually chose, not a default that rode in on Enter.
-      expect(firstSeed).toEqual([]);
+      // Nothing was written yet, so only the default-on feature flags are pre-ticked:
+      // they are on until the user turns them off. config:reranker depends on whether
+      // this machine already holds a Jev token, so it is left out of the comparison.
+      expect(firstSeed.filter((id) => id !== "config:reranker").sort()).toEqual(
+        ["feature:routing-skill", "feature:search-gate", "feature:task-switch"]
+      );
 
       let secondSeed: string[] = ["unset"];
       await runSetup({
@@ -359,7 +362,7 @@ describe("setup command", () => {
           return [];
         },
       });
-      expect(secondSeed).toEqual(["guidance:model-routing"]);
+      expect(secondSeed).toContain("guidance:model-routing");
     });
 
     it("with no explicit selection, the checklist is asked, and writes only when chosen", async () => {
