@@ -1,4 +1,4 @@
-import { open, readFile } from "node:fs/promises";
+import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ChoiceQuestion } from "../typesafe/client.js";
@@ -200,4 +200,26 @@ export function taskSwitchMessage(verdict: TaskSwitchVerdict, usedPct: number): 
     return `project-brain: this looks like a new task and the context is ${pct}% full. Running /clear and resending would save context.`;
   if (verdict === "compact") return `project-brain: the context is ${pct}% full. Consider /compact before continuing.`;
   return null;
+}
+
+/**
+ * Whether this is the first `kind` notice of the session, recording it when so. One small file per
+ * session, so concurrent sessions never share a write; a failure to record shows the notice again
+ * rather than hiding it.
+ */
+export async function claimNotice(dataDir: string, sessionId: string, kind: "clear" | "compact"): Promise<boolean> {
+  const file = join(dataDir, "task-switch", `${sessionId.replace(/[^\w-]/g, "_")}.json`);
+  try {
+    const shown = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    if (shown[kind] === true) return false;
+    await writeFile(file, JSON.stringify({ ...shown, [kind]: true }));
+  } catch {
+    try {
+      await mkdir(join(dataDir, "task-switch"), { recursive: true });
+      await writeFile(file, JSON.stringify({ [kind]: true }));
+    } catch {
+      // Unrecorded: the notice may repeat, which beats losing it.
+    }
+  }
+  return true;
 }

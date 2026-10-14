@@ -87,9 +87,11 @@ export interface SuggestDeps {
   pick?: typeof pickSuggestions;
   queryEmbedding?: (prompt: string, projectDir: string) => Promise<SharedQuery | null>;
   embedBudgetMs?: number;
-  /** The one-time "project-brain updated" block for this session, or null. Injectable for tests. */
   /** Task-switch context for this prompt, or null. Injectable for tests; defaults to reading the transcript. */
   taskContext?: (input: HookInput) => Promise<import("../hooks/task-switch.js").TaskContext | null>;
+  /** True the first time a notice of this kind is shown in the session. Injectable for tests. */
+  claimNotice?: (sessionId: string, kind: "clear" | "compact") => Promise<boolean>;
+  /** The one-time "project-brain updated" block for this session, or null. Injectable for tests. */
   upgradeNotice?: (input: HookInput) => Promise<{ text: string; commit: () => Promise<void> } | null>;
 }
 
@@ -148,6 +150,12 @@ async function hotSwapConfigured(): Promise<boolean> {
   }
 }
 
+async function defaultClaim(sessionId: string, kind: "clear" | "compact"): Promise<boolean> {
+  const { DATA_DIR } = await import("../constants.js");
+  const { claimNotice } = await import("../hooks/task-switch.js");
+  return claimNotice(DATA_DIR, sessionId, kind);
+}
+
 /** Never throws: no context means no task-switch question and no extra output. */
 async function taskContextFor(input: HookInput, deps: SuggestDeps) {
   try {
@@ -172,33 +180,36 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
 
     // Held back so a task-switch notice can go out as one JSON document with everything else.
     const out: string[] = [];
-    const flush = (systemMessage: string | null): void => {
-      if (systemMessage === null) {
-        for (const line of out) print(line);
-        return;
-      }
+    let commitNotice: (() => Promise<void>) | undefined;
+    const flush = async (systemMessage: string | null): Promise<void> => {
       const additionalContext = out.join("\n");
-      print(
-        JSON.stringify({
-          systemMessage,
-          ...(additionalContext ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } } : {}),
-        })
-      );
+      if (systemMessage === null) for (const line of out) print(line);
+      else
+        print(
+          JSON.stringify({
+            systemMessage,
+            ...(additionalContext ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } } : {}),
+          })
+        );
+      out.length = 0;
+      // Marked only once printed: if the timeout wins first, the notice is still owed.
+      const commit = commitNotice;
+      commitNotice = undefined;
+      await commit?.().catch(() => {});
     };
 
     // Independent of the pickers and of the prompt: it needs no token, no index and no embedding.
     try {
       const notice = await (deps.upgradeNotice ?? upgradeNoticeFor)(input);
       if (notice) {
-        // Queued first, marked after: a failed mark repeats the notice once more instead of losing it.
         out.push(notice.text);
-        await notice.commit();
+        commitNotice = notice.commit;
       }
     } catch {
       // A notice is a courtesy; it must never cost the suggestions.
     }
 
-    if (!prompt.trim() || isTrivialPrompt(prompt)) return flush(null);
+    if (!prompt.trim() || isTrivialPrompt(prompt)) return await flush(null);
     const projectDir = cwd ?? process.cwd();
 
     // Started only when the picker awaits it, i.e. after its token and picker-flag checks, so a
@@ -215,6 +226,8 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
       }));
 
     const task = await taskContextFor(input, deps);
+    // Nothing to wait for in the Jev round trip: print the notice now so a slow pick cannot cost it.
+    if (!task) await flush(null);
     let switchProbabilities: Record<string, number> | undefined;
     const lines = await pick(prompt, {
       projectDir,
@@ -224,7 +237,13 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
     for (const line of lines) if (line) out.push(line);
 
     const { decideTaskSwitch, taskSwitchMessage } = await import("../hooks/task-switch.js");
-    flush(task ? taskSwitchMessage(decideTaskSwitch(task.usedPct, switchProbabilities), task.usedPct) : null);
+    let message: string | null = null;
+    if (task) {
+      const verdict = decideTaskSwitch(task.usedPct, switchProbabilities);
+      const first = verdict === "none" || !input.sessionId ? true : await (deps.claimNotice ?? defaultClaim)(input.sessionId, verdict);
+      message = first ? taskSwitchMessage(verdict, task.usedPct) : null;
+    }
+    await flush(message);
   } catch {
     // A suggestion hook must never disturb the prompt.
   }

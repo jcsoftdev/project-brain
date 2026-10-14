@@ -64,6 +64,56 @@ describe("runSuggest task switch", () => {
   });
 });
 
+describe("runSuggest notices", () => {
+  const task = { recent: ["fix login"], usedPct: 45 };
+  const never = () => new Promise<string[]>(() => {});
+
+  it("shows the /clear notice once per session and kind", async () => {
+    const seen = new Set<string>();
+    const claimNotice = async (s: string, k: string) => !seen.has(`${s}${k}`) && !!seen.add(`${s}${k}`);
+    const printed: string[] = [];
+    const go = (session: string) =>
+      runSuggest(hook({ session_id: session }), {
+        print: (l) => printed.push(l),
+        queryEmbedding: async () => null,
+        taskContext: async () => task,
+        claimNotice,
+        pick: async (_p, deps) => (deps.onTaskSwitch?.({ new_task: 0.95 }), ["Suggested skill: x"]),
+      });
+    await go("s1");
+    await go("s1");
+    await go("s2");
+    expect(printed.map((l) => l.startsWith("{"))).toEqual([true, false, true]);
+  });
+
+  it("marks the upgrade notice shown only after it is printed", async () => {
+    const events: string[] = [];
+    const upgradeNotice = async () => ({ text: "updated", commit: async () => void events.push("commit") });
+    void runSuggest(hook(), {
+      print: (l) => events.push(`print:${l}`),
+      queryEmbedding: async () => null,
+      taskContext: async () => null,
+      upgradeNotice,
+      pick: never,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(events).toEqual(["print:updated", "commit"]);
+  });
+
+  it("leaves the upgrade notice owed when a task-switch document is pending and the pick never returns", async () => {
+    const events: string[] = [];
+    void runSuggest(hook(), {
+      print: (l) => events.push(`print:${l}`),
+      queryEmbedding: async () => null,
+      taskContext: async () => task,
+      upgradeNotice: async () => ({ text: "updated", commit: async () => void events.push("commit") }),
+      pick: never,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(events).toEqual([]);
+  });
+});
+
 describe("runSuggest", () => {
   it("prints the picker's lines for a directory with no project-brain at all", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pb-suggest-"));

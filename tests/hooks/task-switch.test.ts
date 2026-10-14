@@ -3,6 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  claimNotice,
   contextTokens,
   contextWindow,
   decideTaskSwitch,
@@ -94,5 +95,15 @@ describe("gatherTaskContext", () => {
     await writeFile(file, filler + (await Bun.file(FIXTURE).text()));
     const ctx = await gatherTaskContext(file, "x", { PROJECT_BRAIN_CONTEXT_WINDOW: "100000" }, noSettings);
     expect(ctx?.recent).toHaveLength(4);
+  });
+});
+
+describe("claimNotice", () => {
+  it("is true once per session and kind, on disk", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pb-notice-"));
+    expect(await claimNotice(dir, "s/1", "clear")).toBe(true);
+    expect(await claimNotice(dir, "s/1", "clear")).toBe(false);
+    expect(await claimNotice(dir, "s/1", "compact")).toBe(true);
+    expect(await claimNotice(dir, "s/2", "clear")).toBe(true);
   });
 });

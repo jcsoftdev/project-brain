@@ -174,7 +174,8 @@ async function pickLines(
   const none: Picks = { skill: null, tool: null };
   const wantSkills = want.skills && skillPickerEnabled(deps.env);
   const wantTools = want.tools && toolPickerEnabled(deps.env);
-  if ((!wantSkills && !wantTools && !deps.taskSwitch) || isTrivialPrompt(prompt)) return none;
+  // The task-switch question only rides along with a picker; with both opted out nothing leaves the machine.
+  if ((!wantSkills && !wantTools) || isTrivialPrompt(prompt)) return none;
 
   const token = await (deps.getToken ?? (() => resolveRerankerToken()))();
   if (!token) return none;

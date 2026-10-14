@@ -166,6 +166,12 @@ describe("task-switch question", () => {
     expect(seen).toEqual([{ new_task: 0.85, same_task: 0.15 }]);
   });
 
+  it("sends nothing at all when both pickers are opted out, task-switch included", async () => {
+    const d = deps({ env: { BRAIN_SKILL_PICKER: "0", BRAIN_TOOL_PICKER: "0" }, taskSwitch: { recent: ["a"] }, loadTools: async () => [] });
+    expect(await pickSuggestions(PROMPT, d.deps)).toEqual([]);
+    expect(d.calls).toHaveLength(0);
+  });
+
   it("still asks when no skill or tool shortlist exists", async () => {
     const d = deps({ discover: async () => [], taskSwitch: { recent: ["a"] }, loadTools: async () => [] });
     await pickSuggestions("zzz qqq www", d.deps);
