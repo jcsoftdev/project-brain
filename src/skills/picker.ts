@@ -6,6 +6,7 @@ import { discoverSkills, type DiscoverOptions, type SkillInfo } from "./discover
 import { loadCatalogForHook } from "../toolcatalog/catalog.js";
 import type { ToolEntry } from "../toolcatalog/live.js";
 import { rankToolsSemantic } from "../toolcatalog/shortlist.js";
+import { taskSwitchQuestion } from "../hooks/task-switch.js";
 
 /**
  * Candidates sent to Jev. Every one adds a description to the request body
@@ -102,6 +103,13 @@ export interface SkillPickDeps {
   toolVectorCacheDir?: string;
   /** How long the tool shortlist may take once the prompt vector is in. Defaults to {@link TOOL_SHORTLIST_BUDGET_MS}. */
   toolBudgetMs?: number;
+  /**
+   * Present → the same Jev request also asks whether `prompt` starts an unrelated task, given these
+   * earlier prompts. Absent → the question is not sent.
+   */
+  taskSwitch?: { recent: string[]; assistant?: { text: string; tools: string[] } };
+  /** Receives Jev's probabilities for the task-switch question. Not called when it was not asked or Jev failed. */
+  onTaskSwitch?: (probabilities: Record<string, number>) => void;
 }
 
 export function toolPickerEnabled(env: Record<string, string | undefined> = process.env): boolean {
@@ -147,6 +155,7 @@ function confident(answer: { choice: string; probabilities: Record<string, numbe
 interface Picks {
   skill: string | null;
   tool: string | null;
+  switchProbabilities?: Record<string, number>;
 }
 
 /**
@@ -165,6 +174,7 @@ async function pickLines(
   const none: Picks = { skill: null, tool: null };
   const wantSkills = want.skills && skillPickerEnabled(deps.env);
   const wantTools = want.tools && toolPickerEnabled(deps.env);
+  // The task-switch question only rides along with a picker; with both opted out nothing leaves the machine.
   if ((!wantSkills && !wantTools) || isTrivialPrompt(prompt)) return none;
 
   const token = await (deps.getToken ?? (() => resolveRerankerToken()))();
@@ -174,7 +184,7 @@ async function pickLines(
   const catalog = wantTools
     ? (deps.loadTools ?? (() => loadCatalogForHook({ projectDir: deps.projectDir })))().catch((): ToolEntry[] => [])
     : Promise.resolve([] as ToolEntry[]);
-  const shared = await (deps.queryEmbedding?.() ?? Promise.resolve(null));
+  const shared = wantSkills || wantTools ? await (deps.queryEmbedding?.() ?? Promise.resolve(null)) : null;
 
   const shortlistSkills = async (): Promise<SkillInfo[]> => {
     if (!wantSkills) return [];
@@ -201,7 +211,7 @@ async function pickLines(
   clearTimeout(budgetTimer);
   const skills = describe(skillCandidates);
   const tools = describe(toolCandidates);
-  if (skills.length === 0 && tools.length === 0) return none;
+  if (skills.length === 0 && tools.length === 0 && !deps.taskSwitch) return none;
 
   const questions: Record<string, ChoiceQuestion> = {};
   const state: Record<string, unknown> = { prompt };
@@ -212,6 +222,12 @@ async function pickLines(
   if (tools.length > 0) {
     state.tools = tools;
     questions.tool = choiceQuestion("tool", tools.map((c) => c.name));
+  }
+
+  if (deps.taskSwitch) {
+    state.recent_prompts = deps.taskSwitch.recent;
+    if (deps.taskSwitch.assistant) state.last_assistant_turn = { text: deps.taskSwitch.assistant.text, tools_used: deps.taskSwitch.assistant.tools };
+    questions.switch = taskSwitchQuestion();
   }
 
   const answers = await ask(token, state, questions, {
@@ -225,6 +241,7 @@ async function pickLines(
   return {
     skill: skill ? `Suggested skill: ${skill.name} — ${truncate(skill.description, 120)}` : null,
     tool: tool ? `Suggested tool: ${tool.name} — ${truncate(tool.description, 120)}` : null,
+    switchProbabilities: answers.switch?.probabilities,
   };
 }
 
@@ -246,7 +263,8 @@ export async function pickSkill(prompt: string, deps: SkillPickDeps & { projectD
  */
 export async function pickSuggestions(prompt: string, deps: SkillPickDeps & { projectDir: string }): Promise<string[]> {
   try {
-    const { skill, tool } = await pickLines(prompt, deps, { skills: true, tools: true });
+    const { skill, tool, switchProbabilities } = await pickLines(prompt, deps, { skills: true, tools: true });
+    if (switchProbabilities) deps.onTaskSwitch?.(switchProbabilities);
     return [skill, tool].filter((l): l is string => l !== null);
   } catch {
     return [];

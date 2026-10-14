@@ -20,11 +20,22 @@
  * prove the hook ran without re-paying for the table.
  */
 
+import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ROUTING_TIERS, DEFAULT_HOST_MODELS, ROUTING_CONTENT_VERSION } from "../constants.js";
 import { loadRoutingConfig } from "../rules/model-routing-config.js";
 import { readWrittenRoutingVersion } from "../registrars/routing-section.js";
+import { ROUTING_SKILL_NAME } from "../rules/model-routing.js";
+
+/** A current section in pointer form names the skill; the inline form carries the table instead. */
+async function rulesPointToSkill(rulesPath: string): Promise<boolean> {
+  try {
+    return (await readFile(rulesPath, "utf8")).includes(`\`${ROUTING_SKILL_NAME}\` skill`);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Build the SessionStart hook payload as a JSON string.
@@ -45,9 +56,10 @@ export async function buildRoutingReminder(
     return JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "SessionStart",
-        additionalContext:
-          'Model routing for delegated agents: the "Model routing for delegated agents" table ' +
-          "in this project's rules file is current — follow it; not repeated here.",
+        additionalContext: (await rulesPointToSkill(resolvedRulesPath))
+          ? `Model routing for delegated agents: load the \`${ROUTING_SKILL_NAME}\` skill before any Agent/Task call.`
+          : 'Model routing for delegated agents: the "Model routing for delegated agents" table ' +
+            "in this project's rules file is current — follow it; not repeated here.",
       },
     });
   }

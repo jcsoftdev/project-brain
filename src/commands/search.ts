@@ -1,7 +1,8 @@
 import type { EmbeddingClient, VectorStore } from "../types.js";
 import type { Reranker } from "../rerank/jev.js";
+import { featureEnabled } from "../features.js";
 import { handleSearch } from "../tools/search.js";
-import { isTrivialPrompt } from "./trivial-prompt.js";
+import { isNonCodePrompt } from "./trivial-prompt.js";
 
 /**
  * Hook budget: the UserPromptSubmit race in {@link execute} below gives up
@@ -38,12 +39,34 @@ export function parsePromptFromStdin(raw: string): string {
   }
 }
 
+/**
+ * Hook gating defaults. Reranked scores in practice span ~0.2-0.85, so 0.5 keeps confident hits
+ * only. Without a reranker the store scales its best hit to 1.0, so the floor means nothing there
+ * and only the cap applies.
+ */
+export const HOOK_MIN_SCORE = 0.5;
+export const HOOK_MAX_HITS = 5;
+
+function envNumber(name: string, fallback: number, valid: (n: number) => boolean): number {
+  const n = Number(process.env[name]);
+  return process.env[name] && valid(n) ? n : fallback;
+}
+
+/** The setup unit switches the whole gate; PROJECT_BRAIN_SEARCH_PROMPT_FILTER=0 turns just the non-code prompt skip off. */
+function promptFilterEnabled(gate: boolean): boolean {
+  return gate && process.env.PROJECT_BRAIN_SEARCH_PROMPT_FILTER !== "0";
+}
+
 export interface SearchArgs {
   query: string;
   /** Precomputed embedding of `query` (hook path), forwarded to handleSearch. */
   queryVector?: number[];
   project: string;
   limit: number;
+  /** Drop hits scoring below this (hook path only; the CLI and MCP tool keep every hit). Ignored without a reranker. */
+  minScore?: number;
+  /** Keep at most this many hits after the score floor. */
+  maxHits?: number;
 }
 
 export interface SearchDeps {
@@ -63,7 +86,7 @@ export interface SearchDeps {
  * Fail-fast contract: any error → print nothing, return (never throws).
  */
 export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<void> {
-  const { query, project, limit, queryVector } = args;
+  const { query, project, limit, queryVector, minScore = 0, maxHits = Infinity } = args;
 
   // Empty query → no-op
   if (!query.trim()) return;
@@ -87,8 +110,8 @@ export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<voi
       }>;
     };
 
-    const results = parsed.results;
-    if (!results || results.length === 0) return;
+    const results = (parsed.results ?? []).filter((r) => r.score >= (deps.reranker ? minScore : 0)).slice(0, maxHits);
+    if (results.length === 0) return;
 
     // Build compact markdown block
     const lines: string[] = ["<project-brain: relevant context for this prompt>"];
@@ -171,6 +194,7 @@ export async function execute(
       }
 
       let query: string;
+      const gate = featureEnabled("search-gate");
 
       if (useStdin) {
         // Read ALL of stdin, parse JSON, use .prompt as query.
@@ -182,11 +206,11 @@ export async function execute(
           return;
         }
 
-        // Hook-only gate: an acknowledgement or continuation ("si", "ok",
-        // "you sure?") carries no code question, so skip retrieval entirely.
+        // Hook-only gate: an acknowledgement, continuation, slash-command echo or
+        // pasted report carries no code question, so skip retrieval entirely.
         // The MCP search_context tool and the CLI `search "<q>"` never take
         // this branch — only stdin, i.e. the UserPromptSubmit hook, does.
-        if (isTrivialPrompt(query)) return;
+        if (promptFilterEnabled(gate) && isNonCodePrompt(query)) return;
       } else {
         query = queryParts.join(" ");
       }
@@ -251,7 +275,11 @@ export async function execute(
         // HOOK_TIMEOUT_MS race this whole execute() runs under.
         const reranker = (await createReranker()) ?? undefined;
 
-        await runSearch({ query, project, limit }, { store, embeddings, dbPath: DB_PATH, reranker });
+        const minScore = envNumber("PROJECT_BRAIN_SEARCH_MIN_SCORE", HOOK_MIN_SCORE, (n) => n >= 0 && n <= 1);
+        const maxHits = envNumber("PROJECT_BRAIN_SEARCH_MAX_HITS", HOOK_MAX_HITS, (n) => Number.isInteger(n) && n > 0);
+        const hookGate = useStdin && gate ? { minScore, maxHits } : {};
+
+        await runSearch({ query, project, limit, ...hookGate }, { store, embeddings, dbPath: DB_PATH, reranker });
       };
 
       // Skill/tool suggestions are not made here: `project-brain suggest --stdin` owns them,

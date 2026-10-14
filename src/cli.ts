@@ -132,6 +132,14 @@ Commands:
   worktree           Show this worktree's brain + port identity, or reclaim dead ones
                        status [--json]   identity for project-brain and mcp-port-registry
                        prune [--dry-run] drop indexes of worktrees git no longer lists
+  context slim       Measure ~/.claude/CLAUDE.md per section (estimated tokens), no changes
+                       --apply <section-id>...  move your own sections into on-demand skills
+                         (backup first; --description <text> sets the skill description)
+                       --revert  restore the latest backup and remove the skills it created
+  mcp prune          List MCP servers a project never used (default: this project), no changes
+                       --all     every project in ~/.claude.json
+                       --apply   disable them for that project only (backup first)
+                       --revert  re-enable exactly what --apply disabled
   tool-catalog refresh  Rebuild the MCP tool catalog behind the "Suggested tool" hints
   arch init          Write .project-brain/architecture.json (hexagonal preset) [--force]
   compact            Reclaim storage from old versions + deleted rows [--project <id>]
@@ -499,6 +507,16 @@ switch (command) {
     await execute(args);
     break;
   }
+  case "context": {
+    const { execute } = await import("./commands/context.js");
+    process.exit(await execute(args));
+    break;
+  }
+  case "mcp": {
+    const { execute } = await import("./commands/mcp.js");
+    process.exit(await execute(args));
+    break;
+  }
   case "__parse-selftest": {
     // Hidden build-smoke hook (not in --help). Ollama-free: proves the
     // cross-compiled binary loaded the embedded WASM grammar + produced
@@ -538,7 +556,7 @@ switch (command) {
   default:
     console.error(`Unknown command: ${command}`);
     console.error(
-      "Usage: project-brain [setup|init|arch|sync|conceptualize|reindex|health|search|update|serve|find|callers|callees|impact|trace|map|code|okf]"
+      "Usage: project-brain [setup|init|arch|sync|conceptualize|reindex|health|search|update|serve|find|callers|callees|impact|trace|map|code|okf|context|mcp]"
     );
     process.exit(1);
 }

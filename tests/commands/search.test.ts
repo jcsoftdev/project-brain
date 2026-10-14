@@ -165,6 +165,63 @@ describe("search command", () => {
       expect(output).toHaveLength(0);
     });
 
+    // Rescores each candidate by the score its file carries in `by`, as a real reranker would.
+    const stubReranker = (by: Record<string, number>) => ({
+      rerank: async (_q: string, candidates: Array<{ file: string }>) => candidates.map((c) => by[c.file] ?? 0),
+    });
+
+    it("ignores minScore without a reranker, since the store scales its best hit to 1.0", async () => {
+      const { runSearch } = await import("../../src/commands/search.js");
+      await runSearch(
+        { query: "q none", project: "p", limit: 8, minScore: 0.5 },
+        {
+          store: makeStore([
+            makeSearchResult({ id: "hi", source: "src/high.ts", score: 1, content: "alpha beta gamma" }),
+            makeSearchResult({ id: "lo", source: "src/low.ts", score: 0.22, content: "delta epsilon zeta" }),
+          ]),
+          embeddings: makeEmbeddings(true),
+        }
+      );
+      expect(output.join("\n")).toContain("src/low.ts");
+    });
+
+    it("drops hits below minScore and prints nothing when none survive", async () => {
+      const { runSearch } = await import("../../src/commands/search.js");
+      const deps = {
+        store: makeStore([
+          makeSearchResult({ id: "hi", source: "src/high.ts", score: 0.8, content: "alpha beta gamma" }),
+          makeSearchResult({ id: "lo", source: "src/low.ts", score: 0.22, content: "delta epsilon zeta" }),
+        ]),
+        embeddings: makeEmbeddings(true),
+        reranker: stubReranker({ "src/high.ts": 0.8, "src/low.ts": 0.22 }),
+      };
+
+      await runSearch({ query: "q one", project: "p", limit: 8, minScore: 0.5 }, deps);
+      const joined = output.join("\n");
+      expect(joined).toContain("src/high.ts");
+      expect(joined).not.toContain("src/low.ts");
+
+      output.length = 0;
+      await runSearch({ query: "q two", project: "p", limit: 8, minScore: 0.9 }, deps);
+      expect(output).toHaveLength(0);
+    });
+
+    it("caps the number of printed hits at maxHits", async () => {
+      const { runSearch } = await import("../../src/commands/search.js");
+      const words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
+      const results = words.map((w, i) =>
+        makeSearchResult({ id: `c${i}`, source: `src/${w}.ts`, score: 0.9 - i * 0.01, content: `${w} ${w}${i} unique${i}` })
+      );
+
+      await runSearch(
+        { query: "cap query", project: "p", limit: 8, minScore: 0.5, maxHits: 3 },
+        { store: makeStore(results), embeddings: makeEmbeddings(true), reranker: stubReranker(Object.fromEntries(results.map((r) => [r.source, r.score]))) }
+      );
+
+      const lines = output.join("\n").split("\n").filter((l) => l.startsWith("- "));
+      expect(lines).toHaveLength(3);
+    });
+
     it("prints nothing for empty results", async () => {
       const { runSearch } = await import("../../src/commands/search.js");
 

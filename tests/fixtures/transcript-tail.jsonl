@@ -1,0 +1,10 @@
+{"type":"user","message":{"role":"user","content":"<local-command-caveat>ignore</local-command-caveat>"},"isMeta":true}
+{"type":"user","message":{"role":"user","content":"fix the login redirect bug"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":2,"cache_creation_input_tokens":1000,"cache_read_input_tokens":39000,"output_tokens":50}}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"x"}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"now add a test for it"}]}}
+{"type":"user","isSidechain":true,"message":{"role":"user","content":"sub-agent brief"}}
+{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":3,"cache_creation_input_tokens":2000,"cache_read_input_tokens":58000,"output_tokens":10}}}
+not json at all
+{"type":"user","message":{"role":"user","content":"write the quarterly report"}}

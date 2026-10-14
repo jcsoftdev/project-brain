@@ -286,6 +286,8 @@ With a token configured, the hook asks Jev which installed skill best fits your 
 
 **Tool suggestions.** The same request can also carry a second question about your MCP tools, and the hook then adds `Suggested tool: mcp__<server>__<tool> — <why>` (again only at 70% confidence). Claude Code defers most MCP tools, so the assistant often never reaches for the right one; the hint names it. project-brain keeps its own catalog in `~/.project-brain/`: `tool-catalog.json` for user-scope servers (`~/.claude.json` top level, `~/.claude/mcp-servers.json`) and a per-project file for local-scope servers plus the project's `.mcp.json` ones, which are used only if you approved them in Claude Code (so a freshly cloned repo can never make project-brain start its servers): each stdio server, or unauthenticated HTTP server, is started briefly and asked for `tools/list` (10s per server, four at a time; a failure or a 401 skips that server, and project-brain itself is left out). Servers that cannot be listed this way, such as claude.ai connectors, are filled in by name only from the `deferred_tools_delta` entries in your recent Claude Code transcripts (claude.ai connectors and plugin servers only). The suggest hook never builds the catalog: it only reads it, and when it is missing, older than 24 hours or its servers changed, it spawns `project-brain tool-catalog refresh` in the background (at most once every ten minutes). Run that command yourself to rebuild on demand; it prints how many tools it found, and it also embeds the tools in the background so the hook only ever reads cached vectors. Both questions share the one Jev request, so tool suggestions add no round trip, and the same disclosure applies to the shortlisted tools' names and descriptions (at most 12). Opt out with `BRAIN_TOOL_PICKER=0`, independently of `BRAIN_SKILL_PICKER`.
 
+**Task-switch notice.** Once the session's context is at least 30% full (read from the latest assistant `usage` in the transcript, against the auto-compact window or 200K), the same Jev request (only when the skill or tool picker is on; with both opted out nothing is sent at all) also asks whether the prompt starts a task unrelated to the recent work. What leaves the machine for that question, only above 30%: your last four prompts (300 characters each), the last assistant text block cut to 400 characters, and the names (never the inputs or outputs) of the last few tools used. Jev answers `new_task`, `related_task` or `same_task`. A confident `new_task` (0.8 by default) shows a one-line notice (hook `systemMessage`) suggesting `/clear` and resending; a `related_task` answer of 0.6 or more suggests `/compact focus on: <the first ~60 characters of your prompt>`; a continuation at 75% or more suggests `/compact`. `/clear` is never suggested while work is in flight, meaning a background agent, shell command or workflow that has not reported back, or a tool call without its result; past 75% it becomes `/compact`, otherwise nothing. The notice appears at most once per session for each of `/clear` and `/compact`. The prompt always goes through, and under 30% nothing extra is asked or sent. Opt out with `PROJECT_BRAIN_TASK_SWITCH=0`; tune with `PROJECT_BRAIN_TASK_SWITCH_PCT`, `PROJECT_BRAIN_COMPACT_PCT`, `PROJECT_BRAIN_TASK_SWITCH_CONFIDENCE` (0.5-1, default 0.8) and `PROJECT_BRAIN_CONTEXT_WINDOW`. `scripts/calibrate-task-switch.ts` replays your own transcripts read-only against Jev (at most 30 requests) to measure the `/clear` precision and recall at 0.7, 0.8 and 0.9.
+
 ## Recipes — get the most out of it
 
 You talk to your **AI assistant** in natural language; it picks the right tool. These prompts steer it well:
@@ -317,6 +319,18 @@ One-time global setup. Detects your environment and registers project-brain with
 project-brain setup
 ```
 
+#### Context-economy units
+
+Every context-economy feature is its own unit in the `setup` checklist, ticked by default, and an upgrade that never saw them turns them on without a prompt. Untick one to switch it off; your choice is stored in `~/.project-brain/features.json`, which the hooks read at runtime (the existing `PROJECT_BRAIN_*=0` variables still override it).
+
+| Unit | What it does | Leaves the machine |
+|---|---|---|
+| `feature:routing-skill` | model-routing table loads as the `brain-model-routing` skill; unticked, the full block goes back inline | nothing |
+| `feature:task-switch` | one-line `/clear` or `/compact` notice at 30% context | your last few prompts, to api.typesafe.ai, with a TypeSafe token and a picker on |
+| `feature:search-gate` | per-prompt search skips non-code prompts, caps hits, floors reranker scores | nothing extra |
+| `config:mcp-prune` | disables MCP servers a project never uses | nothing |
+| `config:context-slim` | moves large user sections of CLAUDE.md into skills | nothing |
+
 `setup` asks which parts to install — one checklist per group (Hosts, Guidance,
 Skills, Other), asked in order, so each question is about one kind of thing — and
 remembers the answer in `~/.project-brain/setup-selection.json`. Re-running it
@@ -346,6 +360,31 @@ Run `project-brain setup --with=nope` to print the list of valid ids.
 On this repository that took a worktree's first index from 2m38s to 2.1s.
 
 It copies nothing, and indexes normally, when the main checkout has no index, when the worktree already has one, or when the two would disagree about the embedding model. Vectors from a different model are not comparable, and that is the one case sync could not correct on its own.
+
+#### Memory slimming
+
+Everything in `~/.claude/CLAUDE.md` loads on every turn of every session. `setup` already moves project-brain's own long block (the model-routing guidance) into the on-demand `brain-model-routing` skill, leaving a short pointer, and an existing install migrates the next time `setup` or `update` re-applies it. For the rest of the file, the `config:context-slim` unit (on by default) moves your own sections of 1500 tokens or more into skills each time `setup` or `update` runs, and unticking it restores them; managed blocks are never touched, so a file that is all managed blocks changes nothing. The manual command stays available:
+
+```bash
+project-brain context slim                       # measure: estimated tokens per section (chars / 4)
+project-brain context slim --apply user:my-notes # move your own section into a skill (backup first)
+project-brain context slim --revert              # restore the latest backup, remove the skills it made
+```
+
+Sections are marked `project-brain`, `other tool` (inside another tool's `<!-- x:start -->`/`<!-- x:end -->` or `<!-- x -->`/`<!-- /x -->` markers) or `yours`. Only `yours` can be moved; content a tool regenerates (for example gentle-ai) is refused, and has to be changed through that tool's own override mechanism. Moved sections become skills named `memory-<heading>` with a description derived from the heading (`--description` overrides it). Backups live in `~/.claude/context-slim/<timestamp>/`; each `--revert` undoes the newest slim that still has a backup, and keeps the pre-revert CLAUDE.md under `~/.claude/context-slim/safety/`.
+
+#### Unused MCP servers
+
+Every enabled MCP server loads its tool list and instructions into every session of every project, used or not. `project-brain mcp prune` reads each project's transcripts (subagents included) and finds the servers that project has not called in 30 days:
+
+```bash
+project-brain mcp prune            # this project: what would be disabled, no changes
+project-brain mcp prune --all      # every project in ~/.claude.json
+project-brain mcp prune --apply    # add them to that project's disabledMcpServers (backup first)
+project-brain mcp prune --revert   # re-enable exactly what --apply disabled
+```
+
+It is per project: usage in one project never disables a server in another, and nothing touches the user-wide list. Git worktrees of a repo pool their usage and history, so a fresh worktree inherits the repo's. A project needs 10 sessions, or 14 days of history with at least 3 sessions inside the window, and its directory must still exist; new projects are handled by a later setup or update once they have history. project-brain, servers you list in `PROJECT_BRAIN_MCP_PRUNE_KEEP` (comma separated) and servers you switched back on after we disabled them are never touched: re-enabling a pruned server through `/mcp` is respected for good, even if it goes unused afterwards. Only MCP tool calls count as usage, so a server you use through resources or prompts alone belongs on the keep list. Setup (`config:mcp-prune`, checked by default) and `update` run `--apply` for all projects; opt out with `PROJECT_BRAIN_MCP_PRUNE=0`, change the window with `PROJECT_BRAIN_MCP_PRUNE_DAYS`. `~/.claude.json` is backed up under `~/.project-brain/mcp-prune/`, written atomically, and only the disabled lists change. Changes apply from the next session.
 
 #### Auto-compact window
 
@@ -530,6 +569,14 @@ Search the indexed context and print compact results. Primarily used internally:
 project-brain search "how does auth work"
 echo "how does auth work" | project-brain search --stdin
 ```
+
+The hook only injects when it is likely to help. Before any embedding work it skips prompts that carry no code question: very short prompts (under 3 words or 15 characters, unless they name a code identifier), acknowledgements and continuations in English and Spanish ("ok", "sí", "continúa", "commit y push"), slash-command echoes, and pasted harness or agent reports. Hits scoring below 0.5 are dropped and at most 5 are kept; if nothing survives, nothing is printed. The plain CLI `search "<q>"` is not gated.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PROJECT_BRAIN_SEARCH_MIN_SCORE` | `0.5` | Minimum reranker score (0-1) a hit needs to be injected; ignored without a reranker token, where only `PROJECT_BRAIN_SEARCH_MAX_HITS` applies |
+| `PROJECT_BRAIN_SEARCH_MAX_HITS` | `5` | Maximum snippets injected |
+| `PROJECT_BRAIN_SEARCH_PROMPT_FILTER` | on | Set to `0` to search every prompt, including non-code ones |
 
 ### Structural & lexical commands (`find`, `callers`, `callees`, `impact`, `trace`, `map`, `code`)
 
