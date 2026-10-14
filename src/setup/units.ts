@@ -480,6 +480,45 @@ async function routingSkillMissing(registrar: AIToolRegistrar): Promise<boolean>
   return !existsSync(join(skillDir, "SKILL.md"));
 }
 
+/** Writes each host's model-routing section: the skill plus a pointer when the routing-skill feature is on, the full block otherwise. */
+async function writeRoutingGuidance(ctx: SetupContext): Promise<void> {
+  const eligible = ctx.installed.filter((r) => r.routing && r.writeModelRouting);
+  if (eligible.length === 0) return;
+
+  const { loadRoutingConfig } = await import("../rules/model-routing-config.js");
+  const resolved = await loadRoutingConfig(ctx.routingConfigPath);
+  for (const warning of resolved.warnings) console.warn(`Warning: ${warning}`);
+
+  const { featureEnabled } = await import("../features.js");
+  const asSkill = featureEnabled("routing-skill", ctx.dataDir);
+  const { getModelRoutingSection, getModelRoutingPointer, getModelRoutingSkill } = await import("../rules/model-routing.js");
+  for (const registrar of eligible) {
+    try {
+      const skillDir = registrar.routingSkillDir?.();
+      if (skillDir && asSkill && (await writeRoutingSkill(skillDir, await getModelRoutingSkill(registrar, resolved)))) {
+        await registrar.writeModelRouting!(await getModelRoutingPointer(registrar));
+        continue;
+      }
+      if (skillDir && !asSkill && (await inspectRoutingSkill(skillDir)) === "ours") await rm(skillDir, { recursive: true, force: true });
+      await registrar.writeModelRouting!(await getModelRoutingSection(registrar, resolved));
+    } catch (e: any) {
+      console.warn(`Warning: Failed to write model-routing guidance for ${registrar.name}: ${e.message}`);
+    }
+  }
+}
+
+/** The rules file is in the other form (pointer vs inline) than the routing-skill feature asks for. */
+async function routingFormMismatch(registrar: AIToolRegistrar, asSkill: boolean): Promise<boolean> {
+  const rulesPath = registrar.rulesFilePath?.();
+  if (!registrar.routingSkillDir?.() || !rulesPath) return false;
+  const { ROUTING_SKILL_NAME } = await import("../rules/model-routing.js");
+  try {
+    return (await Bun.file(rulesPath).text()).includes(`\`${ROUTING_SKILL_NAME}\``) !== asSkill;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The model-routing guidance and the two hook pairs.
  *
@@ -514,37 +553,16 @@ export function guidanceUnits(): SetupUnit[] {
 
         if (versions.every((v) => v === null)) return "absent";
         if (versions.some((v) => v === null || v < ROUTING_CONTENT_VERSION)) return "stale";
+        const { featureEnabled } = await import("../features.js");
+        const asSkill = featureEnabled("routing-skill", ctx.dataDir);
         for (const r of eligible) {
           if (await routingSkillMissing(r)) return "stale";
+          if (await routingFormMismatch(r, asSkill)) return "stale";
         }
         return "current";
       },
 
-      async apply(ctx): Promise<void> {
-        const eligible = ctx.installed.filter((r) => r.routing && r.writeModelRouting);
-        if (eligible.length === 0) return;
-
-        const { loadRoutingConfig } = await import("../rules/model-routing-config.js");
-        const resolved = await loadRoutingConfig(ctx.routingConfigPath);
-        for (const warning of resolved.warnings) console.warn(`Warning: ${warning}`);
-
-        const { getModelRoutingSection, getModelRoutingPointer, getModelRoutingSkill } =
-          await import("../rules/model-routing.js");
-        for (const registrar of eligible) {
-          try {
-            const skillDir = registrar.routingSkillDir?.();
-            if (skillDir && (await writeRoutingSkill(skillDir, await getModelRoutingSkill(registrar, resolved)))) {
-              await registrar.writeModelRouting!(await getModelRoutingPointer(registrar));
-              continue;
-            }
-            await registrar.writeModelRouting!(await getModelRoutingSection(registrar, resolved));
-          } catch (e: any) {
-            console.warn(
-              `Warning: Failed to write model-routing guidance for ${registrar.name}: ${e.message}`
-            );
-          }
-        }
-      },
+      apply: writeRoutingGuidance,
 
       async remove(ctx): Promise<void> {
         const { removeSection } = await import("../rules/section-marker.js");
@@ -1290,7 +1308,127 @@ async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, 
  * Code's.
  */
 export function allUnits(ctx: SetupContext): SetupUnit[] {
-  return [...hostUnits(ctx.installed), ...guidanceUnits(), ...skillUnits(), ...otherUnits(), mcpPruneUnit()];
+  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit()];
+}
+
+
+/**
+ * A unit that only flips a runtime feature, persisted in `features.json` for the hooks to read.
+ * Present while the feature is on (the default), so unticking it maps to removal and switches it off.
+ */
+function featureUnit(spec: {
+  id: string;
+  feature: import("../features.js").FeatureId;
+  label: string;
+  description: string;
+  group?: SetupUnit["group"];
+}): SetupUnit {
+  const set = async (ctx: SetupContext, on: boolean) => {
+    const { setFeature } = await import("../features.js");
+    await setFeature(ctx.dataDir, spec.feature, on);
+  };
+  return {
+    id: spec.id,
+    group: spec.group ?? "Other",
+    label: spec.label,
+    description: spec.description,
+    defaultSelected: true,
+    autoOnUpgrade: true,
+
+    async inspect(ctx): Promise<UnitState> {
+      const { featureEnabled, featureEnvOptOut } = await import("../features.js");
+      if (featureEnvOptOut(spec.feature)) return "unavailable";
+      return featureEnabled(spec.feature, ctx.dataDir) ? "current" : "absent";
+    },
+    apply: (ctx) => set(ctx, true),
+    remove: (ctx) => set(ctx, false),
+  };
+}
+
+/** Listed before the guidance unit so its flag is set by the time the guidance is rewritten in the matching form. */
+export const routingSkillUnit = (): SetupUnit =>
+  featureUnit({
+    id: "feature:routing-skill",
+    group: "Guidance",
+    feature: "routing-skill",
+    label: "Model routing as an on-demand skill",
+    description:
+      "keeps the model-routing table out of every session's context: it loads as the brain-model-routing skill when delegating, " +
+      "with a one-line pointer in the rules; unticked, the full block goes back inline. Nothing leaves the machine",
+  });
+
+export function featureUnits(): SetupUnit[] {
+  return [
+    featureUnit({
+      id: "feature:task-switch",
+      feature: "task-switch",
+      label: "Task-switch notice",
+      description:
+        "once the context is over 30% full, shows a one-line /clear or /compact notice when a prompt starts an unrelated task (rides the skill/tool suggestions hook); " +
+        "with a TypeSafe token it sends your last few prompts to api.typesafe.ai, only when a picker is on; PROJECT_BRAIN_TASK_SWITCH=0 also turns it off",
+    }),
+    featureUnit({
+      id: "feature:search-gate",
+      feature: "search-gate",
+      label: "Search hook gating",
+      description:
+        "the per-prompt search skips acknowledgements, slash commands and pasted reports, keeps at most 5 hits, and with a reranker token drops hits scoring under 0.5; nothing extra leaves the machine",
+    }),
+  ];
+}
+
+/** Moves big user-written CLAUDE.md sections into skills; managed blocks are never touched. */
+function contextSlimUnit(): SetupUnit {
+  const pathsOf = (ctx: SetupContext) => {
+    const dir = ctx.claudeSettingsPath ? dirname(ctx.claudeSettingsPath) : "";
+    return basename(dir) === ".claude" ? { claudeDir: dir } : null;
+  };
+  return {
+    id: "config:context-slim",
+    group: "Other",
+    label: "Slim CLAUDE.md",
+    description:
+      "moves user-written CLAUDE.md sections of 1500 tokens or more into on-demand skills (managed blocks are never touched), backed up so unticking restores them; " +
+      "`project-brain context slim` stays available. Nothing leaves the machine",
+    defaultSelected: true,
+    autoOnUpgrade: true,
+
+    async inspect(ctx): Promise<UnitState> {
+      const paths = pathsOf(ctx);
+      if (!paths || !existsSync(join(paths.claudeDir, "CLAUDE.md"))) return "unavailable";
+      const { featureEnabled } = await import("../features.js");
+      const { autoSlimCandidates, hasSlimBackup } = await import("../context/slim.js");
+      const moved = await hasSlimBackup(paths);
+      if (!featureEnabled("context-slim", ctx.dataDir) && !moved) return "absent";
+      const pending = (await autoSlimCandidates(paths).catch(() => [])).length > 0;
+      if (moved) return pending ? "stale" : "current";
+      return pending ? "absent" : "current";
+    },
+
+    async apply(ctx): Promise<void> {
+      const paths = pathsOf(ctx);
+      if (!paths) return;
+      const { setFeature } = await import("../features.js");
+      await setFeature(ctx.dataDir, "context-slim", true);
+      const { applySlim, autoSlimCandidates } = await import("../context/slim.js");
+      const ids = await autoSlimCandidates(paths).catch(() => []);
+      if (ids.length === 0) return;
+      const result = await applySlim(paths, { ids });
+      if (result.moved.length > 0) {
+        console.log(`\nMoved CLAUDE.md sections into skills: ${result.moved.map((m) => m.id).join(", ")}`);
+        console.log("Undo with: project-brain context slim --revert");
+      }
+    },
+
+    async remove(ctx): Promise<void> {
+      const { setFeature } = await import("../features.js");
+      await setFeature(ctx.dataDir, "context-slim", false);
+      const paths = pathsOf(ctx);
+      if (!paths || !existsSync(join(paths.claudeDir, "CLAUDE.md"))) return;
+      const { revertAllSlims } = await import("../context/slim.js");
+      await revertAllSlims(paths);
+    },
+  };
 }
 
 /** Where Claude Code's `.claude.json` and transcripts live, derived from the settings path so a redirected one stays redirected. */
@@ -1299,32 +1437,34 @@ function pruneEnvOf(ctx: SetupContext): import("../mcpprune/prune.js").PruneEnv 
   return basename(dir) === ".claude" ? { home: dirname(dir), dataDir: ctx.dataDir } : null;
 }
 
-const pruneOptedOut = (): boolean => process.env.PROJECT_BRAIN_MCP_PRUNE === "0";
-
 function mcpPruneUnit(): SetupUnit {
   return {
     id: "config:mcp-prune",
     group: "Other",
     label: "Disable unused MCP servers",
     description:
-      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions, or 14 days of history with at least 3 sessions inside the window; never project-brain), so their tool lists and instructions stop loading; `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out",
+      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions, or 14 days of history with 3 sessions in the window; never project-brain), so their tool lists and instructions stop loading; `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out. Nothing leaves the machine",
     defaultSelected: true,
     autoOnUpgrade: true,
 
     async inspect(ctx): Promise<UnitState> {
       const env = pruneEnvOf(ctx);
       if (!env) return "unavailable";
-      if (pruneOptedOut()) return "unavailable";
+      const { featureEnabled, featureEnvOptOut } = await import("../features.js");
+      if (featureEnvOptOut("mcp-prune")) return "unavailable";
       const { planPrune, hasPruneEntries, envFromProcess } = await import("../mcpprune/prune.js");
       const pending = (await planPrune({ ...env, ...envFromProcess() })).some((p) => p.candidates.length > 0);
       // Present once anything is disabled, so unticking the unit maps to removal and runs the revert.
       if (await hasPruneEntries(env)) return pending ? "stale" : "current";
+      if (!featureEnabled("mcp-prune", ctx.dataDir)) return "absent";
       return pending ? "absent" : "current";
     },
 
     async apply(ctx): Promise<void> {
       const env = pruneEnvOf(ctx);
-      if (!env || pruneOptedOut()) return;
+      const { featureEnvOptOut, setFeature } = await import("../features.js");
+      if (!env || featureEnvOptOut("mcp-prune")) return;
+      await setFeature(ctx.dataDir, "mcp-prune", true);
       const { planPrune, applyPrune, envFromProcess } = await import("../mcpprune/prune.js");
       const full = { ...env, ...envFromProcess() };
       const result = await applyPrune(full, await planPrune(full));
@@ -1338,6 +1478,8 @@ function mcpPruneUnit(): SetupUnit {
     },
 
     async remove(ctx): Promise<void> {
+      const { setFeature } = await import("../features.js");
+      await setFeature(ctx.dataDir, "mcp-prune", false);
       const env = pruneEnvOf(ctx);
       if (!env) return;
       const { revertPrune } = await import("../mcpprune/prune.js");

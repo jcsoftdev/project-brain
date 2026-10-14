@@ -1,5 +1,6 @@
 import type { EmbeddingClient, VectorStore } from "../types.js";
 import type { Reranker } from "../rerank/jev.js";
+import { featureEnabled } from "../features.js";
 import { handleSearch } from "../tools/search.js";
 import { isNonCodePrompt } from "./trivial-prompt.js";
 
@@ -51,9 +52,9 @@ function envNumber(name: string, fallback: number, valid: (n: number) => boolean
   return process.env[name] && valid(n) ? n : fallback;
 }
 
-/** PROJECT_BRAIN_SEARCH_PROMPT_FILTER=0 turns the non-code prompt skip off. */
-function promptFilterEnabled(): boolean {
-  return process.env.PROJECT_BRAIN_SEARCH_PROMPT_FILTER !== "0";
+/** The setup unit switches the whole gate; PROJECT_BRAIN_SEARCH_PROMPT_FILTER=0 turns just the non-code prompt skip off. */
+function promptFilterEnabled(gate: boolean): boolean {
+  return gate && process.env.PROJECT_BRAIN_SEARCH_PROMPT_FILTER !== "0";
 }
 
 export interface SearchArgs {
@@ -193,6 +194,7 @@ export async function execute(
       }
 
       let query: string;
+      const gate = featureEnabled("search-gate");
 
       if (useStdin) {
         // Read ALL of stdin, parse JSON, use .prompt as query.
@@ -208,7 +210,7 @@ export async function execute(
         // pasted report carries no code question, so skip retrieval entirely.
         // The MCP search_context tool and the CLI `search "<q>"` never take
         // this branch — only stdin, i.e. the UserPromptSubmit hook, does.
-        if (promptFilterEnabled() && isNonCodePrompt(query)) return;
+        if (promptFilterEnabled(gate) && isNonCodePrompt(query)) return;
       } else {
         query = queryParts.join(" ");
       }
@@ -275,7 +277,7 @@ export async function execute(
 
         const minScore = envNumber("PROJECT_BRAIN_SEARCH_MIN_SCORE", HOOK_MIN_SCORE, (n) => n >= 0 && n <= 1);
         const maxHits = envNumber("PROJECT_BRAIN_SEARCH_MAX_HITS", HOOK_MAX_HITS, (n) => Number.isInteger(n) && n > 0);
-        const hookGate = useStdin ? { minScore, maxHits } : {};
+        const hookGate = useStdin && gate ? { minScore, maxHits } : {};
 
         await runSearch({ query, project, limit, ...hookGate }, { store, embeddings, dbPath: DB_PATH, reranker });
       };

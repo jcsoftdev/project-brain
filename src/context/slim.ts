@@ -117,6 +117,30 @@ export async function applySlim(paths: SlimPaths, req: ApplyRequest): Promise<Ap
   return result;
 }
 
+/** Smallest user-written section the automatic pass moves out of CLAUDE.md. */
+export const AUTO_SLIM_TOKENS = 1500;
+
+/** Ids of the user-written sections worth moving automatically; managed blocks are never listed. */
+export async function autoSlimCandidates(paths: SlimPaths): Promise<string[]> {
+  const sections = await measure(paths);
+  return sections
+    .filter((s) => s.kind === "user" && s.tokens >= AUTO_SLIM_TOKENS && !existsSync(join(skillsDir(paths), `${SKILL_PREFIX}${slugify(s.title)}`)))
+    .map((s) => s.id);
+}
+
+/** Whether a slim is still on record, i.e. a revert would restore something. */
+export async function hasSlimBackup(paths: SlimPaths): Promise<boolean> {
+  const root = backupsDir(paths);
+  return existsSync(root) && (await readdir(root)).some((name) => existsSync(join(root, name, "manifest.json")));
+}
+
+/** Undoes every recorded slim, newest first. */
+export async function revertAllSlims(paths: SlimPaths): Promise<number> {
+  let reverted = 0;
+  while ((await revertSlim(paths)).restored !== null) reverted++;
+  return reverted;
+}
+
 export interface RevertResult {
   restored: string | null;
   removedSkills: string[];

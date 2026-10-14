@@ -1,6 +1,7 @@
 import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { featureEnabled } from "../features.js";
 import type { ChoiceQuestion } from "../typesafe/client.js";
 
 type Env = Record<string, string | undefined>;
@@ -22,8 +23,8 @@ export const DEFAULT_NEW_TASK_CONFIDENCE = 0.8;
 export const NEW_TASK = "new_task";
 export const SAME_TASK = "same_task";
 
-export function taskSwitchEnabled(env: Env = process.env): boolean {
-  return env.PROJECT_BRAIN_TASK_SWITCH !== "0";
+export function taskSwitchEnabled(env: Env = process.env, dataDir?: string): boolean {
+  return featureEnabled("task-switch", dataDir, env);
 }
 
 function numberFrom(raw: string | undefined, fallback: number, min: number, max: number): number {
@@ -151,9 +152,10 @@ export async function gatherTaskContext(
   transcriptPath: string | undefined,
   prompt: string,
   env: Env = process.env,
-  readWindow: () => Promise<number | undefined> = readAutoCompactWindow
+  readWindow: () => Promise<number | undefined> = readAutoCompactWindow,
+  dataDir?: string
 ): Promise<TaskContext | null> {
-  if (!transcriptPath || !taskSwitchEnabled(env)) return null;
+  if (!transcriptPath || !taskSwitchEnabled(env, dataDir)) return null;
   try {
     const entries = parseEntries(await readTail(transcriptPath, TRANSCRIPT_TAIL_BYTES));
     const tokens = contextTokens(entries);

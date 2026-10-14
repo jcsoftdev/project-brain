@@ -319,6 +319,18 @@ One-time global setup. Detects your environment and registers project-brain with
 project-brain setup
 ```
 
+#### Context-economy units
+
+Every context-economy feature is its own unit in the `setup` checklist, ticked by default, and an upgrade that never saw them turns them on without a prompt. Untick one to switch it off; your choice is stored in `~/.project-brain/features.json`, which the hooks read at runtime (the existing `PROJECT_BRAIN_*=0` variables still override it).
+
+| Unit | What it does | Leaves the machine |
+|---|---|---|
+| `feature:routing-skill` | model-routing table loads as the `brain-model-routing` skill; unticked, the full block goes back inline | nothing |
+| `feature:task-switch` | one-line `/clear` or `/compact` notice at 30% context | your last few prompts, to api.typesafe.ai, with a TypeSafe token and a picker on |
+| `feature:search-gate` | per-prompt search skips non-code prompts, caps hits, floors reranker scores | nothing extra |
+| `config:mcp-prune` | disables MCP servers a project never uses | nothing |
+| `config:context-slim` | moves large user sections of CLAUDE.md into skills | nothing |
+
 `setup` asks which parts to install — one checklist per group (Hosts, Guidance,
 Skills, Other), asked in order, so each question is about one kind of thing — and
 remembers the answer in `~/.project-brain/setup-selection.json`. Re-running it
@@ -351,7 +363,7 @@ It copies nothing, and indexes normally, when the main checkout has no index, wh
 
 #### Memory slimming
 
-Everything in `~/.claude/CLAUDE.md` loads on every turn of every session. `setup` already moves project-brain's own long block (the model-routing guidance) into the on-demand `brain-model-routing` skill, leaving a short pointer, and an existing install migrates the next time `setup` or `update` re-applies it. For the rest of the file, `project-brain context slim` is explicit and never automatic:
+Everything in `~/.claude/CLAUDE.md` loads on every turn of every session. `setup` already moves project-brain's own long block (the model-routing guidance) into the on-demand `brain-model-routing` skill, leaving a short pointer, and an existing install migrates the next time `setup` or `update` re-applies it. For the rest of the file, the `config:context-slim` unit (on by default) moves your own sections of 1500 tokens or more into skills each time `setup` or `update` runs, and unticking it restores them; managed blocks are never touched, so a file that is all managed blocks changes nothing. The manual command stays available:
 
 ```bash
 project-brain context slim                       # measure: estimated tokens per section (chars / 4)
@@ -359,7 +371,7 @@ project-brain context slim --apply user:my-notes # move your own section into a 
 project-brain context slim --revert              # restore the latest backup, remove the skills it made
 ```
 
-Sections are marked `project-brain`, `other tool` (inside another tool's `<!-- x:start -->`/`<!-- x:end -->` or `<!-- x -->`/`<!-- /x -->` markers) or `yours`. Only `yours` can be moved; content a tool regenerates (for example gentle-ai) is refused, and has to be changed through that tool's own override mechanism. Moved sections become skills named `memory-<heading>` with a description derived from the heading (`--description` overrides it). Backups live in `~/.claude/context-slim/<timestamp>/`.
+Sections are marked `project-brain`, `other tool` (inside another tool's `<!-- x:start -->`/`<!-- x:end -->` or `<!-- x -->`/`<!-- /x -->` markers) or `yours`. Only `yours` can be moved; content a tool regenerates (for example gentle-ai) is refused, and has to be changed through that tool's own override mechanism. Moved sections become skills named `memory-<heading>` with a description derived from the heading (`--description` overrides it). Backups live in `~/.claude/context-slim/<timestamp>/`; each `--revert` undoes the newest slim that still has a backup, and keeps the pre-revert CLAUDE.md under `~/.claude/context-slim/safety/`.
 
 #### Unused MCP servers
 
