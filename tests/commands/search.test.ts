@@ -165,6 +165,42 @@ describe("search command", () => {
       expect(output).toHaveLength(0);
     });
 
+    it("drops hits below minScore and prints nothing when none survive", async () => {
+      const { runSearch } = await import("../../src/commands/search.js");
+      const deps = {
+        store: makeStore([
+          makeSearchResult({ id: "hi", source: "src/high.ts", score: 0.8, content: "alpha beta gamma" }),
+          makeSearchResult({ id: "lo", source: "src/low.ts", score: 0.22, content: "delta epsilon zeta" }),
+        ]),
+        embeddings: makeEmbeddings(true),
+      };
+
+      await runSearch({ query: "q one", project: "p", limit: 8, minScore: 0.5 }, deps);
+      const joined = output.join("\n");
+      expect(joined).toContain("src/high.ts");
+      expect(joined).not.toContain("src/low.ts");
+
+      output.length = 0;
+      await runSearch({ query: "q two", project: "p", limit: 8, minScore: 0.9 }, deps);
+      expect(output).toHaveLength(0);
+    });
+
+    it("caps the number of printed hits at maxHits", async () => {
+      const { runSearch } = await import("../../src/commands/search.js");
+      const words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
+      const results = words.map((w, i) =>
+        makeSearchResult({ id: `c${i}`, source: `src/${w}.ts`, score: 0.9 - i * 0.01, content: `${w} ${w}${i} unique${i}` })
+      );
+
+      await runSearch(
+        { query: "cap query", project: "p", limit: 8, minScore: 0.5, maxHits: 3 },
+        { store: makeStore(results), embeddings: makeEmbeddings(true) }
+      );
+
+      const lines = output.join("\n").split("\n").filter((l) => l.startsWith("- "));
+      expect(lines).toHaveLength(3);
+    });
+
     it("prints nothing for empty results", async () => {
       const { runSearch } = await import("../../src/commands/search.js");
 

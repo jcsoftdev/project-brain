@@ -545,6 +545,14 @@ project-brain search "how does auth work"
 echo "how does auth work" | project-brain search --stdin
 ```
 
+The hook only injects when it is likely to help. Before any embedding work it skips prompts that carry no code question: very short prompts (under 3 words or 15 characters, unless they name a code identifier), acknowledgements and continuations in English and Spanish ("ok", "sí", "continúa", "commit y push"), slash-command echoes, and pasted harness or agent reports. Hits scoring below 0.5 are dropped and at most 5 are kept; if nothing survives, nothing is printed. The plain CLI `search "<q>"` is not gated.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PROJECT_BRAIN_SEARCH_MIN_SCORE` | `0.5` | Minimum score (0-1) a hit needs to be injected |
+| `PROJECT_BRAIN_SEARCH_MAX_HITS` | `5` | Maximum snippets injected |
+| `PROJECT_BRAIN_SEARCH_PROMPT_FILTER` | on | Set to `0` to search every prompt, including non-code ones |
+
 ### Structural & lexical commands (`find`, `callers`, `callees`, `impact`, `trace`, `map`, `code`)
 
 Native CLI equivalents of the structural/lexical MCP tools — see the [Structural](#structural-ast-graph--exact-no-embeddings-needed) and [Lexical](#lexical-keyword--no-embeddings-needed) tables above for the full CLI ↔ MCP tool mapping. All read the local index directly (no Ollama probe), so they work fully offline once `project-brain sync` has run.
