@@ -2,6 +2,34 @@
 
 const [command, ...args] = process.argv.slice(2);
 
+// Stdio `serve` runs as a thin supervisor around a worker (`serve --worker`) so a running session can
+// move to a newer binary after `project-brain update` without `/mcp reconnect`. Decided before the
+// preamble below and before anything heavy loads: the supervisor stays small, the worker does the work.
+// Opt-in (BRAIN_MCP_HOT_SWAP=1): the extra process costs ~76 MB per session. By default `serve` runs
+// in-process, as before, and an update is picked up with `/mcp reconnect`.
+if (
+  (command === undefined || command === "serve") &&
+  !args.includes("--http") &&
+  !args.includes("--worker") &&
+  process.env.BRAIN_MCP_HOT_SWAP === "1"
+) {
+  const { runSupervisor, resolveLauncher } = await import("./server/supervisor.js");
+  const { VERSION, DATA_DIR } = await import("./constants.js");
+  const cwd = process.cwd();
+  const code = await runSupervisor({
+    launcher: resolveLauncher(),
+    args: ["serve", ...args],
+    version: VERSION,
+    orphanCheckMs: Number(process.env.BRAIN_ORPHAN_CHECK_MS) || undefined,
+    // Left for the next prompt's notice, which can then say the server is already on the new version.
+    onSwapped: async (swap) => {
+      const { recordSwap } = await import("./hooks/session-versions.js");
+      await recordSwap(DATA_DIR, { cwd, ...swap, at: Date.now() });
+    },
+  });
+  process.exit(code);
+}
+
 // Update notifier: instant (reads a cached result only, no network) and
 // fail-silent. Skipped for hidden/internal commands so the detached background
 // refresh never re-triggers itself. Opt out with BRAIN_NO_UPDATE_CHECK=1.
@@ -116,7 +144,9 @@ Commands:
   health             Check system health and staleness
   search "<query>"   Search indexed context (used by hooks); prints compact results
   suggest --stdin    Skill/tool suggestion hook (UserPromptSubmit, global; works in any directory)
-  update             Update project-brain to the latest published version
+  update             Update project-brain to the latest published version, then re-apply your
+                       saved setup selection with the new binary (no prompts)
+                       --apply-only  skip the install (after brew/npm upgraded it for you)
 
 Knowledge bundles (Open Knowledge Format v0.2 — the *why*, not the *what*):
   okf validate [dir]       Check bundle conformance (SPEC §11). Offline.
@@ -256,6 +286,9 @@ switch (command) {
       orphanCheck.unref?.();
 
       const transport = new StdioServerTransport();
+      // A worker run by the supervisor also ends when the supervisor's pipe closes; the orphan
+      // check above covers the supervisor being killed outright (it watches the supervisor's pid).
+      if (args.includes("--worker")) process.stdin.once("end", () => void shutdown());
       await server.connect(transport);
     }
     break;
@@ -275,7 +308,8 @@ switch (command) {
   case "routing-rules": {
     const { execute } = await import("./hooks/routing-rules.js");
     await execute();
-    break;
+    // An unread stdin must not keep a hook that has already printed its answer alive.
+    process.exit(0);
   }
   case "routing-guard": {
     const { execute } = await import("./hooks/routing-guard.js");

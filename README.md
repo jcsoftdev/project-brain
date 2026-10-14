@@ -599,6 +599,22 @@ project-brain update
 
 Every other command already prints an `update available` notice (current → latest, with the exact command to run) once a day when a newer version is published — `update` runs that command for you instead of requiring a copy-paste.
 
+#### Live updates
+
+After installing, `update` re-applies your saved `setup` selection with the new binary — no prompts, only the units you chose (a unit you declined is never added, and one never offered is refreshed only if it is already installed). If brew or npm upgraded the binary for you, run `project-brain update --apply-only` to do just that step.
+
+What reaches Claude Code sessions that are already open:
+
+- **Hooks and skills** are live at once: Claude Code reloads `settings.json` and skill directories, and hooks re-run the binary on every event.
+- **CLAUDE.md** is only read at launch, so the first prompt after an update shows a one-time notice (`project-brain updated X → Y`) with the current model-routing guidance.
+- **The MCP server** is not reloaded by Claude Code. By default the same notice tells you to run `/mcp reconnect all` (or `/mcp`) to load the new tools.
+
+#### Optional: automatic MCP hot swap
+
+Set `BRAIN_MCP_HOT_SWAP=1` in the MCP server's environment and stdio `serve` runs a small supervisor that relays to a worker process. When the binary on disk is newer, it starts a new worker, waits until no request is in flight, switches over, sends `tools/list_changed`, then lets the old worker drain and exit. A failure at any point leaves the old worker serving, and the notice then says to run `/mcp reconnect all`; after two failed attempts at a version the supervisor stops trying for that session. It is off by default because the supervisor is a second process per session, about 76 MB of memory each. Servers started before the first release with this feature have no supervisor, so that first update still needs one `/mcp reconnect all`.
+
+Limits to know about: a new worker is launched through the same command your tool used (for a brew or npm link, the link, so a retargeted link is picked up), never through the old versioned directory; and when running from source with `bun run`, only the entry script is watched, so a change that touches `package.json` alone is not noticed.
+
 ### `serve`
 
 Start the MCP server. Default mode uses stdio (for local AI tool connections).

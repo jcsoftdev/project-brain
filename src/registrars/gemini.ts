@@ -4,7 +4,7 @@ import { writeSection } from "../rules/section-marker.js";
 import { readWrittenRoutingVersion, writeRoutingSection } from "./routing-section.js";
 import { DEFAULT_HOST_MODELS } from "../constants.js";
 import type { AIToolRegistrar, RoutingDescriptor } from "./types.js";
-import { upsertJsonConfig, standardServerEntry } from "./json-config.js";
+import { upsertJsonConfig, mergeServerEntry } from "./json-config.js";
 import { resolveBinary } from "../env/resolve-binary.js";
 
 export class GeminiRegistrar implements AIToolRegistrar {
@@ -22,7 +22,7 @@ export class GeminiRegistrar implements AIToolRegistrar {
   async register(serverPath: string): Promise<void> {
     await upsertJsonConfig(join(this.baseDir, "settings.json"), (config) => {
       config.mcpServers ??= {};
-      config.mcpServers["project-brain"] = standardServerEntry(serverPath);
+      config.mcpServers["project-brain"] = mergeServerEntry(config.mcpServers["project-brain"], serverPath);
     });
   }
 

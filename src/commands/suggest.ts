@@ -19,20 +19,22 @@ export const EMBED_BUDGET_MS = 800;
 export interface HookInput {
   prompt: string;
   cwd: string | undefined;
+  sessionId?: string;
 }
 
 /** `prompt` and `cwd` from the UserPromptSubmit JSON; empty/undefined on any malformed input. Never throws. */
 export function parseHookInput(raw: string): HookInput {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { prompt: "", cwd: undefined };
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { prompt: "", cwd: undefined, sessionId: undefined };
     const obj = parsed as Record<string, unknown>;
     return {
       prompt: typeof obj.prompt === "string" ? obj.prompt : "",
       cwd: typeof obj.cwd === "string" && obj.cwd !== "" ? obj.cwd : undefined,
+      sessionId: typeof obj.session_id === "string" && obj.session_id !== "" ? obj.session_id : undefined,
     };
   } catch {
-    return { prompt: "", cwd: undefined };
+    return { prompt: "", cwd: undefined, sessionId: undefined };
   }
 }
 
@@ -83,6 +85,63 @@ export interface SuggestDeps {
   pick?: typeof pickSuggestions;
   queryEmbedding?: (prompt: string, projectDir: string) => Promise<SharedQuery | null>;
   embedBudgetMs?: number;
+  /** The one-time "project-brain updated" block for this session, or null. Injectable for tests. */
+  upgradeNotice?: (input: HookInput) => Promise<{ text: string; commit: () => Promise<void> } | null>;
+}
+
+/**
+ * Printed once, on the first prompt of a session that started on an older version than the binary
+ * now running. Hooks and skills are already live; CLAUDE.md is not reloaded, so the routing
+ * guidance is repeated here in full. One small file read when the session is unknown or current.
+ */
+export async function upgradeNoticeFor(
+  { sessionId, cwd }: HookInput,
+  dataDir?: string,
+  version?: string,
+  hotSwapEnabled?: boolean
+): Promise<{ text: string; commit: () => Promise<void> } | null> {
+  if (!sessionId) return null;
+  const constants = await import("../constants.js");
+  const dir = dataDir ?? constants.DATA_DIR;
+  const current = version ?? constants.VERSION;
+  const { takeUpgradeNotice, serverSwapped } = await import("../hooks/session-versions.js");
+  const notice = await takeUpgradeNotice(dir, sessionId, current);
+  if (!notice) return null;
+
+  let server: string;
+  if (await serverSwapped(dir, cwd, current, notice.since)) server = "the MCP server already swapped to it";
+  else if (hotSwapEnabled ?? (await hotSwapConfigured())) server = "if project-brain tools look stale, run `/mcp reconnect all`";
+  else
+    server =
+      "the MCP server is still the old version: run `/mcp reconnect all` (or `/mcp`) to load the new project-brain tools. " +
+      "To have this happen automatically, start the server with BRAIN_MCP_HOT_SWAP=1 (costs ~76 MB of memory per session)";
+
+  const lines = [`project-brain updated ${notice.from} → ${current} in this session: hooks and skills are already live; ${server}.`];
+  // /compact and /clear already reloaded CLAUDE.md; only a session that did not needs the table repeated.
+  if (notice.rulesStale) {
+    const { buildRoutingReminder } = await import("../hooks/routing-rules.js");
+    const reminder = JSON.parse(await buildRoutingReminder(undefined, undefined, true)) as {
+      hookSpecificOutput?: { additionalContext?: string };
+    };
+    lines.push("", reminder.hookSpecificOutput?.additionalContext ?? "");
+  }
+  return { text: lines.join("\n"), commit: notice.commit };
+}
+
+/** Whether the user turned the hot swap on: in this environment, or in the MCP entry Claude Code launches. */
+async function hotSwapConfigured(): Promise<boolean> {
+  if (process.env.BRAIN_MCP_HOT_SWAP === "1") return true;
+  try {
+    const { homedir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { readFile } = await import("node:fs/promises");
+    const config = JSON.parse(await readFile(join(homedir(), ".claude.json"), "utf8")) as {
+      mcpServers?: Record<string, { env?: Record<string, string> }>;
+    };
+    return config.mcpServers?.["project-brain"]?.env?.BRAIN_MCP_HOT_SWAP === "1";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -93,7 +152,21 @@ export interface SuggestDeps {
 export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<void> {
   const { print = console.log, pick = pickSuggestions, queryEmbedding = sharedQueryFor, embedBudgetMs = EMBED_BUDGET_MS } = deps;
   try {
-    const { prompt, cwd } = parseHookInput(raw);
+    const input = parseHookInput(raw);
+    const { prompt, cwd } = input;
+
+    // Independent of the pickers and of the prompt: it needs no token, no index and no embedding.
+    try {
+      const notice = await (deps.upgradeNotice ?? upgradeNoticeFor)(input);
+      if (notice) {
+        // Printed first, marked after: a failed mark repeats the notice once more instead of losing it.
+        print(notice.text);
+        await notice.commit();
+      }
+    } catch {
+      // A notice is a courtesy; it must never cost the suggestions.
+    }
+
     if (!prompt.trim() || isTrivialPrompt(prompt)) return;
     const projectDir = cwd ?? process.cwd();
 

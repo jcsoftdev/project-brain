@@ -5,7 +5,7 @@ import { writeSection } from "../rules/section-marker.js";
 import { readWrittenRoutingVersion, writeRoutingSection } from "./routing-section.js";
 import { DEFAULT_HOST_MODELS } from "../constants.js";
 import type { AIToolRegistrar, RoutingDescriptor } from "./types.js";
-import { dirExists, upsertJsonConfig, standardServerEntry } from "./json-config.js";
+import { dirExists, upsertJsonConfig, mergeServerEntry } from "./json-config.js";
 
 export class OpencodeRegistrar implements AIToolRegistrar {
   name = "Opencode";
@@ -22,7 +22,7 @@ export class OpencodeRegistrar implements AIToolRegistrar {
   async register(serverPath: string): Promise<void> {
     await upsertJsonConfig(join(this.baseDir, "settings.json"), (config) => {
       config.mcpServers ??= {};
-      config.mcpServers["project-brain"] = standardServerEntry(serverPath);
+      config.mcpServers["project-brain"] = mergeServerEntry(config.mcpServers["project-brain"], serverPath);
     });
   }
 

@@ -119,7 +119,8 @@ beforeAll(() => {
   );
   skillCompiled = skillBuild.status === 0;
   if (!skillCompiled) skillBuildStderr = skillBuild.stderr ?? "";
-});
+  // Two `bun build --compile` runs: over bun's default 5s hook limit when the whole suite loads the machine.
+}, 120_000);
 
 afterAll(() => {
   if (work) rmSync(work, { recursive: true, force: true });

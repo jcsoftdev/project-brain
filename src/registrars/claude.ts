@@ -6,7 +6,7 @@ import { DEFAULT_HOST_MODELS } from "../constants.js";
 import type { AIToolRegistrar, RoutingDescriptor } from "./types.js";
 import {
   upsertJsonConfig,
-  standardServerEntry,
+  mergeServerEntry,
   launchCommand,
 } from "./json-config.js";
 import { resolveBinary } from "../env/resolve-binary.js";
@@ -82,7 +82,7 @@ export class ClaudeRegistrar implements AIToolRegistrar {
     const configPath = join(this.homeDir, ".claude.json");
     await upsertJsonConfig(configPath, (config) => {
       config.mcpServers ??= {};
-      config.mcpServers["project-brain"] = standardServerEntry(serverPath);
+      config.mcpServers["project-brain"] = mergeServerEntry(config.mcpServers["project-brain"], serverPath);
     });
   }
 }

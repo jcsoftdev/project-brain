@@ -36,7 +36,9 @@ export class VSCodeRegistrar implements AIToolRegistrar {
   async register(serverPath: string): Promise<void> {
     await upsertJsonConfig(join(this.baseDir, "mcp.json"), (config) => {
       config.servers ??= {};
+      const kept = config.servers["project-brain"];
       config.servers["project-brain"] = {
+        ...(kept && typeof kept === "object" ? kept : {}),
         type: "stdio",
         ...launchCommand(serverPath),
       };
