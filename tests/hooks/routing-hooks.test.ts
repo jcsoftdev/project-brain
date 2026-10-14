@@ -194,4 +194,20 @@ describe("routing-rules payload — dedup against a written rules-file section",
     expect(context).not.toContain("Tier");
     expect(context).not.toContain("| Task | Tier");
   });
+
+  it("names the skill when the current section is the pointer form", async () => {
+    const { buildRoutingReminder } = await import("../../src/hooks/routing-rules.js");
+    const { writeRoutingSection } = await import("../../src/registrars/routing-section.js");
+
+    await writeRoutingSection(
+      rulesPath,
+      `<!-- model-routing-version: ${ROUTING_CONTENT_VERSION} -->\nBefore any Agent/Task call, load the \`brain-model-routing\` skill.\n`
+    );
+
+    const payload = JSON.parse(await buildRoutingReminder(undefined, rulesPath));
+    const context: string = payload.hookSpecificOutput.additionalContext;
+
+    expect(context).toContain("`brain-model-routing` skill");
+    expect(context).not.toContain("rules file");
+  });
 });
