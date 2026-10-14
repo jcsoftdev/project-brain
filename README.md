@@ -349,6 +349,18 @@ On this repository that took a worktree's first index from 2m38s to 2.1s.
 
 It copies nothing, and indexes normally, when the main checkout has no index, when the worktree already has one, or when the two would disagree about the embedding model. Vectors from a different model are not comparable, and that is the one case sync could not correct on its own.
 
+#### Memory slimming
+
+Everything in `~/.claude/CLAUDE.md` loads on every turn of every session. `setup` already moves project-brain's own long block (the model-routing guidance) into the on-demand `brain-model-routing` skill, leaving a short pointer, and an existing install migrates the next time `setup` or `update` re-applies it. For the rest of the file, `project-brain context slim` is explicit and never automatic:
+
+```bash
+project-brain context slim                       # measure: estimated tokens per section (chars / 4)
+project-brain context slim --apply user:my-notes # move your own section into a skill (backup first)
+project-brain context slim --revert              # restore the latest backup, remove the skills it made
+```
+
+Sections are marked `project-brain`, `other tool` (inside another tool's `<!-- x:start -->`/`<!-- x:end -->` or `<!-- x -->`/`<!-- /x -->` markers) or `yours`. Only `yours` can be moved; content a tool regenerates (for example gentle-ai) is refused, and has to be changed through that tool's own override mechanism. Moved sections become skills named `memory-<heading>` with a description derived from the heading (`--description` overrides it). Backups live in `~/.claude/context-slim/<timestamp>/`.
+
 #### Auto-compact window
 
 Setup sets Claude Code's `autoCompactWindow` to 400K tokens (`config:auto-compact`, checked by default). Every request re-sends the whole conversation, and those cache reads count against your plan. A 1M-context model left on its default compacts near 967K, so a long session keeps re-reading a far larger context than the work needs. With the cap it compacts near 387K. 200K models aren't affected.
