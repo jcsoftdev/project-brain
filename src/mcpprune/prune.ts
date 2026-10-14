@@ -88,13 +88,48 @@ async function readClaudeJson(env: PruneEnv): Promise<Record<string, unknown> | 
 const listOf = (entry: Record<string, unknown> | undefined, key: ListKey): string[] =>
   Array.isArray(entry?.[key]) ? (entry![key] as unknown[]).filter((x): x is string => typeof x === "string") : [];
 
-/** Manifest entries whose server is no longer disabled in its project: the user switched it back on. */
-function reenabled(root: Record<string, unknown>, state: State): Entry[] {
+const vanishedFrom = (root: Record<string, unknown>, state: State): Entry[] => {
   const projects = isRecord(root.projects) ? root.projects : {};
   return state.disabled.filter((e) => {
     const p = projects[e.project];
     return isRecord(p) && e.keys.some((k) => !listOf(p, k).includes(e.name));
   });
+};
+
+interface Pool {
+  repoOf: Map<string, string>;
+  usage: Map<string, Usage>;
+}
+
+/** Usage pooled per repo over every project in `.claude.json`, reading transcripts touched since `sinceMs`. */
+async function pool(env: PruneEnv, dirs: string[], sinceMs: number): Promise<Pool> {
+  const repoOf = new Map(dirs.map((d) => [d, repoKey(d)]));
+  const usage = new Map<string, Usage>();
+  for (const d of dirs) {
+    const key = repoOf.get(d)!;
+    usage.set(key, mergeUsage(usage.get(key) ?? emptyUsage(), await scanUsage(join(env.home, ".claude", "projects"), d, sinceMs)));
+  }
+  return { repoOf, usage };
+}
+
+const sinceOf = (env: PruneEnv, state: State): number =>
+  Math.min((env.now ?? Date.now()) - (env.windowDays ?? 30) * DAY, ...state.disabled.map((e) => Date.parse(e.at) || Infinity));
+
+/**
+ * Claude Code rewrites `.claude.json` from memory, so an entry of ours can vanish by itself.
+ * It counts as the user switching the server back on only if the repo called it since we
+ * disabled it; otherwise it is dropped from the manifest and the server is a normal candidate again.
+ */
+function classifyVanished(root: Record<string, unknown>, state: State, p: Pool): { kept: Entry[]; dropped: Entry[] } {
+  const kept: Entry[] = [];
+  const dropped: Entry[] = [];
+  for (const e of vanishedFrom(root, state)) {
+    const at = Date.parse(e.at);
+    const usage = p.usage.get(p.repoOf.get(e.project) ?? repoKey(e.project));
+    const used = [...(usage?.lastUsed ?? [])].some(([tool, when]) => when > at && classifyTool(tool, [e.name])?.server === normalizeServerName(e.name));
+    (used ? kept : dropped).push(e);
+  }
+  return { kept, dropped };
 }
 
 /** The repo a project directory belongs to: its git common dir's parent, or the part before `/.claude/worktrees/`. */
@@ -141,16 +176,11 @@ async function plan(env: PruneEnv, only?: string[]): Promise<ProjectPlan[]> {
   const windowMs = (env.windowDays ?? 30) * DAY;
   const dirs = Object.keys(root.projects);
   const state = await loadState(env);
+  const since = sinceOf(env, state);
+  const { repoOf, usage: pooled } = await pool(env, dirs, since);
   const never = new Set(
-    [...(env.allow ?? []), ...state.keep, ...reenabled(root, state).map((e) => e.name), "project-brain"].map(normalizeServerName)
+    [...(env.allow ?? []), ...state.keep, ...classifyVanished(root, state, { repoOf, usage: pooled }).kept.map((e) => e.name), "project-brain"].map(normalizeServerName)
   );
-
-  const pooled = new Map<string, Usage>();
-  const repoOf = new Map(dirs.map((d) => [d, repoKey(d)]));
-  for (const d of dirs) {
-    const key = repoOf.get(d)!;
-    pooled.set(key, mergeUsage(pooled.get(key) ?? emptyUsage(), await scanUsage(join(env.home, ".claude", "projects"), d, now - windowMs)));
-  }
 
   const plans: ProjectPlan[] = [];
   for (const project of only ?? dirs) {
@@ -235,18 +265,26 @@ export interface ApplyResult {
 /** Adds each plan's candidates to that project's own disabled lists, nowhere else. */
 export async function applyPrune(env: PruneEnv, plans: ProjectPlan[]): Promise<ApplyResult> {
   const work = plans.filter((p) => !p.skipped && p.candidates.length > 0);
-  if (work.length === 0) return { added: [], backup: null };
   try {
     const state = await loadState(env);
     let added: Entry[] = [];
-    let newKeep: string[] = [];
+    const current = await readClaudeJson(env);
+    const dirs = Object.keys(isRecord(current?.projects) ? current.projects : {});
+    const { kept, dropped } = current ? classifyVanished(current, state, await pool(env, dirs, sinceOf(env, state))) : { kept: [], dropped: [] };
+    const newKeep = kept.map((e) => e.name);
+    if (work.length === 0) {
+      if (kept.length + dropped.length > 0) {
+        const gone = new Set([...kept, ...dropped]);
+        await saveState(env, { keep: [...new Set([...state.keep, ...newKeep])], disabled: state.disabled.filter((e) => !gone.has(e)) });
+      }
+      return { added: [], backup: null };
+    }
     const { outcome, backup: saved } = await editClaudeJson(
       env,
       (root) => {
         added = [];
         const projects = isRecord(root.projects) ? root.projects : null;
         if (!projects) return false;
-        newKeep = reenabled(root, state).map((e) => e.name);
         const keep = new Set([...state.keep, ...newKeep, ...(env.allow ?? [])].map(normalizeServerName));
         for (const p of work) {
           const entry = projects[p.project];
@@ -275,8 +313,8 @@ export async function applyPrune(env: PruneEnv, plans: ProjectPlan[]): Promise<A
     if (outcome === "lost") return { added: [], backup: saved, error: "Claude Code overwrote ~/.claude.json right after the edit; nothing was recorded" };
     if (outcome === "unchanged") return { added: [], backup: null };
     const reenabledKept = newKeep.filter((n) => !state.keep.includes(n));
-    const gone = new Set(reenabledKept);
-    await saveState(env, { keep: [...state.keep, ...reenabledKept], disabled: [...state.disabled.filter((e) => !gone.has(e.name)), ...added] });
+    const gone = new Set([...kept, ...dropped]);
+    await saveState(env, { keep: [...state.keep, ...reenabledKept], disabled: [...state.disabled.filter((e) => !gone.has(e)), ...added] });
     return { added, backup: saved };
   } catch (e) {
     return { added: [], backup: null, error: e instanceof Error ? e.message : String(e) };

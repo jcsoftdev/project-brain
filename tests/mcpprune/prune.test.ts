@@ -130,20 +130,39 @@ describe("applyPrune / revertPrune", () => {
     expect((await planPrune(env, [a]))[0]!.candidates).toEqual([]); // reverted means kept for good
   });
 
-  it("never disables again a server the user switched back on", async () => {
+  async function vanish(a: string): Promise<void> {
+    const json = await readJson();
+    json.projects[a].disabledMcpServers = ["beta"];
+    await writeFile(claudeJson(), JSON.stringify(json, null, 2));
+  }
+
+  it("keeps off the list a server that vanished and was used since", async () => {
     const a = await project("a");
     await writeClaude([a]);
     await transcripts(a, 10);
-    await applyPrune(env, await planPrune(env));
-    const json = await readJson();
-    json.projects[a].disabledMcpServers = ["beta"];
-    json.projects[a].enabledMcpjsonServers = [];
-    await writeFile(claudeJson(), JSON.stringify(json, null, 2));
+    await applyPrune({ ...env, now: Date.now() - 2 * DAY }, await planPrune(env));
+    await vanish(a);
+    await transcripts(a, 1, ["mcp__alpha__x"], 0);
 
     expect((await planPrune(env, [a]))[0]!.candidates.map((c) => c.name)).not.toContain("alpha");
     const second = await applyPrune(env, await planPrune(env, [a]));
     expect(second.added).toEqual([]);
-    expect((await readJson()).projects[a].disabledMcpServers).toEqual(["beta"]);
+    expect(JSON.parse(await readFile(join(env.dataDir, "mcp-prune.json"), "utf-8")).keep).toContain("alpha");
+  });
+
+  it("re-applies a server that vanished while still unused", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10);
+    await applyPrune(env, await planPrune(env));
+    await vanish(a);
+
+    const second = await applyPrune(env, await planPrune(env, [a]));
+    expect(second.added.map((e) => e.name)).toEqual(["alpha"]);
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual(["beta", "alpha"]);
+    const state = JSON.parse(await readFile(join(env.dataDir, "mcp-prune.json"), "utf-8"));
+    expect(state.keep).toEqual([]);
+    expect(state.disabled.filter((e: { name: string }) => e.name === "alpha")).toHaveLength(1);
   });
 
   it("aborts without writing when the file keeps changing underneath", async () => {
