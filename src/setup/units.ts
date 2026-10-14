@@ -568,7 +568,7 @@ export function guidanceUnits(): SetupUnit[] {
       description:
         "suggests the best-fitting skill and MCP tool on every prompt, in any project, indexed or not " +
         "(Claude Code only); needs no token to install and stays silent without one — with a TypeSafe token it asks " +
-        "Jev, sending the prompt plus the shortlisted names and descriptions to api.typesafe.ai; BRAIN_SKILL_PICKER=0 / BRAIN_TOOL_PICKER=0 turn each half off",
+        "Jev, sending the prompt plus the shortlisted names and descriptions to api.typesafe.ai; BRAIN_SKILL_PICKER=0 / BRAIN_TOOL_PICKER=0 turn each half off; once the context is over 30% full the same request also asks Jev whether the prompt starts an unrelated task (sending your last few prompts) and shows a one-line /clear or /compact notice, PROJECT_BRAIN_TASK_SWITCH=0 turns that off",
       probe: "project-brain suggest --stdin",
       strictOf: () => false,
       load: async () => {

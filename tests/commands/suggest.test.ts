@@ -11,11 +11,56 @@ const hook = (over: Record<string, unknown> = {}) =>
 
 describe("parseHookInput", () => {
   it("reads prompt and cwd", () => {
-    expect(parseHookInput(hook())).toEqual({ prompt: PROMPT, cwd: "/somewhere" });
+    expect(parseHookInput(hook({ transcript_path: "/t.jsonl" }))).toEqual({ prompt: PROMPT, cwd: "/somewhere", transcriptPath: "/t.jsonl" });
   });
 
   it("returns an empty prompt for malformed input", () => {
     for (const raw of ["", "{bad", "[]", "42", JSON.stringify({ prompt: 3 })]) expect(parseHookInput(raw).prompt).toBe("");
+  });
+});
+
+describe("runSuggest task switch", () => {
+  const task = { recent: ["fix login"], usedPct: 45 };
+  const run = async (probabilities: Record<string, number> | undefined, taskContext: any = async () => task) => {
+    const printed: string[] = [];
+    const asked: unknown[] = [];
+    await runSuggest(hook(), {
+      print: (l) => printed.push(l),
+      queryEmbedding: async () => null,
+      taskContext,
+      pick: async (_p, deps) => {
+        asked.push(deps.taskSwitch);
+        if (probabilities) deps.onTaskSwitch?.(probabilities);
+        return ["Suggested skill: x"];
+      },
+    });
+    return { printed, asked };
+  };
+
+  it("shows a one-line systemMessage and keeps the suggestions as context for a confident new task", async () => {
+    const { printed, asked } = await run({ new_task: 0.95, same_task: 0.05 });
+    expect(asked).toEqual([{ recent: ["fix login"] }]);
+    expect(printed).toHaveLength(1);
+    const out = JSON.parse(printed[0]!);
+    expect(out.systemMessage).toContain("/clear");
+    expect(out.hookSpecificOutput).toEqual({ hookEventName: "UserPromptSubmit", additionalContext: "Suggested skill: x" });
+  });
+
+  it("prints plain lines and asks nothing extra without task context", async () => {
+    const { printed, asked } = await run(undefined, async () => null);
+    expect(asked).toEqual([undefined]);
+    expect(printed).toEqual(["Suggested skill: x"]);
+  });
+
+  it("prints plain lines when the verdict is none", async () => {
+    expect((await run({ new_task: 0.5 })).printed).toEqual(["Suggested skill: x"]);
+  });
+
+  it("survives a failing context reader", async () => {
+    const { printed } = await run(undefined, async () => {
+      throw new Error("boom");
+    });
+    expect(printed).toEqual(["Suggested skill: x"]);
   });
 });
 

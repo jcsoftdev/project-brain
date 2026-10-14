@@ -20,6 +20,7 @@ export interface HookInput {
   prompt: string;
   cwd: string | undefined;
   sessionId?: string;
+  transcriptPath?: string;
 }
 
 /** `prompt` and `cwd` from the UserPromptSubmit JSON; empty/undefined on any malformed input. Never throws. */
@@ -32,6 +33,7 @@ export function parseHookInput(raw: string): HookInput {
       prompt: typeof obj.prompt === "string" ? obj.prompt : "",
       cwd: typeof obj.cwd === "string" && obj.cwd !== "" ? obj.cwd : undefined,
       sessionId: typeof obj.session_id === "string" && obj.session_id !== "" ? obj.session_id : undefined,
+      transcriptPath: typeof obj.transcript_path === "string" && obj.transcript_path !== "" ? obj.transcript_path : undefined,
     };
   } catch {
     return { prompt: "", cwd: undefined, sessionId: undefined };
@@ -86,6 +88,8 @@ export interface SuggestDeps {
   queryEmbedding?: (prompt: string, projectDir: string) => Promise<SharedQuery | null>;
   embedBudgetMs?: number;
   /** The one-time "project-brain updated" block for this session, or null. Injectable for tests. */
+  /** Task-switch context for this prompt, or null. Injectable for tests; defaults to reading the transcript. */
+  taskContext?: (input: HookInput) => Promise<import("../hooks/task-switch.js").TaskContext | null>;
   upgradeNotice?: (input: HookInput) => Promise<{ text: string; commit: () => Promise<void> } | null>;
 }
 
@@ -144,6 +148,17 @@ async function hotSwapConfigured(): Promise<boolean> {
   }
 }
 
+/** Never throws: no context means no task-switch question and no extra output. */
+async function taskContextFor(input: HookInput, deps: SuggestDeps) {
+  try {
+    if (deps.taskContext) return await deps.taskContext(input);
+    const { gatherTaskContext } = await import("../hooks/task-switch.js");
+    return await gatherTaskContext(input.transcriptPath, input.prompt);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The hook body: print the skill/tool suggestion lines for one prompt. Needs
  * neither an index nor retrieval, so it works in any directory. Never throws;
@@ -155,19 +170,35 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
     const input = parseHookInput(raw);
     const { prompt, cwd } = input;
 
+    // Held back so a task-switch notice can go out as one JSON document with everything else.
+    const out: string[] = [];
+    const flush = (systemMessage: string | null): void => {
+      if (systemMessage === null) {
+        for (const line of out) print(line);
+        return;
+      }
+      const additionalContext = out.join("\n");
+      print(
+        JSON.stringify({
+          systemMessage,
+          ...(additionalContext ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } } : {}),
+        })
+      );
+    };
+
     // Independent of the pickers and of the prompt: it needs no token, no index and no embedding.
     try {
       const notice = await (deps.upgradeNotice ?? upgradeNoticeFor)(input);
       if (notice) {
-        // Printed first, marked after: a failed mark repeats the notice once more instead of losing it.
-        print(notice.text);
+        // Queued first, marked after: a failed mark repeats the notice once more instead of losing it.
+        out.push(notice.text);
         await notice.commit();
       }
     } catch {
       // A notice is a courtesy; it must never cost the suggestions.
     }
 
-    if (!prompt.trim() || isTrivialPrompt(prompt)) return;
+    if (!prompt.trim() || isTrivialPrompt(prompt)) return flush(null);
     const projectDir = cwd ?? process.cwd();
 
     // Started only when the picker awaits it, i.e. after its token and picker-flag checks, so a
@@ -183,8 +214,17 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
         queryEmbedding(prompt, projectDir).then(done, () => done(null));
       }));
 
-    const lines = await pick(prompt, { projectDir, queryEmbedding: vector });
-    for (const line of lines) if (line) print(line);
+    const task = await taskContextFor(input, deps);
+    let switchProbabilities: Record<string, number> | undefined;
+    const lines = await pick(prompt, {
+      projectDir,
+      queryEmbedding: vector,
+      ...(task ? { taskSwitch: { recent: task.recent }, onTaskSwitch: (p: Record<string, number>) => (switchProbabilities = p) } : {}),
+    });
+    for (const line of lines) if (line) out.push(line);
+
+    const { decideTaskSwitch, taskSwitchMessage } = await import("../hooks/task-switch.js");
+    flush(task ? taskSwitchMessage(decideTaskSwitch(task.usedPct, switchProbabilities), task.usedPct) : null);
   } catch {
     // A suggestion hook must never disturb the prompt.
   }

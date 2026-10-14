@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   MAX_SKILL_CANDIDATES,
   pickSkill,
+  pickSuggestions,
   prefilterSkills,
   SKILL_CONFIDENCE_THRESHOLD,
 } from "../../src/skills/picker.js";
@@ -132,5 +133,43 @@ describe("pickSkill", () => {
     const line = await pickSkill(PROMPT, { ...d, queryEmbedding: async () => null });
     expect(line).toStartWith("Suggested skill:");
     expect(performance.now() - t0).toBeLessThan(50);
+  });
+});
+
+describe("task-switch question", () => {
+  it("is absent from the request unless asked for, and then rides the same single request", async () => {
+    const plain = deps({ loadTools: async () => [] });
+    await pickSuggestions(PROMPT, plain.deps);
+    expect(plain.calls[0]!.body.questions.switch).toBeUndefined();
+
+    const seen: Array<Record<string, number>> = [];
+    const asked = deps({
+      loadTools: async () => [],
+      taskSwitch: { recent: ["fix login"] },
+      onTaskSwitch: (p: Record<string, number>) => seen.push(p),
+      fetchFn: async (url: string, init: RequestInit) => {
+        asked.calls.push({ url, body: JSON.parse(init.body as string) });
+        return new Response(
+          JSON.stringify({
+            answers: {
+              pick: { choice: "brain-commit", confidence: 0.9, probabilities: { "brain-commit": 0.9, none: 0.1 } },
+              switch: { choice: "new_task", confidence: 0.85, probabilities: { new_task: 0.85, same_task: 0.15 } },
+            },
+          })
+        );
+      },
+    });
+    await pickSuggestions(PROMPT, asked.deps);
+    expect(asked.calls).toHaveLength(1);
+    expect(asked.calls[0]!.body.state.recent_prompts).toEqual(["fix login"]);
+    expect(Object.keys(asked.calls[0]!.body.questions.switch.criteria)).toEqual(["new_task", "same_task"]);
+    expect(seen).toEqual([{ new_task: 0.85, same_task: 0.15 }]);
+  });
+
+  it("still asks when no skill or tool shortlist exists", async () => {
+    const d = deps({ discover: async () => [], taskSwitch: { recent: ["a"] }, loadTools: async () => [] });
+    await pickSuggestions("zzz qqq www", d.deps);
+    expect(d.calls).toHaveLength(1);
+    expect(Object.keys(d.calls[0]!.body.questions)).toEqual(["switch"]);
   });
 });
