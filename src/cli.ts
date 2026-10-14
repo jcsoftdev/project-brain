@@ -5,12 +5,13 @@ const [command, ...args] = process.argv.slice(2);
 // Stdio `serve` runs as a thin supervisor around a worker (`serve --worker`) so a running session can
 // move to a newer binary after `project-brain update` without `/mcp reconnect`. Decided before the
 // preamble below and before anything heavy loads: the supervisor stays small, the worker does the work.
-// BRAIN_MCP_HOT_SWAP=0 serves in-process, as before.
+// Opt-in (BRAIN_MCP_HOT_SWAP=1): the extra process costs ~76 MB per session. By default `serve` runs
+// in-process, as before, and an update is picked up with `/mcp reconnect`.
 if (
   (command === undefined || command === "serve") &&
   !args.includes("--http") &&
   !args.includes("--worker") &&
-  process.env.BRAIN_MCP_HOT_SWAP !== "0"
+  process.env.BRAIN_MCP_HOT_SWAP === "1"
 ) {
   const { runSupervisor, resolveLauncher } = await import("./server/supervisor.js");
   const { VERSION, DATA_DIR } = await import("./constants.js");

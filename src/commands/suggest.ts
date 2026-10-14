@@ -109,7 +109,8 @@ export async function upgradeNoticeFor(
 
   const server = (await serverSwapped(dir, cwd, current, notice.since))
     ? "the MCP server already swapped to it"
-    : "if project-brain tools look stale, run /mcp reconnect";
+    : "the MCP server is still the old version: run `/mcp reconnect all` (or `/mcp`) to load the new project-brain tools. " +
+      "To have this happen automatically, start the server with BRAIN_MCP_HOT_SWAP=1 (costs ~76 MB of memory per session)";
   const { buildRoutingReminder } = await import("../hooks/routing-rules.js");
   const reminder = JSON.parse(await buildRoutingReminder(undefined, undefined, true)) as {
     hookSpecificOutput?: { additionalContext?: string };

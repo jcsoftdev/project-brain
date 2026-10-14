@@ -33,7 +33,9 @@ describe("one-time update notice", () => {
     expect(first.length).toBe(1);
     expect(first[0]).toContain("project-brain updated 0.39.0 → 0.40.0 in this session");
     expect(first[0]).toContain("hooks and skills are already live");
-    expect(first[0]).toContain("/mcp reconnect");
+    expect(first[0]).toContain("/mcp reconnect all");
+    expect(first[0]).toContain("BRAIN_MCP_HOT_SWAP=1");
+    expect(first[0]).toContain("76 MB");
     // CLAUDE.md does not reload, so the routing table is repeated in full.
     expect(first[0]).toContain("Model routing for delegated agents");
     expect(first[0]).toContain("| Task |");
@@ -58,6 +60,7 @@ describe("one-time update notice", () => {
     const [notice] = await h.run(h.prompt("s1", "/work/app/src"));
     expect(notice).toContain("the MCP server already swapped to it");
     expect(notice).not.toContain("/mcp reconnect");
+    expect(notice).not.toContain("BRAIN_MCP_HOT_SWAP");
   });
 
   it("does not claim a swap made in another project", async () => {
@@ -65,7 +68,7 @@ describe("one-time update notice", () => {
     await recordSession(h.dataDir, "s1", "0.39.0", NOW);
     await recordSwap(h.dataDir, { cwd: "/elsewhere", from: "0.39.0", to: "0.40.0", at: NOW + 1000 });
 
-    expect((await h.run(h.prompt("s1")))[0]).toContain("/mcp reconnect");
+    expect((await h.run(h.prompt("s1")))[0]).toContain("/mcp reconnect all");
   });
 
   it("a repeated SessionStart (compact, resume) resets the session to the version that reloaded CLAUDE.md", async () => {
