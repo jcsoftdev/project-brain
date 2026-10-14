@@ -107,7 +107,7 @@ export interface SkillPickDeps {
    * Present → the same Jev request also asks whether `prompt` starts an unrelated task, given these
    * earlier prompts. Absent → the question is not sent.
    */
-  taskSwitch?: { recent: string[] };
+  taskSwitch?: { recent: string[]; assistant?: { text: string; tools: string[] } };
   /** Receives Jev's probabilities for the task-switch question. Not called when it was not asked or Jev failed. */
   onTaskSwitch?: (probabilities: Record<string, number>) => void;
 }
@@ -226,6 +226,7 @@ async function pickLines(
 
   if (deps.taskSwitch) {
     state.recent_prompts = deps.taskSwitch.recent;
+    if (deps.taskSwitch.assistant) state.last_assistant_turn = { text: deps.taskSwitch.assistant.text, tools_used: deps.taskSwitch.assistant.tools };
     questions.switch = taskSwitchQuestion();
   }
 

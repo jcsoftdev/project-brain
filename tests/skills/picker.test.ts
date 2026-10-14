@@ -162,7 +162,7 @@ describe("task-switch question", () => {
     await pickSuggestions(PROMPT, asked.deps);
     expect(asked.calls).toHaveLength(1);
     expect(asked.calls[0]!.body.state.recent_prompts).toEqual(["fix login"]);
-    expect(Object.keys(asked.calls[0]!.body.questions.switch.criteria)).toEqual(["new_task", "same_task"]);
+    expect(Object.keys(asked.calls[0]!.body.questions.switch.criteria)).toEqual(["new_task", "related_task", "same_task"]);
     expect(seen).toEqual([{ new_task: 0.85, same_task: 0.15 }]);
   });
 
@@ -170,6 +170,16 @@ describe("task-switch question", () => {
     const d = deps({ env: { BRAIN_SKILL_PICKER: "0", BRAIN_TOOL_PICKER: "0" }, taskSwitch: { recent: ["a"] }, loadTools: async () => [] });
     expect(await pickSuggestions(PROMPT, d.deps)).toEqual([]);
     expect(d.calls).toHaveLength(0);
+  });
+
+  it("sends the assistant summary only when the task-switch context carries one", async () => {
+    const withSummary = deps({ loadTools: async () => [], taskSwitch: { recent: ["a"], assistant: { text: "Done with the parser.", tools: ["Read", "Edit"] } } });
+    await pickSuggestions(PROMPT, withSummary.deps);
+    expect(withSummary.calls[0]!.body.state.last_assistant_turn).toEqual({ text: "Done with the parser.", tools_used: ["Read", "Edit"] });
+
+    const without = deps({ loadTools: async () => [], taskSwitch: { recent: ["a"] } });
+    await pickSuggestions(PROMPT, without.deps);
+    expect(without.calls[0]!.body.state.last_assistant_turn).toBeUndefined();
   });
 
   it("still asks when no skill or tool shortlist exists", async () => {

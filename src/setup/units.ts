@@ -1364,8 +1364,8 @@ export function featureUnits(): SetupUnit[] {
       feature: "task-switch",
       label: "Task-switch notice",
       description:
-        "once the context is over 30% full, shows a one-line /clear or /compact notice when a prompt starts an unrelated task (rides the skill/tool suggestions hook); " +
-        "with a TypeSafe token it sends your last few prompts to api.typesafe.ai, only when a picker is on; PROJECT_BRAIN_TASK_SWITCH=0 also turns it off",
+        "once the context is over 30% full, shows a one-line /clear or /compact notice (never /clear while background work is running) when a prompt starts an unrelated task (rides the skill/tool suggestions hook); " +
+        "with a TypeSafe token it sends your last few prompts, a 400-char excerpt of the last assistant text and the names of the last tools to api.typesafe.ai, only when a picker is on; PROJECT_BRAIN_TASK_SWITCH=0 also turns it off",
     }),
     featureUnit({
       id: "feature:search-gate",

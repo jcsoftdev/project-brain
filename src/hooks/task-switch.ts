@@ -21,7 +21,13 @@ export const DEFAULT_COMPACT_PCT = 75;
 export const DEFAULT_NEW_TASK_CONFIDENCE = 0.8;
 
 export const NEW_TASK = "new_task";
+export const RELATED_TASK = "related_task";
 export const SAME_TASK = "same_task";
+/** Probability of "related task" (the argmax) needed to suggest a focused /compact. */
+export const RELATED_CONFIDENCE = 0.6;
+export const ASSISTANT_CHARS = 400;
+export const RECENT_TOOLS = 5;
+export const FOCUS_CHARS = 60;
 
 export function taskSwitchEnabled(env: Env = process.env, dataDir?: string): boolean {
   return featureEnabled("task-switch", dataDir, env);
@@ -61,9 +67,17 @@ async function readTail(path: string, maxBytes: number): Promise<string> {
   }
 }
 
-type Entry = { type?: string; isMeta?: boolean; isSidechain?: boolean; message?: { content?: unknown; usage?: Record<string, unknown> } };
+export type Entry = {
+  type?: string;
+  operation?: string;
+  content?: unknown;
+  isMeta?: boolean;
+  isSidechain?: boolean;
+  toolUseResult?: unknown;
+  message?: { content?: unknown; usage?: Record<string, unknown> };
+};
 
-function parseEntries(jsonl: string): Entry[] {
+export function parseEntries(jsonl: string): Entry[] {
   const entries: Entry[] = [];
   for (const line of jsonl.split("\n")) {
     if (!line.trim()) continue;
@@ -117,6 +131,123 @@ export function contextTokens(entries: Entry[]): number | null {
   return null;
 }
 
+const TERMINAL_STATUSES = new Set(["completed", "failed", "killed", "stopped"]);
+
+const textOf = (content: unknown): string =>
+  typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content.map((b) => (b && typeof b === "object" ? String((b as { text?: unknown }).text ?? "") : "")).join("\n")
+      : "";
+
+/** A tool result that says the work went to the background rather than finishing. */
+function launchedInBackground(entry: Entry, resultText: string): boolean {
+  const r = entry.toolUseResult;
+  if (r && typeof r === "object" && !Array.isArray(r)) {
+    const o = r as Record<string, unknown>;
+    if (o.isAsync === true || typeof o.backgroundTaskId === "string") return true;
+  }
+  return /running in background|async agent launched|workflow (started|launched|is running)/i.test(resultText);
+}
+
+const taskIdOf = (entry: Entry): string | null => {
+  const r = entry.toolUseResult;
+  if (!r || typeof r !== "object" || Array.isArray(r)) return null;
+  const o = r as Record<string, unknown>;
+  const id = typeof o.agentId === "string" ? o.agentId : typeof o.backgroundTaskId === "string" ? o.backgroundTaskId : null;
+  return id;
+};
+
+/**
+ * Whether work is still in flight in the main thread: a tool call with no result yet, or something
+ * launched in the background (Agent, Bash or Workflow) that has not reported back. A launch result
+ * carries `agentId` or `backgroundTaskId`; completion arrives as a `<task-notification>` (a user
+ * entry and/or a `queue-operation` enqueue) naming the launching call in `<tool-use-id>` and the task
+ * in `<task-id>`, with a terminal `<status>`. A `TaskStop` call ends its task too. Either id matches.
+ * Sub-agent traffic lives in other files and is skipped here.
+ */
+export function hasPendingWork(entries: Entry[]): boolean {
+  const open = new Set<string>();
+  /** Launching tool_use id -> task id (when the result gave one). */
+  const background = new Map<string, string | null>();
+  const finish = (id: string) => {
+    open.delete(id);
+    for (const [toolUseId, taskId] of background) if (toolUseId === id || taskId === id) background.delete(toolUseId);
+  };
+  const settle = (text: string) => {
+    for (const note of text.matchAll(/<task-notification>([\s\S]*?)(?:<\/task-notification>|$)/g)) {
+      const status = /<status>([^<]+)<\/status>/.exec(note[1]!)?.[1]?.trim();
+      if (!status || !TERMINAL_STATUSES.has(status)) continue;
+      for (const tag of ["tool-use-id", "task-id"]) {
+        const id = new RegExp(`<${tag}>([^<]+)</${tag}>`).exec(note[1]!)?.[1]?.trim();
+        if (id) finish(id);
+      }
+    }
+  };
+  for (const entry of entries) {
+    if (entry.isSidechain) continue;
+    if (entry.type === "queue-operation") {
+      if (entry.operation === "enqueue" && typeof entry.content === "string") settle(entry.content);
+      continue;
+    }
+    const content = entry.message?.content;
+    if (entry.type === "assistant" && Array.isArray(content)) {
+      for (const b of content as Array<{ type?: string; id?: string; name?: string; input?: { task_id?: unknown } }>) {
+        if (b?.type !== "tool_use") continue;
+        if (b.name === "TaskStop" && typeof b.input?.task_id === "string") finish(b.input.task_id);
+        if (b.id) open.add(b.id);
+      }
+    } else if (entry.type === "user") {
+      settle(textOf(content));
+      if (!Array.isArray(content)) continue;
+      for (const b of content as Array<{ type?: string; tool_use_id?: string; content?: unknown }>) {
+        if (b?.type !== "tool_result" || !b.tool_use_id) continue;
+        open.delete(b.tool_use_id);
+        if (launchedInBackground(entry, textOf(b.content))) background.set(b.tool_use_id, taskIdOf(entry));
+        else background.delete(b.tool_use_id);
+      }
+    }
+  }
+  return open.size > 0 || background.size > 0;
+}
+
+export interface AssistantSummary {
+  /** The last assistant text block, cut to {@link ASSISTANT_CHARS}. */
+  text: string;
+  /** Names of the most recent tools used, newest last. Never their inputs or outputs. */
+  tools: string[];
+}
+
+/** What the assistant last said and which tools it reached for; null when it has said nothing yet. */
+export function lastAssistantSummary(entries: Entry[]): AssistantSummary | null {
+  let text: string | null = null;
+  const tools: string[] = [];
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]!;
+    if (entry.type !== "assistant" || entry.isSidechain || !Array.isArray(entry.message?.content)) continue;
+    const blocks = entry.message!.content as Array<{ type?: string; text?: unknown; name?: unknown }>;
+    if (text === null) {
+      const last = [...blocks].reverse().find((b) => b?.type === "text" && String(b.text ?? "").trim() !== "");
+      if (last) {
+        const t = String(last.text).trim().replace(/\s+/g, " ");
+        text = t.length <= ASSISTANT_CHARS ? t : `${t.slice(0, ASSISTANT_CHARS - 1).trimEnd()}…`;
+      }
+    }
+    for (const b of [...blocks].reverse()) {
+      if (b?.type === "tool_use" && typeof b.name === "string" && tools.length < RECENT_TOOLS && !tools.includes(b.name)) tools.push(b.name);
+    }
+    if (text !== null && tools.length >= RECENT_TOOLS) break;
+  }
+  if (text === null && tools.length === 0) return null;
+  return { text: text ?? "", tools: tools.reverse() };
+}
+
+/** The new prompt's opening as a single safe line for a `/compact focus on:` hint. */
+export function focusHint(prompt: string): string {
+  const line = prompt.replace(/[\u0000-\u001f\u007f`]/g, " ").replace(/\s+/g, " ").trim();
+  return line.length <= FOCUS_CHARS ? line : line.slice(0, FOCUS_CHARS).trimEnd();
+}
+
 /**
  * The window usage is measured against: the env override, else the auto-compact window setup wrote
  * (that is where Claude Code compacts, so it is the limit the user feels), else 200K. A transcript
@@ -142,6 +273,10 @@ export interface TaskContext {
   recent: string[];
   /** Used share of the context window, 0-100. */
   usedPct: number;
+  /** Work still in flight (a background agent or task, or a call without its result): never suggest /clear. */
+  pending: boolean;
+  /** The last assistant turn in brief; only gathered once the context is over the notice threshold. */
+  assistant: AssistantSummary | null;
 }
 
 /**
@@ -163,7 +298,7 @@ export async function gatherTaskContext(
     const usedPct = (tokens / contextWindow(tokens, env, await readWindow())) * 100;
     if (usedPct < thresholdsFrom(env).noticePct) return null;
     const recent = extractRecentPrompts(entries, RECENT_PROMPTS + 1).filter((p) => p !== prompt.trim()).slice(-RECENT_PROMPTS);
-    return recent.length === 0 ? null : { recent, usedPct };
+    return recent.length === 0 ? null : { recent, usedPct, pending: hasPendingWork(entries), assistant: lastAssistantSummary(entries) };
   } catch {
     return null;
   }
@@ -173,33 +308,49 @@ export function taskSwitchQuestion(): ChoiceQuestion {
   return {
     type: "choice",
     instructions:
-      "Does `prompt` start a new task unrelated to the work in `recent_prompts`, or continue that work (a follow-up, a fix, a question about it, or a step of the same goal)? Pick new_task only when the subject clearly changed.",
+      "Compare `prompt` with `recent_prompts` and `last_assistant_turn` (what the assistant last said and the tools it used). " +
+      "Pick new_task only when the subject clearly changed and nothing earlier is needed; related_task when it is a different task but part of the earlier context would still help; same_task when it continues that work (a follow-up, a fix, a question about it, or a step of the same goal).",
     criteria: {
-      [NEW_TASK]: "The prompt is about a different goal, feature or topic than the recent prompts; nothing in them is needed to answer it.",
+      [NEW_TASK]: "The prompt is about a different goal, feature or topic; nothing in the earlier work is needed to answer it.",
+      [RELATED_TASK]: "The prompt is a different task, but some of the earlier context (files, decisions, findings) would still be useful for it.",
       [SAME_TASK]: "The prompt continues, refines or asks about the work in the recent prompts.",
     },
   };
 }
 
-export type TaskSwitchVerdict = "clear" | "compact" | "none";
+export type TaskSwitchVerdict = "clear" | "compact" | "compact-focus" | "none";
 
-/** `probabilities` is Jev's answer to {@link taskSwitchQuestion}; missing or malformed means no verdict. */
+/**
+ * `probabilities` is Jev's answer to {@link taskSwitchQuestion}; missing or malformed means no verdict.
+ * While work is in flight a /clear would throw it away, so that verdict degrades to /compact once
+ * the context is past the compact threshold and to nothing before.
+ */
 export function decideTaskSwitch(
   usedPct: number,
   probabilities: Record<string, number> | undefined,
-  thresholds: TaskSwitchThresholds = thresholdsFrom()
+  thresholds: TaskSwitchThresholds = thresholdsFrom(),
+  pending = false
 ): TaskSwitchVerdict {
   if (usedPct < thresholds.noticePct || !probabilities) return "none";
   const newTask = probabilities[NEW_TASK];
   if (typeof newTask !== "number") return "none";
-  if (newTask >= thresholds.newTaskConfidence) return "clear";
-  return usedPct >= thresholds.compactPct && newTask < 0.5 ? "compact" : "none";
+  const overCompact = usedPct >= thresholds.compactPct;
+  if (newTask >= thresholds.newTaskConfidence) return pending ? (overCompact ? "compact" : "none") : "clear";
+  const related = probabilities[RELATED_TASK];
+  const same = probabilities[SAME_TASK];
+  if (typeof related === "number" && related >= RELATED_CONFIDENCE && related > newTask && related >= (typeof same === "number" ? same : 0)) return "compact-focus";
+  return overCompact && newTask < 0.5 ? "compact" : "none";
 }
 
-export function taskSwitchMessage(verdict: TaskSwitchVerdict, usedPct: number): string | null {
+/** `prompt` supplies the focus hint of a "compact-focus" notice. */
+export function taskSwitchMessage(verdict: TaskSwitchVerdict, usedPct: number, prompt = ""): string | null {
   const pct = Math.round(usedPct);
   if (verdict === "clear")
     return `project-brain: this looks like a new task and the context is ${pct}% full. Running /clear and resending would save context.`;
+  if (verdict === "compact-focus") {
+    const hint = focusHint(prompt);
+    return `project-brain: this is a different task but part of the earlier context still helps, and the context is ${pct}% full. Consider /compact${hint ? ` focus on: ${hint}` : ""}.`;
+  }
   if (verdict === "compact") return `project-brain: the context is ${pct}% full. Consider /compact before continuing.`;
   return null;
 }

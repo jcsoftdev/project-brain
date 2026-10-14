@@ -232,16 +232,17 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
     const lines = await pick(prompt, {
       projectDir,
       queryEmbedding: vector,
-      ...(task ? { taskSwitch: { recent: task.recent }, onTaskSwitch: (p: Record<string, number>) => (switchProbabilities = p) } : {}),
+      ...(task ? { taskSwitch: { recent: task.recent, ...(task.assistant ? { assistant: task.assistant } : {}) }, onTaskSwitch: (p: Record<string, number>) => (switchProbabilities = p) } : {}),
     });
     for (const line of lines) if (line) out.push(line);
 
     const { decideTaskSwitch, taskSwitchMessage } = await import("../hooks/task-switch.js");
     let message: string | null = null;
     if (task) {
-      const verdict = decideTaskSwitch(task.usedPct, switchProbabilities);
-      const first = verdict === "none" || !input.sessionId ? true : await (deps.claimNotice ?? defaultClaim)(input.sessionId, verdict);
-      message = first ? taskSwitchMessage(verdict, task.usedPct) : null;
+      const verdict = decideTaskSwitch(task.usedPct, switchProbabilities, undefined, task.pending);
+      const kind = verdict === "clear" ? "clear" : "compact";
+      const first = verdict === "none" || !input.sessionId ? true : await (deps.claimNotice ?? defaultClaim)(input.sessionId, kind);
+      message = first ? taskSwitchMessage(verdict, task.usedPct, prompt) : null;
     }
     await flush(message);
   } catch {

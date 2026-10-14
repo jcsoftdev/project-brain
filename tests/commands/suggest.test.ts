@@ -20,7 +20,7 @@ describe("parseHookInput", () => {
 });
 
 describe("runSuggest task switch", () => {
-  const task = { recent: ["fix login"], usedPct: 45 };
+  const task = { recent: ["fix login"], usedPct: 45, pending: false, assistant: null };
   const run = async (probabilities: Record<string, number> | undefined, taskContext: any = async () => task) => {
     const printed: string[] = [];
     const asked: unknown[] = [];
@@ -65,7 +65,7 @@ describe("runSuggest task switch", () => {
 });
 
 describe("runSuggest notices", () => {
-  const task = { recent: ["fix login"], usedPct: 45 };
+  const task = { recent: ["fix login"], usedPct: 45, pending: false, assistant: null };
   const never = () => new Promise<string[]>(() => {});
 
   it("shows the /clear notice once per session and kind", async () => {
