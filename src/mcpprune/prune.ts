@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
 import { discoverMcpConfigs, normalizeServerName } from "../toolcatalog/config.js";
 import { classifyTool, emptyUsage, mergeUsage, scanUsage, type Usage } from "./usage.js";
 
 const DAY = 86_400_000;
+const KEEP_BACKUPS = 5;
 export const DISABLED_KEY = "disabledMcpServers";
 export const DISABLED_JSON_KEY = "disabledMcpjsonServers";
 type ListKey = typeof DISABLED_KEY | typeof DISABLED_JSON_KEY;
@@ -19,8 +20,12 @@ export interface PruneEnv {
   windowDays?: number;
   minSessions?: number;
   minSpanDays?: number;
+  /** Sessions inside the window that a long-but-sparse history still needs. */
+  minRecentSessions?: number;
   /** Server names never disabled, on top of the keep list in the state file. */
   allow?: string[];
+  /** Test seam: runs after the edit is computed and just before the rename of `~/.claude.json`. */
+  beforeRename?: () => void | Promise<void>;
 }
 
 export interface Candidate {
@@ -41,6 +46,8 @@ interface Entry {
   name: string;
   keys: ListKey[];
   at: string;
+  /** Recorded before `~/.claude.json` is written and confirmed once the edit landed. */
+  pending?: true;
 }
 
 interface State {
@@ -88,6 +95,10 @@ async function readClaudeJson(env: PruneEnv): Promise<Record<string, unknown> | 
 const listOf = (entry: Record<string, unknown> | undefined, key: ListKey): string[] =>
   Array.isArray(entry?.[key]) ? (entry![key] as unknown[]).filter((x): x is string => typeof x === "string") : [];
 
+/**
+ * Claude Code may rewrite `.claude.json` from memory, but a vanished entry is just as likely the
+ * user switching the server back on in `/mcp`. Intent wins: it is kept off the prune list for good.
+ */
 const vanishedFrom = (root: Record<string, unknown>, state: State): Entry[] => {
   const projects = isRecord(root.projects) ? root.projects : {};
   return state.disabled.filter((e) => {
@@ -112,24 +123,19 @@ async function pool(env: PruneEnv, dirs: string[], sinceMs: number): Promise<Poo
   return { repoOf, usage };
 }
 
-const sinceOf = (env: PruneEnv, state: State): number =>
-  Math.min((env.now ?? Date.now()) - (env.windowDays ?? 30) * DAY, ...state.disabled.map((e) => Date.parse(e.at) || Infinity));
+const sinceOf = (env: PruneEnv): number => (env.now ?? Date.now()) - (env.windowDays ?? 30) * DAY;
 
-/**
- * Claude Code rewrites `.claude.json` from memory, so an entry of ours can vanish by itself.
- * It counts as the user switching the server back on only if the repo called it since we
- * disabled it; otherwise it is dropped from the manifest and the server is a normal candidate again.
- */
-function classifyVanished(root: Record<string, unknown>, state: State, p: Pool): { kept: Entry[]; dropped: Entry[] } {
-  const kept: Entry[] = [];
-  const dropped: Entry[] = [];
-  for (const e of vanishedFrom(root, state)) {
-    const at = Date.parse(e.at);
-    const usage = p.usage.get(p.repoOf.get(e.project) ?? repoKey(e.project));
-    const used = [...(usage?.lastUsed ?? [])].some(([tool, when]) => when > at && classifyTool(tool, [e.name])?.server === normalizeServerName(e.name));
-    (used ? kept : dropped).push(e);
-  }
-  return { kept, dropped };
+/** Pending entries whose edit landed become confirmed; the rest never reached the file and are dropped. */
+function settlePending(root: Record<string, unknown>, state: State): State {
+  const projects = isRecord(root.projects) ? root.projects : {};
+  const disabled = state.disabled.flatMap((e) => {
+    if (!e.pending) return [e];
+    const p = projects[e.project];
+    const landed = isRecord(p) && e.keys.some((k) => listOf(p, k).includes(e.name));
+    const { pending: _, ...confirmed } = e;
+    return landed ? [confirmed] : [];
+  });
+  return { ...state, disabled };
 }
 
 /** The repo a project directory belongs to: its git common dir's parent, or the part before `/.claude/worktrees/`. */
@@ -175,11 +181,11 @@ async function plan(env: PruneEnv, only?: string[]): Promise<ProjectPlan[]> {
   const now = env.now ?? Date.now();
   const windowMs = (env.windowDays ?? 30) * DAY;
   const dirs = Object.keys(root.projects);
-  const state = await loadState(env);
-  const since = sinceOf(env, state);
+  const state = settlePending(root, await loadState(env));
+  const since = sinceOf(env);
   const { repoOf, usage: pooled } = await pool(env, dirs, since);
   const never = new Set(
-    [...(env.allow ?? []), ...state.keep, ...classifyVanished(root, state, { repoOf, usage: pooled }).kept.map((e) => e.name), "project-brain"].map(normalizeServerName)
+    [...(env.allow ?? []), ...state.keep, ...vanishedFrom(root, state).map((e) => e.name), "project-brain"].map(normalizeServerName)
   );
 
   const plans: ProjectPlan[] = [];
@@ -192,7 +198,8 @@ async function plan(env: PruneEnv, only?: string[]): Promise<ProjectPlan[]> {
       continue;
     }
     const spanDays = usage.oldest !== null && usage.newest !== null ? (usage.newest - usage.oldest) / DAY : 0;
-    if (usage.sessions < (env.minSessions ?? 10) && spanDays < (env.minSpanDays ?? 14)) {
+    const longHistory = spanDays >= (env.minSpanDays ?? 14) && usage.recent >= (env.minRecentSessions ?? 3);
+    if (usage.sessions < (env.minSessions ?? 10) && !longHistory) {
       plans.push({ ...base, skipped: "not enough history yet" });
       continue;
     }
@@ -221,13 +228,16 @@ const indentOf = (text: string): string | number => /^([ \t]+)"/m.exec(text)?.[1
 /**
  * Rewrites `~/.claude.json` through `mutate`, which edits the freshly read tree
  * and says whether it changed anything. Claude Code rewrites this file live, so
- * a change of mtime or size since the read means abort-and-retry (once), and the
- * result is read back to confirm it was not overwritten again.
+ * right before the rename the file is compared with what was parsed (stat and
+ * content); a difference means abort-and-retry once. The result is read back to
+ * confirm it was not overwritten again. `beforeWrite` runs once the backup is
+ * taken and the edit is known, for bookkeeping that must precede the write.
  */
 async function editClaudeJson(
   env: PruneEnv,
   mutate: (root: Record<string, unknown>) => boolean,
-  landed: (root: Record<string, unknown>) => boolean
+  landed: (root: Record<string, unknown>) => boolean,
+  beforeWrite?: () => Promise<void>
 ): Promise<{ outcome: "written" | "unchanged" | "lost"; backup: string | null }> {
   const file = claudeJsonPath(env);
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -237,10 +247,14 @@ async function editClaudeJson(
     if (!isRecord(root)) throw new Error(`${file} is not a JSON object`);
     if (!mutate(root)) return { outcome: "unchanged", backup: null };
     const out = JSON.stringify(root, null, indentOf(text)) + (text.endsWith("\n") ? "\n" : "");
-    const now = await stat(file);
-    if (now.mtimeMs !== before.mtimeMs || now.size !== before.size) continue;
     const saved = await backup(env, text);
-    await writeFileAtomic(file, out);
+    await beforeWrite?.();
+    const unchanged = async (): Promise<boolean> => {
+      await env.beforeRename?.();
+      const now = await stat(file);
+      return now.mtimeMs === before.mtimeMs && now.size === before.size && (await readFile(file, "utf-8")) === text;
+    };
+    if (!(await writeFileAtomic(file, out, { beforeRename: unchanged }))) continue;
     const after = await readClaudeJson(env);
     return { outcome: after && landed(after) ? "written" : "lost", backup: saved };
   }
@@ -253,6 +267,8 @@ async function backup(env: PruneEnv, text: string): Promise<string> {
   const file = join(dir, `claude.json.${new Date(env.now ?? Date.now()).toISOString().replace(/[:.]/g, "-")}.bak`);
   await writeFile(file, text, { mode: 0o600 });
   await chmod(file, 0o600);
+  const old = (await readdir(dir)).filter((n) => n.startsWith("claude.json.") && n.endsWith(".bak")).sort().slice(0, -KEEP_BACKUPS);
+  await Promise.all(old.map((n) => rm(join(dir, n), { force: true })));
   return file;
 }
 
@@ -262,30 +278,41 @@ export interface ApplyResult {
   error?: string;
 }
 
-/** Adds each plan's candidates to that project's own disabled lists, nowhere else. */
+/**
+ * Adds each plan's candidates to that project's own disabled lists, nowhere else.
+ * The entries are in the manifest, marked pending, before the file is written, so
+ * `--revert` sees everything that may have landed even if the process dies in between.
+ */
 export async function applyPrune(env: PruneEnv, plans: ProjectPlan[]): Promise<ApplyResult> {
   const work = plans.filter((p) => !p.skipped && p.candidates.length > 0);
+  let base: State | null = null;
+  let pendingSaved = false;
   try {
-    const state = await loadState(env);
-    let added: Entry[] = [];
+    const loaded = await loadState(env);
     const current = await readClaudeJson(env);
-    const dirs = Object.keys(isRecord(current?.projects) ? current.projects : {});
-    const { kept, dropped } = current ? classifyVanished(current, state, await pool(env, dirs, sinceOf(env, state))) : { kept: [], dropped: [] };
-    const newKeep = kept.map((e) => e.name);
+    const state = current ? settlePending(current, loaded) : loaded;
+    const vanished = current ? vanishedFrom(current, state) : [];
+    const gone = new Set(vanished);
+    const settled: State = {
+      keep: [...new Set([...state.keep, ...vanished.map((e) => e.name)])],
+      disabled: state.disabled.filter((e) => !gone.has(e)),
+    };
+    base = settled;
+    const persist = async (next: State) => {
+      if (JSON.stringify(next) !== JSON.stringify(loaded)) await saveState(env, next);
+    };
     if (work.length === 0) {
-      if (kept.length + dropped.length > 0) {
-        const gone = new Set([...kept, ...dropped]);
-        await saveState(env, { keep: [...new Set([...state.keep, ...newKeep])], disabled: state.disabled.filter((e) => !gone.has(e)) });
-      }
+      await persist(settled);
       return { added: [], backup: null };
     }
+    let added: Entry[] = [];
     const { outcome, backup: saved } = await editClaudeJson(
       env,
       (root) => {
         added = [];
         const projects = isRecord(root.projects) ? root.projects : null;
         if (!projects) return false;
-        const keep = new Set([...state.keep, ...newKeep, ...(env.allow ?? [])].map(normalizeServerName));
+        const keep = new Set([...settled.keep, ...(env.allow ?? [])].map(normalizeServerName));
         for (const p of work) {
           const entry = projects[p.project];
           if (!isRecord(entry)) continue;
@@ -308,16 +335,34 @@ export async function applyPrune(env: PruneEnv, plans: ProjectPlan[]): Promise<A
       (root) => {
         const projects = isRecord(root.projects) ? root.projects : {};
         return added.every((e) => e.keys.every((k) => listOf(projects[e.project] as Record<string, unknown>, k).includes(e.name)));
+      },
+      async () => {
+        await saveState(env, { ...settled, disabled: [...settled.disabled, ...added.map((e) => ({ ...e, pending: true as const }))] });
+        pendingSaved = true;
       }
     );
-    if (outcome === "lost") return { added: [], backup: saved, error: "Claude Code overwrote ~/.claude.json right after the edit; nothing was recorded" };
-    if (outcome === "unchanged") return { added: [], backup: null };
-    const reenabledKept = newKeep.filter((n) => !state.keep.includes(n));
-    const gone = new Set([...kept, ...dropped]);
-    await saveState(env, { keep: [...state.keep, ...reenabledKept], disabled: [...state.disabled.filter((e) => !gone.has(e)), ...added] });
+    if (outcome === "lost") {
+      await saveState(env, settled);
+      return { added: [], backup: saved, error: "Claude Code overwrote ~/.claude.json right after the edit; nothing was recorded" };
+    }
+    if (outcome === "unchanged") {
+      await persist(settled);
+      return { added: [], backup: null };
+    }
+    await saveState(env, { ...settled, disabled: [...settled.disabled, ...added] });
     return { added, backup: saved };
   } catch (e) {
+    if (base && pendingSaved) await saveState(env, base).catch(() => {});
     return { added: [], backup: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** True when we have disabled something that `--revert` could still undo. Never throws. */
+export async function hasPruneEntries(env: PruneEnv): Promise<boolean> {
+  try {
+    return (await loadState(env)).disabled.length > 0;
+  } catch {
+    return false;
   }
 }
 

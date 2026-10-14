@@ -29,15 +29,18 @@ export interface Usage {
   lastUsed: Map<string, number>;
   /** Top-level session transcripts; subagent transcripts belong to their session. */
   sessions: number;
+  /** Top-level sessions touched since the scan's `sinceMs`. */
+  recent: number;
   oldest: number | null;
   newest: number | null;
 }
 
-export const emptyUsage = (): Usage => ({ lastUsed: new Map(), sessions: 0, oldest: null, newest: null });
+export const emptyUsage = (): Usage => ({ lastUsed: new Map(), sessions: 0, recent: 0, oldest: null, newest: null });
 
 export function mergeUsage(into: Usage, from: Usage): Usage {
   for (const [tool, at] of from.lastUsed) if (at > (into.lastUsed.get(tool) ?? 0)) into.lastUsed.set(tool, at);
   into.sessions += from.sessions;
+  into.recent += from.recent;
   if (from.oldest !== null) into.oldest = Math.min(into.oldest ?? from.oldest, from.oldest);
   if (from.newest !== null) into.newest = Math.max(into.newest ?? from.newest, from.newest);
   return into;
@@ -85,7 +88,10 @@ function toolCalls(line: string, fallback: number): Array<[string, number]> {
 export async function scanUsage(projectsRoot: string, projectDir: string, sinceMs: number): Promise<Usage> {
   const usage = emptyUsage();
   for (const f of await walk(join(projectsRoot, projectDirKey(projectDir)), true)) {
-    if (f.top) usage.sessions++;
+    if (f.top) {
+      usage.sessions++;
+      if (f.mtime >= sinceMs) usage.recent++;
+    }
     usage.oldest = Math.min(usage.oldest ?? f.mtime, f.mtime);
     usage.newest = Math.max(usage.newest ?? f.mtime, f.mtime);
     if (f.mtime < sinceMs) continue;

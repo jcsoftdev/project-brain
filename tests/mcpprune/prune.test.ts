@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { computePlan } from "../../src/setup/plan.js";
 import { allUnits, type SetupContext } from "../../src/setup/units.js";
 import { applyPrune, planPrune, repoKey, revertPrune, type PruneEnv } from "../../src/mcpprune/prune.js";
 import { classifyTool } from "../../src/mcpprune/usage.js";
@@ -86,6 +87,16 @@ describe("planPrune", () => {
     expect(plan!.candidates.map((c) => c.name)).toEqual(["beta"]);
   });
 
+  it("needs 10 sessions, or 14 days of history with at least 3 sessions inside the window", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 2, [], 20);
+    await transcripts(a, 1, ["mcp__old__t"], 45); // spans 25 days but only 2 sessions are inside the window
+    expect((await planPrune(env, [a]))[0]!.skipped).toBe("not enough history yet");
+    await transcripts(a, 1, ["mcp__x__y"], 10);
+    expect((await planPrune(env, [a]))[0]!.skipped).toBeUndefined();
+  });
+
   it("pools usage across worktrees of the same repo", async () => {
     const main = await project("repo");
     Bun.spawnSync(["git", "init", "-q", main]);
@@ -150,7 +161,7 @@ describe("applyPrune / revertPrune", () => {
     expect(JSON.parse(await readFile(join(env.dataDir, "mcp-prune.json"), "utf-8")).keep).toContain("alpha");
   });
 
-  it("re-applies a server that vanished while still unused", async () => {
+  it("keeps a vanished server off the list for good and cleans it from the manifest even when nothing else changes", async () => {
     const a = await project("a");
     await writeClaude([a]);
     await transcripts(a, 10);
@@ -158,11 +169,74 @@ describe("applyPrune / revertPrune", () => {
     await vanish(a);
 
     const second = await applyPrune(env, await planPrune(env, [a]));
-    expect(second.added.map((e) => e.name)).toEqual(["alpha"]);
-    expect((await readJson()).projects[a].disabledMcpServers).toEqual(["beta", "alpha"]);
+    expect(second.added).toEqual([]);
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual(["beta"]);
     const state = JSON.parse(await readFile(join(env.dataDir, "mcp-prune.json"), "utf-8"));
-    expect(state.keep).toEqual([]);
-    expect(state.disabled.filter((e: { name: string }) => e.name === "alpha")).toHaveLength(1);
+    expect(state.keep).toEqual(["alpha"]);
+    expect(state.disabled.map((e: { name: string }) => e.name)).toEqual(["beta"]);
+    expect((await planPrune(env, [a]))[0]!.candidates.map((c) => c.name)).not.toContain("alpha");
+  });
+
+  const manifest = async () => JSON.parse(await readFile(join(env.dataDir, "mcp-prune.json"), "utf-8"));
+
+  it("records entries as pending before the file is written, then confirms them", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10);
+    let seen: Array<{ name: string; pending?: boolean }> = [];
+    const result = await applyPrune({ ...env, beforeRename: async () => void (seen = (await manifest()).disabled) }, await planPrune(env));
+    expect(seen.map((e) => [e.name, e.pending])).toEqual([["alpha", true], ["beta", true]]);
+    expect((await manifest()).disabled.map((e: { pending?: boolean }) => e.pending)).toEqual([undefined, undefined]);
+    expect(result.added).toHaveLength(2);
+  });
+
+  it("drops pending entries when the write is abandoned, and --revert undoes a crash that left them", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10);
+    const plans = await planPrune(env);
+    const racing: PruneEnv = { ...env, beforeRename: () => writeFileSync(claudeJson(), JSON.stringify({ projects: { [a]: {} }, pad: "x".repeat(Math.random() * 99) })) };
+    expect((await applyPrune(racing, plans)).error).toContain("kept changing");
+    expect((await manifest()).disabled).toEqual([]);
+
+    // a crash after the manifest write but before/after the rename leaves pending entries behind
+    const json = await readJson();
+    json.projects[a].disabledMcpServers = ["alpha"];
+    await writeFile(claudeJson(), JSON.stringify(json, null, 2));
+    const entry = (name: string) => ({ project: a, name, keys: ["disabledMcpServers"], at: new Date().toISOString(), pending: true });
+    await mkdir(env.dataDir, { recursive: true });
+    await writeFile(join(env.dataDir, "mcp-prune.json"), JSON.stringify({ keep: [], disabled: [entry("alpha"), entry("beta")] }));
+    const reverted = await revertPrune(env);
+    expect(reverted.removed.map((e) => e.name)).toEqual(["alpha", "beta"]);
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual([]);
+  });
+
+  it("settles leftover pending entries on the next apply: landed ones are kept, the rest dropped", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10, ["mcp__alpha__x", "mcp__beta__y"]);
+    const json = await readJson();
+    json.projects[a].disabledMcpServers = ["alpha"];
+    await writeFile(claudeJson(), JSON.stringify(json, null, 2));
+    const entry = (name: string) => ({ project: a, name, keys: ["disabledMcpServers"], at: new Date().toISOString(), pending: true });
+    await mkdir(env.dataDir, { recursive: true });
+    await writeFile(join(env.dataDir, "mcp-prune.json"), JSON.stringify({ keep: [], disabled: [entry("alpha"), entry("beta")] }));
+    await applyPrune(env, await planPrune(env));
+    expect((await manifest()).disabled.map((e: { name: string; pending?: boolean }) => [e.name, e.pending])).toEqual([["alpha", undefined]]);
+  });
+
+  it("keeps only the newest 5 backups", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10);
+    const backups = join(env.dataDir, "mcp-prune");
+    for (let i = 0; i < 7; i++) {
+      await writeClaude([a]);
+      await rm(join(env.dataDir, "mcp-prune.json"), { force: true });
+      await applyPrune({ ...env, now: Date.now() + i * 1000 }, await planPrune(env));
+    }
+    const left = (await readdir(backups)).filter((n) => n.endsWith(".bak"));
+    expect(left).toHaveLength(5);
   });
 
   it("aborts without writing when the file keeps changing underneath", async () => {
@@ -206,6 +280,38 @@ describe("config:mcp-prune unit", () => {
     await unit().apply(ctxFor());
     expect(await readJson()).toEqual(json);
     expect(unit().autoOnUpgrade).toBe(true);
+  });
+
+  it("reports unavailable when opted out, so the saved selection never records it", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10);
+    process.env.PROJECT_BRAIN_MCP_PRUNE = "0";
+    try {
+      expect(await unit().inspect(ctxFor())).toBe("unavailable");
+    } finally {
+      delete process.env.PROJECT_BRAIN_MCP_PRUNE;
+    }
+  });
+
+  it("is present once the manifest has entries, so unticking it reverts", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10);
+    await unit().apply(ctxFor());
+    expect(await unit().inspect(ctxFor())).toBe("current");
+    expect(computePlan([{ id: "config:mcp-prune", state: "current", chosen: false }] as never)[0]!.action).toBe("remove");
+
+    const b = await project("b");
+    await writeClaude([a, b]);
+    const json = await readJson();
+    json.projects[a].disabledMcpServers = ["alpha", "beta"];
+    await writeFile(claudeJson(), JSON.stringify(json, null, 2));
+    await transcripts(b, 10);
+    expect(await unit().inspect(ctxFor())).toBe("stale");
+
+    await unit().remove!(ctxFor());
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual([]);
   });
 
   it("does nothing when opted out and is unavailable without a .claude settings path", async () => {

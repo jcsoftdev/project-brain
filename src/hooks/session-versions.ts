@@ -126,7 +126,7 @@ export async function takeUpgradeNotice(
     from: server,
     since: entry.at,
     rulesStale: isNewer(currentVersion, entry.version),
-    commit: () => writeFileAtomic(file, `${JSON.stringify({ ...entry, notifiedFor: currentVersion })}\n`),
+    commit: async () => void (await writeFileAtomic(file, `${JSON.stringify({ ...entry, notifiedFor: currentVersion })}\n`)),
   };
 }
 

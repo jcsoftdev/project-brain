@@ -1307,17 +1307,19 @@ function mcpPruneUnit(): SetupUnit {
     group: "Other",
     label: "Disable unused MCP servers",
     description:
-      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions or 14 days of history; never project-brain), so their tool lists and instructions stop loading; `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out",
+      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions, or 14 days of history with at least 3 sessions inside the window; never project-brain), so their tool lists and instructions stop loading; `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out",
     defaultSelected: true,
     autoOnUpgrade: true,
 
     async inspect(ctx): Promise<UnitState> {
       const env = pruneEnvOf(ctx);
       if (!env) return "unavailable";
-      if (pruneOptedOut()) return "current";
-      const { planPrune, envFromProcess } = await import("../mcpprune/prune.js");
-      const plans = await planPrune({ ...env, ...envFromProcess() });
-      return plans.some((p) => p.candidates.length > 0) ? "absent" : "current";
+      if (pruneOptedOut()) return "unavailable";
+      const { planPrune, hasPruneEntries, envFromProcess } = await import("../mcpprune/prune.js");
+      const pending = (await planPrune({ ...env, ...envFromProcess() })).some((p) => p.candidates.length > 0);
+      // Present once anything is disabled, so unticking the unit maps to removal and runs the revert.
+      if (await hasPruneEntries(env)) return pending ? "stale" : "current";
+      return pending ? "absent" : "current";
     },
 
     async apply(ctx): Promise<void> {
