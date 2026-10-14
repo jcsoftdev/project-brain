@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { AIToolRegistrar } from "./types.js";
-import { dirExists, upsertJsonConfig, standardServerEntry } from "./json-config.js";
+import { dirExists, upsertJsonConfig, mergeServerEntry } from "./json-config.js";
 
 /**
  * Doc-verified 2026-07 against zed.dev/docs/ai/mcp: custom context servers use
@@ -26,7 +26,7 @@ export class ZedRegistrar implements AIToolRegistrar {
     // merge semantics (Task 12) are exactly what makes it safe to touch here.
     await upsertJsonConfig(join(this.baseDir, "settings.json"), (config) => {
       config.context_servers ??= {};
-      config.context_servers["project-brain"] = standardServerEntry(serverPath);
+      config.context_servers["project-brain"] = mergeServerEntry(config.context_servers["project-brain"], serverPath);
     });
   }
 

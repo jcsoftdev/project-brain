@@ -88,6 +88,40 @@ describe("setup applySaved (what `update` runs on the new binary)", () => {
     expect(saved?.declined).toEqual([]);
   });
 
+  it("keeps a live/9333 browser-record connection instead of resetting it to fresh/9222", async () => {
+    const { runSetup } = await import("../../src/commands/setup.js");
+    const dir = await mkdtemp(join(tmpdir(), "pb-apply-record-"));
+    const common = { dataDir: join(dir, "data"), skipOllama: true, registrars: [], skillTargetDirs: [], claudeSettingsPath: join(dir, "settings.json") };
+    await runSetup({ ...common, recordConnection: { mode: "live", cdpPort: 9333 }, units: { mode: "explicit", selected: ["config:record-connection"] }, quiet: true });
+
+    await runSetup({ ...common, applySaved: true, quiet: true });
+
+    expect(JSON.parse(await readFile(join(dir, "data", "record-config.json"), "utf8"))).toEqual({ mode: "live", cdpPort: 9333 });
+  });
+
+  it("does not rewrite an MCP entry that is already registered, so the user's env survives", async () => {
+    const { ClaudeRegistrar } = await import("../../src/registrars/claude.js");
+    const home = await mkdtemp(join(tmpdir(), "pb-apply-host-"));
+    const reg = new ClaudeRegistrar(join(home, ".claude"), async () => false, home);
+    reg.isInstalled = async () => true;
+    const common = { dataDir: join(home, "data"), skipOllama: true, registrars: [reg], skillTargetDirs: [], claudeSettingsPath: join(home, "settings.json") };
+    await (await import("../../src/commands/setup.js")).runSetup({ ...common, units: { mode: "explicit", selected: ["host:claudecode"] }, quiet: true });
+
+    const file = join(home, ".claude.json");
+    const config = JSON.parse(await readFile(file, "utf8"));
+    config.mcpServers["project-brain"].env = { BRAIN_MCP_HOT_SWAP: "1" };
+    config.mcpServers["project-brain"].custom = true;
+    await writeFile(file, JSON.stringify(config));
+    // Make the rules stale so the host unit has work to do.
+    await writeFile(join(home, ".claude", "CLAUDE.md"), "stale");
+
+    await (await import("../../src/commands/setup.js")).runSetup({ ...common, applySaved: true, quiet: true });
+
+    const entry = JSON.parse(await readFile(file, "utf8")).mcpServers["project-brain"];
+    expect(entry.env).toEqual({ BRAIN_MCP_HOT_SWAP: "1" });
+    expect(entry.custom).toBe(true);
+  });
+
   it("is idempotent", async () => {
     const h = await harness();
     await h.choose(["hooks:routing", "hooks:suggest"]);

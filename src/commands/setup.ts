@@ -241,6 +241,18 @@ async function buildResult(
   };
 }
 
+async function readRecordConnection(path: string): Promise<{ mode: "fresh" | "live"; cdpPort: number } | undefined> {
+  try {
+    const parsed = JSON.parse(await Bun.file(path).text()) as { mode?: unknown; cdpPort?: unknown };
+    if ((parsed.mode === "fresh" || parsed.mode === "live") && Number.isInteger(parsed.cdpPort)) {
+      return { mode: parsed.mode, cdpPort: parsed.cdpPort as number };
+    }
+  } catch {
+    /* none saved */
+  }
+  return undefined;
+}
+
 /**
  * Core setup logic — testable with injectable options.
  */
@@ -264,16 +276,22 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     }
   }
 
+  const recordConfigPath = options.recordConfigPath ?? join(dataDir, "record-config.json");
+  // Re-applying a saved selection has no flags to say otherwise, so what is on disk is the answer;
+  // defaulting would quietly turn a user's live/9333 back into fresh/9222.
+  const savedConnection = options.applySaved ? await readRecordConnection(recordConfigPath) : undefined;
+
   const ctx: SetupContext = {
     dataDir,
     installed: installedRegistrars,
     serverPath: Bun.which("project-brain") ?? join(import.meta.dir, "../../src/cli.ts"),
     claudeSettingsPath: options.claudeSettingsPath ?? defaultClaudeSettingsPath(),
-    recordConfigPath: options.recordConfigPath ?? join(dataDir, "record-config.json"),
+    keepRegistration: options.applySaved,
+    recordConfigPath,
     selectionPath: options.selectionPath ?? join(dataDir, "setup-selection.json"),
     skillTargetDirs:
       options.skillTargetDirs ?? getSkillTargetDirs(installedRegistrars.map((r) => r.name)),
-    recordConnection: options.recordConnection ?? { mode: "fresh", cdpPort: 9222 },
+    recordConnection: options.recordConnection ?? savedConnection ?? { mode: "fresh", cdpPort: 9222 },
     hookStrict: {
       routing: options.routingHook?.strict ?? false,
       worktree: options.worktreeHook?.strict ?? false,

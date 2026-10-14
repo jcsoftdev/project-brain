@@ -51,6 +51,8 @@ export interface SetupContext {
    * session (see `isInteractive`).
    */
   promptRerankerToken?: () => Promise<string | null>;
+  /** Set when re-applying a saved selection: an MCP entry that already exists is not rewritten. */
+  keepRegistration?: boolean;
 }
 
 /**
@@ -174,6 +176,18 @@ export function hostKeyOf(name: string): string {
  * only that CLI can safely rewrite, so it reports `absent` and re-applying is a
  * harmless no-op — better than claiming a state we cannot read.
  */
+async function isRegistered(registrar: AIToolRegistrar): Promise<boolean> {
+  const target = registrar.mcpConfigTarget?.();
+  if (!target) return false;
+  try {
+    const parsed = JSON.parse(await Bun.file(target.path).text()) as Record<string, unknown>;
+    const container = parsed[target.containerKey] as Record<string, unknown> | undefined;
+    return Boolean(container && "project-brain" in container);
+  } catch {
+    return false;
+  }
+}
+
 export function hostUnits(installed: AIToolRegistrar[]): SetupUnit[] {
   return installed.map((registrar) => ({
     id: `host:${hostKeyOf(registrar.name)}`,
@@ -217,7 +231,9 @@ export function hostUnits(installed: AIToolRegistrar[]): SetupUnit[] {
     },
 
     async apply(ctx: SetupContext): Promise<void> {
-      await registrar.register(ctx.serverPath);
+      // Re-applying a saved selection after an update refreshes stale rules; a server entry that is
+      // already there (with whatever env the user gave it) is left exactly as it is.
+      if (!(ctx.keepRegistration && (await isRegistered(registrar)))) await registrar.register(ctx.serverPath);
       const { getGlobalRules } = await import("../rules/global.js");
       const toolKey = hostKeyOf(registrar.name)
         .replace("claudecode", "claude")

@@ -103,6 +103,16 @@ export function launchCommand(serverPath: string): {
     : { command: serverPath, args: [] };
 }
 
+/**
+ * The standard entry laid over whatever is already registered. Only `command`, `args` and
+ * `transport` are ours to set; the user's `env` (e.g. BRAIN_MCP_HOT_SWAP=1) and any key a host added
+ * stay, so re-registering after an update never throws away a setting.
+ */
+export function mergeServerEntry(existing: unknown, serverPath: string): Record<string, unknown> {
+  const kept = existing && typeof existing === "object" && !Array.isArray(existing) ? (existing as Record<string, unknown>) : {};
+  return { ...kept, ...standardServerEntry(serverPath) };
+}
+
 /** The standard mcpServers entry every JSON-config registrar writes. */
 export function standardServerEntry(serverPath: string): Record<string, unknown> {
   const { command, args } = launchCommand(serverPath);
