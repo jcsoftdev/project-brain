@@ -69,6 +69,10 @@ export class ClaudeRegistrar implements AIToolRegistrar {
     return readWrittenRoutingVersion(join(this.baseDir, "CLAUDE.md"));
   }
 
+  routingSkillDir(): string {
+    return join(this.baseDir, "skills", "brain-model-routing");
+  }
+
   async writeModelRouting(content: string): Promise<void> {
     await writeRoutingSection(join(this.baseDir, "CLAUDE.md"), content);
   }

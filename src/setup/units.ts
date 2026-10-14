@@ -1,4 +1,6 @@
 import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
 import type { AIToolRegistrar } from "../registrars/types.js";
 import { resolveRerankerToken } from "../rerank/token.js";
 
@@ -442,6 +444,39 @@ function settingsKeyUnit(spec: {
   };
 }
 
+async function inspectRoutingSkill(skillDir: string) {
+  const { inspectOwnership } = await import("../rules/skills.js");
+  return inspectOwnership(skillDir);
+}
+
+/**
+ * Write the routing skill unless a hand-written one occupies the directory.
+ * Returns false when it was not written, so the caller keeps the guidance
+ * inline instead of pointing at a skill that is not ours.
+ */
+async function writeRoutingSkill(skillDir: string, content: string): Promise<boolean> {
+  const ownership = await inspectRoutingSkill(skillDir);
+  if (ownership !== "absent" && ownership !== "ours") return false;
+  await mkdir(skillDir, { recursive: true });
+  await Bun.write(join(skillDir, "SKILL.md"), content);
+  return true;
+}
+
+/** A rules file that points at the skill while the skill is gone: the guidance is lost. */
+async function routingSkillMissing(registrar: AIToolRegistrar): Promise<boolean> {
+  const skillDir = registrar.routingSkillDir?.();
+  const rulesPath = registrar.rulesFilePath?.();
+  if (!skillDir || !rulesPath) return false;
+  const { ROUTING_SKILL_NAME } = await import("../rules/model-routing.js");
+  try {
+    const rules = await Bun.file(rulesPath).text();
+    if (!rules.includes(`\`${ROUTING_SKILL_NAME}\``)) return false;
+  } catch {
+    return false;
+  }
+  return !existsSync(join(skillDir, "SKILL.md"));
+}
+
 /**
  * The model-routing guidance and the two hook pairs.
  *
@@ -476,6 +511,9 @@ export function guidanceUnits(): SetupUnit[] {
 
         if (versions.every((v) => v === null)) return "absent";
         if (versions.some((v) => v === null || v < ROUTING_CONTENT_VERSION)) return "stale";
+        for (const r of eligible) {
+          if (await routingSkillMissing(r)) return "stale";
+        }
         return "current";
       },
 
@@ -487,9 +525,15 @@ export function guidanceUnits(): SetupUnit[] {
         const resolved = await loadRoutingConfig(ctx.routingConfigPath);
         for (const warning of resolved.warnings) console.warn(`Warning: ${warning}`);
 
-        const { getModelRoutingSection } = await import("../rules/model-routing.js");
+        const { getModelRoutingSection, getModelRoutingPointer, getModelRoutingSkill } =
+          await import("../rules/model-routing.js");
         for (const registrar of eligible) {
           try {
+            const skillDir = registrar.routingSkillDir?.();
+            if (skillDir && (await writeRoutingSkill(skillDir, await getModelRoutingSkill(registrar, resolved)))) {
+              await registrar.writeModelRouting!(await getModelRoutingPointer(registrar));
+              continue;
+            }
             await registrar.writeModelRouting!(await getModelRoutingSection(registrar, resolved));
           } catch (e: any) {
             console.warn(
@@ -505,6 +549,10 @@ export function guidanceUnits(): SetupUnit[] {
         for (const registrar of ctx.installed) {
           const path = registrar.rulesFilePath?.();
           if (path) await removeSection(path, ROUTING_SECTION_ID);
+          const skillDir = registrar.routingSkillDir?.();
+          if (skillDir && (await inspectRoutingSkill(skillDir)) === "ours") {
+            await rm(skillDir, { recursive: true, force: true });
+          }
         }
       },
     },

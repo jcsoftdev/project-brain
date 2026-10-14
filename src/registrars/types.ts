@@ -88,6 +88,13 @@ export interface AIToolRegistrar {
    */
   writtenRoutingVersion?(): Promise<number | null>;
 
+  /**
+   * Directory of the on-demand skill that holds the full routing guidance, for
+   * hosts that load skills by description. When absent the whole section stays
+   * inline in the rules file.
+   */
+  routingSkillDir?(): string;
+
   /** Write the model-routing section. Required on any registrar with `routing`. */
   writeModelRouting?(content: string): Promise<void>;
 }

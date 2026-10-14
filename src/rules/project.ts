@@ -81,23 +81,9 @@ function renderOkfSection(hasBundle: boolean): string {
   return `
 ## Knowledge bundle (\`okf/\`)
 
-This project keeps an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) v0.2 bundle under \`okf/\` — the reasoning the code cannot hold: why a thing is built this way, which constraints must keep holding, and the traps that already cost someone a debugging session.
+\`okf/\` holds the reasoning the code cannot: why it is built this way, constraints that must keep holding, traps that already cost a debugging session. \`search_context\` returns it with the code; \`project-brain okf audit\` checks it against the code graph. The \`brain-okf\` skill has the format.
 
-- Read it. \`search_context\` returns these concepts alongside the code they explain, so the *why* is already in reach.
-- \`project-brain okf audit\` cross-checks the bundle against the code graph: broken anchors, stale concepts, coverage gaps, missing links. It exits 1 on broken and stale, so it works as a CI gate.
-- The \`brain-okf\` skill knows the format, verifies anchors with \`find_symbol\`, and writes the file.
-
-### At the end of a task, decide — do not write by default
-
-When you finish a piece of work, ask once whether anything in it belongs in the bundle:
-
-- A fix whose **cause was surprising** — the symptom pointed somewhere else.
-- A decision where a **real alternative was rejected**, and the reason is not obvious from the result.
-- A **constraint** that must keep holding, where violating it breaks something non-locally.
-
-**Most tasks produce nothing, and that is the expected answer.** Say so and move on. Do not restate the diff — \`conceptualize\` already writes module docs from it on every commit. Do not mine \`okf audit\`'s coverage gaps for candidates: they rank by structural centrality, not by explanatory need, so the top of that list is usually accessors and formatters with no interesting why.
-
-If there IS something, propose the type, title, and anchor, and let the human confirm before any file is created.
+At the end of a task, ask once whether anything belongs in it: a fix whose cause was surprising, a decision where a real alternative was rejected, a constraint whose violation breaks something non-locally. Most tasks produce nothing; say so and move on. If there is something, propose type, title and anchor and let the human confirm before any file is created.
 `;
 }
 
@@ -119,21 +105,7 @@ function renderWorktreeSection(isGitRepo: boolean): string {
   return `
 ## Isolated work (git worktrees)
 
-Before delegating work that changes code AND is checked by running the app — an
-end-to-end pass, a browser walkthrough, a recorded demo — decide whether it belongs in
-its own git worktree. Use the \`brain-worktree\` skill for the full sequence.
-
-Why it is not optional: project-brain scopes its index per worktree, so a worktree that
-was never initialized has no brain for its branch, and the MCP server refuses to serve
-it rather than answer from an empty index. Ports are scoped the same way through
-\`port_acquire\`, so two agents that both assume the default port collide and the failure
-looks like a broken app rather than a taken port.
-
-\`project-brain worktree status --json\` reports both identities: \`projectId\` for
-project-brain tools, and the \`project\` + \`worktree\` pair for \`port_acquire\`. They are
-spelled differently and are not interchangeable.
-
-Read-only work needs none of this.
+Before delegating work that changes code AND is checked by running the app (end-to-end pass, browser walkthrough, recorded demo), decide whether it belongs in its own git worktree, using the \`brain-worktree\` skill. An uninitialized worktree has no brain, and parallel agents collide on ports (lease with \`port_acquire\`). \`project-brain worktree status --json\` reports both identities. Read-only work needs none of this.
 `;
 }
 

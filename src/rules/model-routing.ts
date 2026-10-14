@@ -55,6 +55,56 @@ export async function getModelRoutingSection(
     .replace(/\{\{configPath\}\}/g, ROUTING_CONFIG_PATH);
 }
 
+export const ROUTING_SKILL_NAME = "brain-model-routing";
+
+/**
+ * The full section as an on-demand skill. A CLAUDE.md block loads on every turn
+ * of every session, but this guidance only matters when a sub-agent is about to
+ * be spawned; a skill's description is all that stays resident.
+ *
+ * `generator: project-brain` is the ownership marker the skills installer keys on.
+ */
+export async function getModelRoutingSkill(
+  registrar: AIToolRegistrar,
+  resolved?: ResolvedRouting
+): Promise<string> {
+  const body = await getModelRoutingSection(registrar, resolved);
+  return `---
+name: ${ROUTING_SKILL_NAME}
+description: "Trigger: before any Agent/Task call, spawning or delegating to a sub-agent, choosing a model or tier for delegated work, reviewing a delegation's cost. Maps task kinds to the fast/balanced/deep tier and the model to pass."
+license: Apache-2.0
+metadata:
+  author: jcsoftdev
+  version: "${ROUTING_CONTENT_VERSION}"
+  generator: project-brain
+---
+
+${body}
+`;
+}
+
+/**
+ * What stays in the always-loaded rules file once the skill holds the detail:
+ * the one rule that must be seen BEFORE the skill can be chosen, and the label
+ * rule, which is a single line.
+ */
+export async function getModelRoutingPointer(registrar: AIToolRegistrar): Promise<string> {
+  const routing = registrar.routing;
+  if (!routing) {
+    throw new Error(`${registrar.name} has no routing descriptor — it is not an eligible host`);
+  }
+  const label = routing.labelField
+    ? `\nName the model in the delegation's label (${routing.labelField}) as a prefix, e.g. \`haiku: locate auth handler\`.`
+    : "";
+
+  return `## Model routing for delegated agents
+
+<!-- model-routing-version: ${ROUTING_CONTENT_VERSION} -->
+
+Before any Agent/Task call, load the \`${ROUTING_SKILL_NAME}\` skill and pick the sub-agent's tier from it.${label}
+Override in \`${ROUTING_CONFIG_PATH}\`.`;
+}
+
 /**
  * Table rows come from the RESOLVED rules (built-ins plus user overrides), so a
  * retiered task shows its new tier rather than the shipped default.
