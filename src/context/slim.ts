@@ -123,11 +123,14 @@ export interface RevertResult {
   safetyCopy: string | null;
 }
 
+/** Safety copies outlive the backup dirs that a revert removes, so a second revert never trips over a leftover. */
+const safetyDir = (p: SlimPaths) => join(backupsDir(p), "safety");
+
 export async function revertSlim(paths: SlimPaths, now = new Date()): Promise<RevertResult> {
   const empty: RevertResult = { restored: null, removedSkills: [], safetyCopy: null };
   const root = backupsDir(paths);
   if (!existsSync(root)) return empty;
-  const latest = (await readdir(root)).sort().pop();
+  const latest = (await readdir(root)).filter((name) => existsSync(join(root, name, "manifest.json"))).sort().pop();
   if (!latest) return empty;
 
   const dir = join(root, latest);
@@ -135,7 +138,8 @@ export async function revertSlim(paths: SlimPaths, now = new Date()): Promise<Re
 
   let safetyCopy: string | null = null;
   if (existsSync(claudeMdPath(paths))) {
-    safetyCopy = join(dir, `CLAUDE.md.before-revert-${stamp(now)}`);
+    safetyCopy = join(safetyDir(paths), `CLAUDE.md.before-revert-${stamp(now)}`);
+    await mkdir(safetyDir(paths), { recursive: true });
     await copyFile(claudeMdPath(paths), safetyCopy);
   }
   await writeFileAtomic(claudeMdPath(paths), await readFile(join(dir, "CLAUDE.md"), "utf8"));
@@ -148,11 +152,6 @@ export async function revertSlim(paths: SlimPaths, now = new Date()): Promise<Re
     removedSkills.push(skillDir);
   }
 
-  if (safetyCopy) {
-    await rm(join(dir, "CLAUDE.md"), { force: true });
-    await rm(join(dir, "manifest.json"), { force: true });
-  } else {
-    await rm(dir, { recursive: true, force: true });
-  }
+  await rm(dir, { recursive: true, force: true });
   return { restored: claudeMdPath(paths), removedSkills, safetyCopy };
 }

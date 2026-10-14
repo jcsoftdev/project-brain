@@ -129,6 +129,23 @@ describe("apply and revert", () => {
     expect(await readFile(rev.safetyCopy!, "utf8")).toBe("edited later\n");
   });
 
+  it("reverts two slims in turn, and a third revert is a no-op", async () => {
+    await applySlim(paths(), { ids: ["user:deploy-notes"], now: new Date("2026-01-01T00:00:00Z") });
+    await applySlim(paths(), { ids: ["user:style-guide"], now: new Date("2026-01-02T00:00:00Z") });
+    await writeFile(join(dir, "CLAUDE.md"), `${await readFile(join(dir, "CLAUDE.md"), "utf8")}edited\n`);
+
+    const first = await revertSlim(paths(), new Date("2026-01-03T00:00:00Z"));
+    expect(first.removedSkills).toHaveLength(1);
+    expect(await readFile(first.safetyCopy!, "utf8")).toContain("edited");
+    const second = await revertSlim(paths(), new Date("2026-01-04T00:00:00Z"));
+    expect(second.removedSkills).toHaveLength(1);
+    expect(await readFile(join(dir, "CLAUDE.md"), "utf8")).toBe(FIXTURE);
+    expect(existsSync(join(dir, "skills", "memory-deploy-notes"))).toBe(false);
+    expect(existsSync(join(dir, "skills", "memory-style-guide"))).toBe(false);
+    expect(existsSync(second.safetyCopy!)).toBe(true);
+    expect((await revertSlim(paths())).restored).toBeNull();
+  });
+
   it("does not delete a skill the user replaced since", async () => {
     await applySlim(paths(), { ids: ["user:deploy-notes"] });
     await writeFile(join(dir, "skills", "memory-deploy-notes", "SKILL.md"), "mine now\n");
