@@ -17,7 +17,7 @@ import {
 } from "../constants.js";
 import { mapLimit } from "../indexer/concurrency.js";
 import type { EmbeddingClient, VectorStore, Chunk, TableMeta } from "../types.js";
-import { WasmParser } from "../parser/wasm.js";
+import { WasmParser, getSharedWasmParser } from "../parser/wasm.js";
 import { extract, extractBoundaries } from "../parser/extract.js";
 import { ParserPool, POOL_MIN_FILES } from "../parser/pool.js";
 import { GraphStore } from "../graph/store.js";
@@ -409,9 +409,9 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     // Only construct+init the sequential WasmParser when the pool is NOT
     // taking over — it would sit initialised and unused on the pool path.
     if (!pool) {
-      parser = new WasmParser();
       try {
-        await parser.init();
+        parser = ownsGraph ? new WasmParser() : await getSharedWasmParser();
+        if (ownsGraph) await parser.init();
         if (dbPath) {
           const { clearLastError } = await import("../store/error-state.js");
           await clearLastError(dbPath, projectId, "sync-parser-init");
@@ -1103,11 +1103,14 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
       error,
     };
   } finally {
-    // 8. Dispose structural graph resources. The WASM parser and worker pool
-    // are always ephemeral. The graph is closed ONLY when runSync opened it —
+    // 8. Dispose structural graph resources. The worker pool is always
+    // ephemeral. The WASM parser is disposed only when runSync created it
+    // (ownsGraph); on the injected-graph (MCP server) path it is the shared
+    // process-wide instance, because dispose() does not release the WASM
+    // module and a fresh parser per sync leaks. The graph is closed ONLY when runSync opened it —
     // an injected graph belongs to the caller (the MCP server) and must stay
     // open. The manifest store is always owned by runSync (never injected).
-    if (parser) { try { parser.dispose(); } catch {} }
+    if (parser && ownsGraph) { try { parser.dispose(); } catch {} }
     if (pool) { try { pool.dispose(); } catch {} }
     if (ownsGraph) { try { graph.close(); } catch {} }
     if (manifest) { try { manifest.close(); } catch {} }

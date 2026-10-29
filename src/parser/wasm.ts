@@ -118,3 +118,20 @@ export class WasmParser {
     this.ready.clear();
   }
 }
+
+let sharedParser: Promise<WasmParser> | null = null;
+
+/**
+ * Process-wide parser for long-lived callers (the MCP server's watcher syncs).
+ * `dispose()` does not release the tree-sitter WASM module or grammar libs, so
+ * constructing a parser per sync leaks ~6 MB each time. One instance, never
+ * disposed. A failed init clears the memo so a later call can retry.
+ */
+export function getSharedWasmParser(): Promise<WasmParser> {
+  if (!sharedParser) {
+    const p = new WasmParser();
+    sharedParser = p.init().then(() => p);
+    sharedParser.catch(() => { sharedParser = null; });
+  }
+  return sharedParser;
+}
