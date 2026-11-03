@@ -129,6 +129,9 @@ Commands:
   conceptualize      Update conceptual module docs from the latest commit
   reindex            Full re-index (drop + rebuild)
   prune              Reclaim storage from projects whose roots are gone [--dry-run]
+  sessions           List running Claude Code sessions (memory, idle time, children) [--json]
+                       --prune [--idle <dur>]  close idle ones (default 24h); dry run unless --yes
+                       --force-children / --include-unknown  lift the live-child / unknown-activity guards
   worktree           Show this worktree's brain + port identity, or reclaim dead ones
                        status [--json]   identity for project-brain and mcp-port-registry
                        prune [--dry-run] drop indexes of worktrees git no longer lists
@@ -424,6 +427,12 @@ switch (command) {
   case "tool-catalog": {
     const { execute } = await import("./commands/tool-catalog.js");
     await execute(args);
+    break;
+  }
+
+  case "sessions": {
+    const { execute } = await import("./commands/sessions.js");
+    process.exit(await execute(args));
     break;
   }
 
