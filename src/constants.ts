@@ -85,6 +85,10 @@ export const WATCHER_MAX_BATCH = 200;
  */
 export const SYNC_WINDOW_FILES = Number(process.env.BRAIN_SYNC_WINDOW_FILES) || 200;
 
+/** Defaults for the LanceDB session caches (MB); see `resolveLanceCacheBytes`. */
+export const LANCE_INDEX_CACHE_MB = 128;
+export const LANCE_METADATA_CACHE_MB = 32;
+
 /** Section markers for rule injection. */
 export const SECTION_MARKER_START = "<!-- project-brain:start -->";
 export const SECTION_MARKER_END = "<!-- project-brain:end -->";
