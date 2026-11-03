@@ -3,7 +3,10 @@ import { open, unlink } from "node:fs/promises";
 import * as lancedb from "@lancedb/lancedb";
 import { Index, rerankers } from "@lancedb/lancedb";
 import type { IvfPqOptions } from "@lancedb/lancedb";
-import { ANN_INDEX_MIN_ROWS, EMBEDDING_MODEL, TABLE_SUFFIX, VECTOR_DIM } from "../constants.js";
+import {
+  ANN_INDEX_MIN_ROWS, EMBEDDING_MODEL, LANCE_INDEX_CACHE_MB, LANCE_METADATA_CACHE_MB,
+  TABLE_SUFFIX, VECTOR_DIM,
+} from "../constants.js";
 import { readTableMeta, writeTableMeta } from "./meta.js";
 import { buildSourcePredicates } from "./batch-delete.js";
 import type { TableMeta } from "./meta.js";
@@ -14,6 +17,21 @@ const SYMBOL_KINDS = new Set<SymbolKind>([
   "function", "method", "class", "interface", "type",
   "enum", "struct", "impl", "trait", "variable", "section", "unknown",
 ]);
+
+const BYTES_PER_MB = 1024n * 1024n;
+
+function positiveMb(raw: string | undefined, fallback: number): bigint {
+  const mb = Number(raw);
+  return BigInt(Number.isInteger(mb) && mb > 0 ? mb : fallback) * BYTES_PER_MB;
+}
+
+/** Session cache sizes in bytes; BRAIN_LANCE_INDEX_CACHE_MB / BRAIN_LANCE_METADATA_CACHE_MB override, invalid values fall back. */
+export function resolveLanceCacheBytes(env: NodeJS.ProcessEnv = process.env) {
+  return {
+    index: positiveMb(env.BRAIN_LANCE_INDEX_CACHE_MB, LANCE_INDEX_CACHE_MB),
+    metadata: positiveMb(env.BRAIN_LANCE_METADATA_CACHE_MB, LANCE_METADATA_CACHE_MB),
+  };
+}
 
 /** Validate an untyped LanceDB row field against the known SymbolKind union. Unknown/malformed values map to "unknown" rather than silently passing through. */
 function asSymbolKind(s: string | undefined): SymbolKind | undefined {
@@ -130,6 +148,8 @@ export class LanceDbStore implements VectorStore {
   private buildInFlight = new Map<string, Promise<void>>();
   private db: Awaited<ReturnType<typeof lancedb.connect>> | null = null;
   private readonly dbPath: string;
+  /** Exposed for tests: the cache-capped session backing the connection. */
+  session: lancedb.Session | null = null;
   private tables = new Map<string, Awaited<ReturnType<Awaited<ReturnType<typeof lancedb.connect>>["openTable"]>>>();
   private reranker: Awaited<ReturnType<typeof rerankers.RRFReranker.create>> | null = null;
   /** Distinct-module list per project, keyed by table name. Invalidated on any write path.
@@ -143,7 +163,12 @@ export class LanceDbStore implements VectorStore {
 
   private async getDb() {
     if (!this.db) {
-      this.db = await lancedb.connect(this.dbPath);
+      // Lance's default session caches up to 6 GB index + 1 GB metadata, which a
+      // long-lived server grows into on every write. It must sit in the options
+      // object: a positional 3rd argument is silently ignored.
+      const { index, metadata } = resolveLanceCacheBytes();
+      this.session = new lancedb.Session(index, metadata);
+      this.db = await lancedb.connect(this.dbPath, { session: this.session });
     }
     return this.db;
   }
