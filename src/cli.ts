@@ -153,7 +153,10 @@ Commands:
                        --revert  re-enable exactly what --apply disabled
   tool-catalog refresh  Rebuild the MCP tool catalog behind the "Suggested tool" hints
   arch init          Write .project-brain/architecture.json (hexagonal preset) [--force]
-  compact            Reclaim storage from old versions + deleted rows [--project <id>]
+  compact            Reclaim storage from old versions + deleted rows now [--project <id>] [--force]
+                       refuses while another process has the index open; --force overrides
+  maintain           Automatic housekeeping: drop dead worktree indexes, then compact big idle indexes
+                       [--quiet] [--background] (run by the default-on SessionEnd hook; see README)
   bench <file.jsonl> Measure retrieval quality (recall@k, MRR) for this index
                        [--project <id>] [--pipeline full|hybrid] (default: hybrid)
   bench mine         Mine ground truth from git history into a queries.jsonl
@@ -423,7 +426,11 @@ switch (command) {
   }
 
   case "compact": {
-    const { compactCommand } = await import("./commands/compact.js");
+    const { compactCommand, COMPACT_USAGE } = await import("./commands/compact.js");
+    if (args.includes("--help") || args.includes("-h")) {
+      console.log(COMPACT_USAGE);
+      break;
+    }
     const { resolveProjectId, findProjectRoot } = await import("./commands/resolve-project.js");
     const flagIdx = args.indexOf("--project");
     const root = findProjectRoot();
@@ -432,7 +439,13 @@ switch (command) {
       console.error("compact: not inside an indexed project — pass --project <id>");
       process.exit(1);
     }
-    await compactCommand(project);
+    await compactCommand(project, undefined, { force: args.includes("--force") });
+    break;
+  }
+
+  case "maintain": {
+    const { maintainCommand } = await import("./commands/maintain.js");
+    await maintainCommand(args);
     break;
   }
 

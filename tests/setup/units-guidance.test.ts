@@ -80,6 +80,42 @@ describe("worktree sweep hook unit", () => {
   });
 });
 
+describe("index maintenance hook unit", () => {
+  it("is on by default, installs a detached SessionEnd maintenance run, and opts out cleanly", async () => {
+    const { guidanceUnits } = await import("../../src/setup/units.js");
+    const unit = guidanceUnits().find((u) => u.id === "hooks:index-maintenance")!;
+    const ctx = await context();
+
+    expect(unit.defaultSelected).toBe(true);
+    expect(await unit.inspect(ctx)).toBe("absent");
+
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("current");
+    const settings = JSON.parse(await Bun.file(ctx.claudeSettingsPath).text());
+    expect(settings.hooks.SessionEnd[0].hooks[0]).toEqual({
+      type: "command",
+      command: "project-brain maintain --quiet --background",
+      timeout: 5,
+    });
+
+    await unit.remove(ctx);
+    expect(await unit.inspect(ctx)).toBe("absent");
+  });
+
+  it("coexists with the worktree sweep hook and foreign SessionEnd hooks", async () => {
+    const { upsertMaintenanceHook, removeMaintenanceHook, upsertWorktreeSweepHook } = await import(
+      "../../src/hooks/claude-settings.js"
+    );
+    const foreign = { hooks: { SessionEnd: [{ hooks: [{ type: "command", command: "other-tool" }] }] } };
+    const both = upsertMaintenanceHook(upsertWorktreeSweepHook(foreign)) as any;
+    expect(both.hooks.SessionEnd).toHaveLength(3);
+    expect(upsertMaintenanceHook(both)).toEqual(both);
+
+    const removed = removeMaintenanceHook(both) as any;
+    expect(removed.hooks.SessionEnd).toHaveLength(2);
+  });
+});
+
 describe("guidance units", () => {
   it("declares every guidance unit selected by default except commit-check, which defaults on only with a token", async () => {
     const { guidanceUnits } = await import("../../src/setup/units.js");
@@ -90,6 +126,7 @@ describe("guidance units", () => {
       "hooks:arch-guard",
       "hooks:browser-route",
       "hooks:commit-check",
+      "hooks:index-maintenance",
       "hooks:routing",
       "hooks:session-title",
       "hooks:suggest",
