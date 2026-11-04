@@ -12,7 +12,9 @@ import { DATA_DIR } from "../constants.js";
 import { callBridgeTool } from "../browser/bridge.js";
 import { probeSharedServer } from "../browser/probe.js";
 import { decidePrune, parseDuration, parsePages, recordSeen, stalePages, type SeenState } from "../browser/pages.js";
-import { sharedUrl } from "../setup/chrome-shared-server.js";
+import { buildStatus, formatStatus } from "../browser/status.js";
+import { homedir } from "node:os";
+import { restartCommand, serviceFilePath, serviceKindFor, sharedUrl } from "../setup/chrome-shared-server.js";
 import {
   hasChromeProfile,
   loginArgs,
@@ -24,8 +26,28 @@ import {
 export async function execute(args: string[], dataDir: string = DATA_DIR): Promise<void> {
   if (args[0] === "login") return login(dataDir);
   if (args[0] === "prune-pages") return prunePages(args.slice(1), dataDir);
-  console.error("Usage: project-brain browser login | prune-pages --older-than <dur> [--yes]");
+  if (args[0] === "status") return status(args.includes("--json"), dataDir);
+  console.error("Usage: project-brain browser login | status [--json] | prune-pages --older-than <dur> [--yes]");
   process.exit(1);
+}
+
+/** Read-only: starts nothing, signals nothing, and exits 0 whatever it could not determine. */
+async function status(json: boolean, dataDir: string): Promise<void> {
+  const profile = profileDir(dataDir);
+  const probe = probeSharedServer(dataDir);
+
+  const listed = probe ? await callBridgeTool(sharedUrl(probe.port), "list_pages") : null;
+  const kind = serviceKindFor(process.platform);
+  const ours = kind !== null && existsSync(serviceFilePath(kind, homedir()));
+
+  const report = buildStatus({
+    probe,
+    profile,
+    profileUsed: await hasChromeProfile(profile, async (p) => existsSync(p)),
+    pageCount: listed === null ? null : parsePages(listed).length,
+    restartCommand: ours ? restartCommand(kind!) : null,
+  });
+  console.log(json ? JSON.stringify(report, null, 2) : formatStatus(report).join("\n"));
 }
 
 const seenPath = (dataDir: string) => join(dataDir, "browser-pages.json");

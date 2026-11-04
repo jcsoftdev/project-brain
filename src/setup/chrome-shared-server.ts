@@ -219,6 +219,13 @@ export function restartCommand(kind: "launchd" | "systemd"): string {
     : `systemctl --user restart ${SERVICE_LABEL}`;
 }
 
+/** Where the service this tool installs is written, for a given home directory. */
+export function serviceFilePath(kind: "launchd" | "systemd", home: string): string {
+  return kind === "launchd"
+    ? `${home}/Library/LaunchAgents/${SERVICE_LABEL}.plist`
+    : `${home}/.config/systemd/user/${SERVICE_LABEL}.service`;
+}
+
 function unxml(value: string): string {
   return value
     .replace(/&lt;/g, "<")
