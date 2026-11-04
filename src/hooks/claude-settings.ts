@@ -366,6 +366,45 @@ export function removeWorktreeSweepHook(existing: object | null): object {
   return { ...base, hooks };
 }
 
+const MAINTAIN_COMMAND = "project-brain maintain --quiet --background";
+
+/**
+ * Run housekeeping when a session ends: reclaim dead worktree indexes and compact
+ * big idle ones, so disk does not depend on anyone remembering a command.
+ *
+ * `SessionEnd` because that is when this session's own readers go away. `--background`
+ * makes the hook return at once: the real work is a detached process, so a slow
+ * compaction can never hold up the host. The 5 s timeout only covers spawning it.
+ */
+export function upsertMaintenanceHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  addGroup(hooks, "SessionEnd", MAINTAIN_COMMAND, {
+    hooks: [{ type: "command", command: MAINTAIN_COMMAND, timeout: 5 }],
+  });
+
+  return { ...base, hooks };
+}
+
+/** The inverse of {@link upsertMaintenanceHook}, narrow for {@link removeRoutingHooks}' reason. */
+export function removeMaintenanceHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "SessionEnd", [MAINTAIN_COMMAND]);
+
+  return { ...base, hooks };
+}
+
 /**
  * Remove the worktree hooks from a parsed settings object.
  *

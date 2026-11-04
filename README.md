@@ -365,6 +365,14 @@ A worktree is finished when it is not the main checkout, its branch is merged in
 
 `setup` adds a default-on `SessionEnd` hook (`hooks:worktree-sweep`) that runs `worktree sweep --yes --quiet` and prints a line only when it removed something. Untick it in `setup`, or use `--without=hooks:worktree-sweep`, to opt out.
 
+#### Disk maintenance
+
+LanceDB keeps every superseded version and soft-deleted row until something removes them, so a busy index can grow to several times its live size (one went from 1.16 GB to 0.16 GB when compacted). `setup` adds a default-on `SessionEnd` hook (`hooks:index-maintenance`) that runs `project-brain maintain --quiet --background`: it returns at once and a detached process does the work, so it never delays the host. That run drops dead worktree indexes (as `worktree prune` does), then compacts the largest idle indexes, and prints `project-brain: reclaimed X GB from N index(es)` only when it freed something. Untick it in `setup`, or use `--without=hooks:index-maintenance`, to opt out.
+
+An index is compacted only when all of these hold: it is at least 256 MB, it was not compacted in the last 24 h, nothing was committed to it in the last 10 minutes, no process has a file open inside it (`lsof`; an unreadable check counts as in use), and it is not the current project's. A run compacts at most 2 indexes, largest first, and stops starting new ones after 60 s. Versions younger than 30 minutes survive. Tune with `BRAIN_AUTO_COMPACT_MIN_MB`, `BRAIN_AUTO_COMPACT_INTERVAL_HOURS`, `BRAIN_AUTO_COMPACT_QUIET_MINUTES`, `BRAIN_AUTO_COMPACT_MAX_TABLES`, `BRAIN_AUTO_COMPACT_BUDGET_SECONDS` and `BRAIN_AUTO_COMPACT_RETENTION_MINUTES`.
+
+`project-brain compact [--project <id>]` still reclaims one index on demand. It now refuses, and exits 1, while another process has the index open or the check cannot be made; `--force` overrides that. `compact --help` prints usage and changes nothing.
+
 #### Worktrees start from the main checkout's index
 
 `init` inside a linked git worktree copies the main checkout's vectors, manifest and graph before indexing, then syncs only what differs. Every path those artefacts store is repository-relative, so one checkout's index describes another equally well, and sync re-hashes each file anyway — a stale or wrong-branch base costs a few extra embeddings, never a wrong index.

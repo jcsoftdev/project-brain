@@ -624,6 +624,20 @@ export function guidanceUnits(): SetupUnit[] {
     }),
 
     hookUnit({
+      id: "hooks:index-maintenance",
+      label: "Index maintenance",
+      description:
+        "when a session ends, drop dead worktree indexes and compact big idle indexes in the background " +
+        "(at most 2 per run, once a day each; an index any process has open is skipped)",
+      probe: "project-brain maintain",
+      strictOf: () => false,
+      load: async () => {
+        const m = await import("../hooks/claude-settings.js");
+        return { upsert: m.upsertMaintenanceHook, remove: m.removeMaintenanceHook };
+      },
+    }),
+
+    hookUnit({
       id: "hooks:session-title",
       label: "Session title hook",
       description: "name and colour the session after the work, once the agent picks them",
