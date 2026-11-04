@@ -353,6 +353,18 @@ project-brain setup --none
 
 Run `project-brain setup --with=nope` to print the list of valid ids.
 
+#### Worktree lifecycle
+
+```bash
+project-brain worktree create <name> [--base <ref>]   # .claude/worktrees/<name>, branch worktree/<name>, own brain
+project-brain worktree finish [<name|path>] [--yes]   # dry run unless --yes
+project-brain worktree sweep [--yes] [--branches]     # finish every worktree that qualifies
+```
+
+A worktree is finished when it is not the main checkout, its branch is merged into the default branch (or has no commits of its own and is over an hour old), its tree is clean (a lone untracked `node_modules` symlink is tolerated), and no process is using it. `--yes` removes the directory with `git worktree remove` and the branch with `git branch -d`; it never forces and never uses `-D`, so unmerged or dirty work is never removed. `sweep` also lists worktrees outside `.claude/worktrees` and merged branches that have no worktree (`--branches` deletes those).
+
+`setup` adds a default-on `SessionEnd` hook (`hooks:worktree-sweep`) that runs `worktree sweep --yes --quiet` and prints a line only when it removed something. Untick it in `setup`, or use `--without=hooks:worktree-sweep`, to opt out.
+
 #### Worktrees start from the main checkout's index
 
 `init` inside a linked git worktree copies the main checkout's vectors, manifest and graph before indexing, then syncs only what differs. Every path those artefacts store is repository-relative, so one checkout's index describes another equally well, and sync re-hashes each file anyway — a stale or wrong-branch base costs a few extra embeddings, never a wrong index.

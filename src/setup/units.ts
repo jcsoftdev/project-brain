@@ -603,6 +603,20 @@ export function guidanceUnits(): SetupUnit[] {
     }),
 
     hookUnit({
+      id: "hooks:worktree-sweep",
+      label: "Worktree sweep",
+      description:
+        "when a session ends, remove worktrees whose branch is merged, tree is clean and no process is using them " +
+        "(and delete that merged branch); unmerged or dirty work is never touched",
+      probe: "project-brain worktree sweep",
+      strictOf: () => false,
+      load: async () => {
+        const m = await import("../hooks/claude-settings.js");
+        return { upsert: m.upsertWorktreeSweepHook, remove: m.removeWorktreeSweepHook };
+      },
+    }),
+
+    hookUnit({
       id: "hooks:session-title",
       label: "Session title hook",
       description: "name and colour the session after the work, once the agent picks them",

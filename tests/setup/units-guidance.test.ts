@@ -42,6 +42,44 @@ describe("suggest hook unit", () => {
   });
 });
 
+describe("worktree sweep hook unit", () => {
+  it("is on by default, installs a SessionEnd sweep, and opts out cleanly", async () => {
+    const { guidanceUnits } = await import("../../src/setup/units.js");
+    const unit = guidanceUnits().find((u) => u.id === "hooks:worktree-sweep")!;
+    const ctx = await context();
+
+    expect(unit.defaultSelected).toBe(true);
+    expect(await unit.inspect(ctx)).toBe("absent");
+
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("current");
+    const settings = JSON.parse(await Bun.file(ctx.claudeSettingsPath).text());
+    expect(settings.hooks.SessionEnd[0].hooks[0]).toEqual({
+      type: "command",
+      command: "project-brain worktree sweep --yes --quiet",
+      timeout: 20,
+    });
+
+    await unit.remove(ctx);
+    expect(await unit.inspect(ctx)).toBe("absent");
+  });
+
+  it("leaves the other worktree hooks and foreign SessionEnd hooks alone, in both directions", async () => {
+    const { upsertWorktreeSweepHook, removeWorktreeSweepHook, upsertWorktreeHooks } = await import(
+      "../../src/hooks/claude-settings.js"
+    );
+    const foreign = { hooks: { SessionEnd: [{ hooks: [{ type: "command", command: "other-tool" }] }] } };
+    const both = upsertWorktreeSweepHook(upsertWorktreeHooks(foreign)) as any;
+    expect(both.hooks.SessionEnd).toHaveLength(2);
+    expect(both.hooks.WorktreeRemove).toBeDefined();
+    expect(upsertWorktreeSweepHook(both)).toEqual(both);
+
+    const removed = removeWorktreeSweepHook(both) as any;
+    expect(removed.hooks.SessionEnd).toEqual(foreign.hooks.SessionEnd);
+    expect(removed.hooks.WorktreeRemove).toBeDefined();
+  });
+});
+
 describe("guidance units", () => {
   it("declares every guidance unit selected by default except commit-check, which defaults on only with a token", async () => {
     const { guidanceUnits } = await import("../../src/setup/units.js");
@@ -55,6 +93,7 @@ describe("guidance units", () => {
       "hooks:session-title",
       "hooks:suggest",
       "hooks:worktree",
+      "hooks:worktree-sweep",
     ]);
     const optIn = guidanceUnits().filter((u) => !u.defaultSelected).map((u) => u.id);
     expect(optIn).toEqual(["hooks:commit-check"]);
