@@ -6,8 +6,13 @@
  * stops, because Chrome allows one process per profile directory.
  */
 
-import { existsSync, mkdirSync, readlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { DATA_DIR } from "../constants.js";
+import { callBridgeTool } from "../browser/bridge.js";
+import { probeSharedServer } from "../browser/probe.js";
+import { decidePrune, parseDuration, parsePages, recordSeen, stalePages, type SeenState } from "../browser/pages.js";
+import { sharedUrl } from "../setup/chrome-shared-server.js";
 import {
   hasChromeProfile,
   loginArgs,
@@ -17,11 +22,74 @@ import {
 } from "../setup/chrome-profile.js";
 
 export async function execute(args: string[], dataDir: string = DATA_DIR): Promise<void> {
-  if (args[0] !== "login") {
-    console.error("Usage: project-brain browser login");
+  if (args[0] === "login") return login(dataDir);
+  if (args[0] === "prune-pages") return prunePages(args.slice(1), dataDir);
+  console.error("Usage: project-brain browser login | prune-pages --older-than <dur> [--yes]");
+  process.exit(1);
+}
+
+const seenPath = (dataDir: string) => join(dataDir, "browser-pages.json");
+
+function loadSeen(dataDir: string): SeenState {
+  try {
+    return JSON.parse(readFileSync(seenPath(dataDir), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Close pages that have sat in the shared browser longer than `--older-than`. Dry run unless
+ * `--yes`. The bridge reports no page age, owner or context, so the age is "first seen by this
+ * command", which is a lower bound: a live session's idle page can match, which is why nothing
+ * is closed without confirmation, and never on a server that is not the headless-profile one.
+ */
+async function prunePages(args: string[], dataDir: string): Promise<void> {
+  const olderThan = parseDuration(args[args.indexOf("--older-than") + 1] ?? "");
+  if (olderThan === null) {
+    console.error("Usage: project-brain browser prune-pages --older-than <90s|30m|2h|1d> [--yes]");
     process.exit(1);
   }
 
+  const probe = probeSharedServer(dataDir);
+  if (!probe) {
+    console.log("No shared chrome-devtools server is running.");
+    return;
+  }
+  const listed = await callBridgeTool(sharedUrl(probe.port), "list_pages");
+  if (listed === null) {
+    console.log("The bridge did not answer; nothing was changed.");
+    return;
+  }
+
+  const now = Date.now();
+  const pages = parsePages(listed);
+  const seen = recordSeen(loadSeen(dataDir), probe.pid, pages, now);
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(seenPath(dataDir), JSON.stringify(seen));
+
+  const decision = decidePrune(probe.mode, stalePages(pages, seen, probe.pid, now, olderThan), args.includes("--yes"));
+  if (decision.kind === "refuse") {
+    console.log(`Not closing anything: ${decision.reason}.`);
+    return;
+  }
+  if (decision.pages.length === 0) {
+    console.log("No page has been seen for that long (the selected and newest pages are never listed).");
+    return;
+  }
+
+  for (const page of decision.pages) {
+    if (decision.kind === "dry-run") {
+      console.log(`would close ${page.id}: ${page.label}`);
+    } else {
+      const done = await callBridgeTool(sharedUrl(probe.port), "close_page", { pageId: page.id });
+      console.log(`${done === null ? "failed to close" : "closed"} ${page.id}: ${page.label}`);
+    }
+  }
+  if (decision.kind === "dry-run") console.log("Dry run. Add --yes to close these pages.");
+}
+
+async function login(dataDir: string): Promise<void> {
   const binary = resolveChromeBinary({
     platform: process.platform,
     exists: existsSync,
