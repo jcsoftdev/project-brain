@@ -27,7 +27,7 @@ export function discoverSessions(host: SessionHost): { sessions: Session[]; prot
         ageSec: row.etimeSec,
         memoryMb: host.memoryMb(row.pid),
         cwd,
-        lastActivityMs: cwd === null ? null : host.lastActivityMs(cwd),
+        lastActivityMs: host.lastActivityMs(row.pid, cwd),
         liveChildren: liveChildCount(row, table),
       };
     })
