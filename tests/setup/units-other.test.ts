@@ -232,7 +232,7 @@ describe("chrome-devtools autoConnect unit", () => {
     await rm(ctx.dataDir, { recursive: true, force: true });
   });
 
-  it("adds the flag to every host missing it, and strips it again on removal", async () => {
+  it("adds the flag to every host missing it (dropping the headless flag it contradicts), and strips it again on removal", async () => {
     const { otherUnits } = await import("../../src/setup/units.js");
     const ctx = await context();
     const a = join(ctx.dataDir, "a.json");
@@ -263,16 +263,12 @@ describe("chrome-devtools autoConnect unit", () => {
     ]);
     expect(JSON.parse(await Bun.file(b).text()).mcpServers["chrome-devtools"].args).toEqual([
       "chrome-devtools-mcp",
-      "--headless",
       "--autoConnect",
     ]);
 
     await unit.remove(ctx);
     expect(await unit.inspect(ctx)).toBe("absent");
-    expect(JSON.parse(await Bun.file(b).text()).mcpServers["chrome-devtools"].args).toEqual([
-      "chrome-devtools-mcp",
-      "--headless",
-    ]);
+    expect(JSON.parse(await Bun.file(b).text()).mcpServers["chrome-devtools"].args).toEqual(["chrome-devtools-mcp"]);
 
     await rm(ctx.dataDir, { recursive: true, force: true });
   });
@@ -456,7 +452,7 @@ describe("commit attribution unit", () => {
 describe("a shared chrome-devtools service that is already running", () => {
   // Written in whatever format this platform's service manager reads, under a
   // label that is not ours — the case of a bridge someone set up by hand.
-  async function withService(chromeArgs: string[]) {
+  async function withService(chromeArgs: string[], label = "com.someone.chrome") {
     const { launchdPlist, systemdUnit, serviceKindFor, SERVICE_LABEL } = await import(
       "../../src/setup/chrome-shared-server.js"
     );
@@ -472,9 +468,9 @@ describe("a shared chrome-devtools service that is already running", () => {
     };
     const text = (kind === "launchd" ? launchdPlist(spec) : systemdUnit(spec)).replace(
       SERVICE_LABEL,
-      "com.someone.chrome"
+      label
     );
-    await Bun.write(join(ctx.serviceDir, `com.someone.chrome.${kind === "launchd" ? "plist" : "service"}`), text);
+    await Bun.write(join(ctx.serviceDir, `${label}.${kind === "launchd" ? "plist" : "service"}`), text);
 
     const hostConfig = join(ctx.dataDir, "claude.json");
     await Bun.write(
@@ -501,6 +497,33 @@ describe("a shared chrome-devtools service that is already running", () => {
     const unit = otherUnits().find((u) => u.id === "config:chrome-autoconnect")!;
 
     expect(await unit.inspect(ctx)).toBe("foreign");
+  });
+
+  it("offers autoConnect as an opt-in on the headless service this tool installed", async () => {
+    const { SERVICE_LABEL } = await import("../../src/setup/chrome-shared-server.js");
+    const { ctx, kind } = await withService(["chrome-devtools-mcp", "--headless"], SERVICE_LABEL);
+    if (!kind) return;
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const unit = otherUnits().find((u) => u.id === "config:chrome-autoconnect")!;
+
+    expect(unit.defaultSelected).toBe(false);
+    expect(await unit.inspect(ctx)).toBe("absent");
+  });
+
+  it("tells an existing --autoConnect install how to move to the headless default, and says nothing otherwise", async () => {
+    const { SERVICE_LABEL } = await import("../../src/setup/chrome-shared-server.js");
+    const { otherUnits } = await import("../../src/setup/units.js");
+    const shared = otherUnits().find((u) => u.id === "service:chrome-shared-server")!;
+
+    const attached = await withService(["chrome-devtools-mcp", "--autoConnect"], SERVICE_LABEL);
+    if (!attached.kind) return;
+    expect(await shared.notice!(attached.ctx)).toContain("config:chrome-autoconnect");
+
+    const headless = await withService(["chrome-devtools-mcp", "--headless"], SERVICE_LABEL);
+    expect(await shared.notice!(headless.ctx)).toBeNull();
+
+    const theirs = await withService(["chrome-devtools-mcp", "--autoConnect"]);
+    expect(await shared.notice!(theirs.ctx)).toBeNull();
   });
 
   it("reports a shared server someone else installed as theirs, not as not available", async () => {

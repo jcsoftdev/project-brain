@@ -329,6 +329,13 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     })
   );
 
+  if (!options.quiet) {
+    for (const unit of units) {
+      const line = await unit.notice?.(ctx).catch(() => null);
+      if (line) console.log(`\n${line}`);
+    }
+  }
+
   // 6. Resolve the ticks: explicit flags win, then the prompt, then the seeds.
   //
   // `cancelled()` is the one "write nothing" exit — reached both when the

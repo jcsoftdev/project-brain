@@ -131,10 +131,40 @@ export function entryAutoConnectState(entry: unknown): "present" | "missing" | "
   return present ? "present" : "missing";
 }
 
+const HEADLESS_FLAG = "--headless";
+
+const flagNameOf = (arg: unknown) => (typeof arg === "string" ? parseFlag(arg)?.name : undefined);
+
+/**
+ * The default arrangement for a shared server: one headless browser the server
+ * launches itself.
+ *
+ * `--headless` and `--autoConnect` answer opposite questions — launch a browser
+ * versus attach to a running one — so a command is never given both. An
+ * `--autoConnect` already in the command is an opt-in made on purpose, and a
+ * `--headless` flag of any value is an answer too; either leaves the arguments
+ * as they are.
+ */
+export function withHeadlessDefault(args: string[]): string[] {
+  const optedIn = entryAutoConnectState({ args }) === "present";
+  const answered = args.some((arg) => flagNameOf(arg) === "headless");
+  return optedIn || answered ? args : [...args, HEADLESS_FLAG];
+}
+
+/** The arguments with the attach flag in, and the launch flag it contradicts out. */
+export function argsWithAutoConnect(args: string[]): string[] {
+  if (entryAutoConnectState({ args }) === "present") return args;
+  return [...args.filter((arg) => flagNameOf(arg) !== "headless"), CANONICAL_FLAG];
+}
+
+/** The attach flag out, back to the headless default. */
+export function argsWithoutAutoConnect(args: string[]): string[] {
+  return withHeadlessDefault(args.filter((arg) => flagNameOf(arg) !== "autoconnect"));
+}
+
 /** Append the flag, unless it is already there in some spelling. */
 export function addAutoConnect(entry: any): void {
-  if (entryAutoConnectState(entry) === "present") return;
-  entry.args = [...argsOf(entry), CANONICAL_FLAG];
+  entry.args = argsWithAutoConnect(argsOf(entry));
 }
 
 /**

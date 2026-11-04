@@ -163,3 +163,32 @@ describe("reading back a service someone already installed", () => {
     expect(servedChromeArgs(["/bin/some-other-daemon", "--flag"])).toBeNull();
   });
 });
+
+describe("rewriting a service's chrome-devtools arguments", () => {
+  it("changes only the arguments from the package token on", async () => {
+    const { launchdPlist, serviceArgv, respecServiceArgs } = await import(MOD);
+    const { argsWithoutAutoConnect } = await import("../../src/setup/chrome-autoconnect.js");
+    const spec = {
+      port: 39100,
+      bridgeBin: "/bin/mcp-proxy",
+      command: ["/bin/npx", "-y", "chrome-devtools-mcp@latest", "--autoConnect"],
+      logPath: "/tmp/x.log",
+      path: "/bin",
+    };
+    const argv = serviceArgv("launchd", launchdPlist(spec));
+
+    expect(respecServiceArgs(argv, argsWithoutAutoConnect)).toEqual({
+      port: 39100,
+      bridgeBin: "/bin/mcp-proxy",
+      command: ["/bin/npx", "-y", "chrome-devtools-mcp@latest", "--headless"],
+    });
+  });
+
+  it("refuses an argv this unit could not have written", async () => {
+    const { respecServiceArgs } = await import(MOD);
+    const same = (a: string[]) => a;
+
+    expect(respecServiceArgs(["/bin/mcp-proxy", "--", "node", "x.js"], same)).toBeNull();
+    expect(respecServiceArgs(["/bin/mcp-proxy", "--port", "1", "--", "node", "x.js"], same)).toBeNull();
+  });
+});

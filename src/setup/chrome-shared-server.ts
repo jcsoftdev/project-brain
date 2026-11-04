@@ -61,9 +61,10 @@ export interface SharedServerSpec {
   /** Absolute path to the `mcp-proxy` executable. */
   bridgeBin: string;
   /**
-   * The stdio server to put behind the bridge, argv-style — taken verbatim from
-   * the host entry being replaced, so whatever flags the user already answered
-   * for (including `--autoConnect`) move across untouched.
+   * The stdio server to put behind the bridge, argv-style — the host entry being
+   * replaced, so whatever flags the user already answered for (including
+   * `--autoConnect`) move across untouched. Only a command that answered
+   * neither way is given `--headless`: see `withHeadlessDefault`.
    */
   command: string[];
   /** Where the service writes stdout and stderr. */
@@ -258,4 +259,29 @@ export function serviceArgv(kind: "launchd" | "systemd", text: string): string[]
 export function servedChromeArgs(argv: string[]): string[] | null {
   const at = argv.findIndex((token) => token.toLowerCase().includes("chrome-devtools-mcp"));
   return at === -1 ? null : argv.slice(at);
+}
+
+/**
+ * The same service with its chrome-devtools-mcp arguments rewritten, or null
+ * when the argv is not one this unit could have written (no `--port`, no `--`
+ * separator, or no chrome-devtools-mcp behind it).
+ *
+ * Only the arguments from the package token onward change: the bridge binary,
+ * its port and the launcher in front of the package are read back as they are.
+ */
+export function respecServiceArgs(
+  argv: string[],
+  transform: (chromeArgs: string[]) => string[]
+): Pick<SharedServerSpec, "port" | "bridgeBin" | "command"> | null {
+  const portAt = argv.indexOf("--port");
+  const sepAt = argv.indexOf("--");
+  const port = Number(argv[portAt + 1]);
+  if (portAt === -1 || sepAt === -1 || !Number.isInteger(port)) return null;
+
+  const command = argv.slice(sepAt + 1);
+  const chromeArgs = servedChromeArgs(command);
+  if (!chromeArgs) return null;
+
+  const launcher = command.slice(0, command.length - chromeArgs.length);
+  return { port, bridgeBin: argv[0]!, command: [...launcher, ...transform(chromeArgs)] };
 }

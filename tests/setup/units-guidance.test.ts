@@ -50,6 +50,7 @@ describe("guidance units", () => {
     expect(ids).toEqual([
       "guidance:model-routing",
       "hooks:arch-guard",
+      "hooks:browser-route",
       "hooks:commit-check",
       "hooks:routing",
       "hooks:session-title",

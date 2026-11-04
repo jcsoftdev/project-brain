@@ -403,6 +403,47 @@ export function removeArchGuardHooks(existing: object | null): object {
   return { ...base, hooks };
 }
 
+const BROWSER_ROUTE_COMMAND = "project-brain browser-route";
+
+/** Every tool of the chrome-devtools MCP server, and nothing else. */
+const BROWSER_TOOL_MATCHER = "mcp__chrome-devtools__.*";
+
+/**
+ * Add the browser-route notice to a parsed settings object.
+ *
+ * PreToolUse on the chrome-devtools tools only, so every other tool call never spawns it.
+ * Pure, non-mutating and idempotent, like its siblings.
+ */
+export function upsertBrowserRouteHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  addGroup(hooks, "PreToolUse", BROWSER_ROUTE_COMMAND, {
+    matcher: BROWSER_TOOL_MATCHER,
+    hooks: [{ type: "command", command: BROWSER_ROUTE_COMMAND, timeout: 5 }],
+  });
+
+  return { ...base, hooks };
+}
+
+/** The inverse of {@link upsertBrowserRouteHook}, narrow for {@link removeRoutingHooks}' reason. */
+export function removeBrowserRouteHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "PreToolUse", [BROWSER_ROUTE_COMMAND]);
+
+  return { ...base, hooks };
+}
+
 const COMMIT_CHECK_COMMAND = "project-brain commit-check";
 
 /**

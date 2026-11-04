@@ -347,6 +347,11 @@ switch (command) {
     await execute();
     break;
   }
+  case "browser-route": {
+    const { execute } = await import("./hooks/browser-route.js");
+    await execute();
+    break;
+  }
   case "commit-check": {
     const { execute } = await import("./hooks/commit-check.js");
     await execute();
