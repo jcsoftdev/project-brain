@@ -124,6 +124,7 @@ Commands:
                          chrome://inspect (full browser control — see brain-record/SKILL.md).
                          Default is a fresh, logged-out profile.
                        --record-cdp-port <n>  CDP port brain-record connects to (default: 9222)
+  browser login      Sign in once on the shared headless browser's dedicated Chrome profile
   init               Initialize project (detect stack, index, install hook)
   sync               Incremental sync (re-index changed files)
   conceptualize      Update conceptual module docs from the latest commit
@@ -345,6 +346,11 @@ switch (command) {
   case "arch-guard": {
     const { execute } = await import("./hooks/arch-guard.js");
     await execute();
+    break;
+  }
+  case "browser": {
+    const { execute } = await import("./commands/browser.js");
+    await execute(args);
     break;
   }
   case "browser-route": {

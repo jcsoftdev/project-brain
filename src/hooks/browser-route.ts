@@ -18,10 +18,10 @@ import { DATA_DIR } from "../constants.js";
 const BROWSER_TOOL_PREFIX = "mcp__chrome-devtools__";
 
 export const BROWSER_ROUTE_NOTICE =
-  "project-brain browser route: chrome-devtools drives one shared headless browser by default. " +
-  "Reuse it, open your own page and close it when you are done. For a separate session on the " +
-  "same URL (own cookies and storage) pass `isolatedContext` to `new_page` instead of starting " +
-  "another browser. The owner's real signed-in Chrome is for when the owner explicitly asks.";
+  "project-brain browser route: chrome-devtools drives one shared headless browser on a dedicated " +
+  "persistent profile (sign in once with `project-brain browser login`). Reuse it, open your own " +
+  "page and close it when you are done; for a separate session on the same URL pass " +
+  "`isolatedContext` to `new_page`. The owner's real Chrome only if the owner explicitly asks.";
 
 /** The notice for this payload, or null when it is not a chrome-devtools call. */
 export function browserRouteNotice(payload: unknown): string | null {

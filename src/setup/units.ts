@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import type { AIToolRegistrar } from "../registrars/types.js";
 import { resolveRerankerToken } from "../rerank/token.js";
+import { profileDir } from "./chrome-profile.js";
 
 /**
  * What one setup unit looks like on disk right now.
@@ -928,7 +929,7 @@ export function otherUnits(): SetupUnit[] {
         } = await import("./chrome-autoconnect.js");
         const { upsertJsonConfig } = await import("../registrars/json-config.js");
 
-        let changed = await retargetOwnService(ctx, argsWithAutoConnect);
+        let changed = await retargetOwnService(ctx, (a) => argsWithAutoConnect(a, profileDir(ctx.dataDir)));
         for (const { path, containerKey, names } of await chromeDevtoolsTargets(ctx)) {
           if (names.length === 0) continue;
           await upsertJsonConfig(path, (config) => {
@@ -960,7 +961,7 @@ export function otherUnits(): SetupUnit[] {
         const { removeAutoConnect, argsWithoutAutoConnect } = await import("./chrome-autoconnect.js");
         const { upsertJsonConfig } = await import("../registrars/json-config.js");
 
-        await retargetOwnService(ctx, argsWithoutAutoConnect);
+        await retargetOwnService(ctx, (a) => argsWithoutAutoConnect(a, profileDir(ctx.dataDir)));
         for (const { path, containerKey, names } of await chromeDevtoolsTargets(ctx)) {
           if (names.length === 0) continue;
           await upsertJsonConfig(path, (config) => {
@@ -986,8 +987,8 @@ export function otherUnits(): SetupUnit[] {
           return null;
         }
         return (
-          `chrome-devtools shared server still runs with --autoConnect (your own Chrome); the default is now a ` +
-          `shared headless browser. To switch, untick "chrome-devtools autoConnect" in setup ` +
+          `chrome-devtools shared server still runs with --autoConnect (your own Chrome); Chrome asks for approval on every ` +
+          `reconnect of it, and the default is now a shared headless browser on its own profile. To switch, untick "chrome-devtools autoConnect" in setup ` +
           `(or run setup --without=config:chrome-autoconnect) — setup reloads the service itself.`
         );
       },
@@ -1053,15 +1054,17 @@ export function otherUnits(): SetupUnit[] {
           return;
         }
 
+        const profile = profileDir(ctx.dataDir);
         const port = await sharedServerPort(ctx);
         const spec = {
           port,
           bridgeBin,
-          command: [resolved, ...withHeadlessDefault(source.args)],
+          command: [resolved, ...withHeadlessDefault(source.args, profile)],
           logPath: sharedLogPath(ctx),
           path: servicePath(bridgeBin, resolved),
         };
 
+        await prepareProfile(spec.command, profile);
         await installSharedService(kind, spec, mod, ctx);
 
         // Remember what each entry was, so removal restores it rather than
@@ -1244,7 +1247,23 @@ async function hostsPointAt(ctx: SetupContext, port: string): Promise<boolean> {
   return false;
 }
 
-const sharedLogPath = (ctx: SetupContext) => `${ctx.dataDir}/chrome-devtools-shared.log`;
+/**
+ * Create the dedicated profile directory (owner-only) when the command uses it, and say whether
+ * anyone has signed in yet. Does nothing for a command that chose its own browser or profile.
+ */
+async function prepareProfile(command: string[], profile: string): Promise<void> {
+  if (!command.includes(`--userDataDir=${profile}`)) return;
+  const { mkdir } = await import("node:fs/promises");
+  const { hasChromeProfile } = await import("./chrome-profile.js");
+
+  await mkdir(profile, { recursive: true, mode: 0o700 });
+  console.log(`\nchrome-devtools shared server: browser profile at ${profile}.`);
+  if (!(await hasChromeProfile(profile, (p) => Bun.file(p).exists()))) {
+    console.log("No Chrome profile there yet — to sign in once, run: project-brain browser login");
+  }
+}
+
+const sharedLogPath =(ctx: SetupContext) => `${ctx.dataDir}/chrome-devtools-shared.log`;
 
 /**
  * Rewrite the chrome-devtools-mcp arguments of the service this tool installed
