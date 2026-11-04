@@ -23,12 +23,17 @@ export const BROWSER_ROUTE_NOTICE =
   "page and close it when you are done; for a separate session on the same URL pass " +
   "`isolatedContext` to `new_page`. The owner's real Chrome only if the owner explicitly asks.";
 
-/** The notice for this payload, or null when it is not a chrome-devtools call. */
-export function browserRouteNotice(payload: unknown): string | null {
+/**
+ * The notice for this payload, or null when it is not a chrome-devtools call. `overBudget` adds
+ * the one fact the agent can act on: tell the owner, who restarts it when nothing is running.
+ */
+export function browserRouteNotice(payload: unknown, overBudget?: { rssMb: number; maxMb: number }): string | null {
   const toolName = (payload as { tool_name?: unknown } | null)?.tool_name;
-  return typeof toolName === "string" && toolName.startsWith(BROWSER_TOOL_PREFIX)
-    ? BROWSER_ROUTE_NOTICE
-    : null;
+  if (typeof toolName !== "string" || !toolName.startsWith(BROWSER_TOOL_PREFIX)) return null;
+  return overBudget
+    ? `${BROWSER_ROUTE_NOTICE} The shared server is at ${overBudget.rssMb} MB (budget ${overBudget.maxMb} MB): ` +
+        `mention it to the owner, who restarts it when no session is mid-task (\`project-brain browser status\`).`
+    : BROWSER_ROUTE_NOTICE;
 }
 
 /**
@@ -51,9 +56,11 @@ export async function claimSession(dataDir: string, sessionId: string): Promise<
 export async function execute(dataDir: string = DATA_DIR): Promise<void> {
   try {
     const payload = JSON.parse(await Bun.stdin.text()) as { session_id?: unknown };
-    const notice = browserRouteNotice(payload);
     const sessionId = typeof payload.session_id === "string" ? payload.session_id : "";
-    if (notice && sessionId && (await claimSession(dataDir, sessionId))) {
+    if (browserRouteNotice(payload) && sessionId && (await claimSession(dataDir, sessionId))) {
+      const { probeSharedServer } = await import("../browser/probe.js");
+      const budget = probeSharedServer(dataDir)?.budget;
+      const notice = browserRouteNotice(payload, budget?.over ? budget : undefined)!;
       process.stdout.write(
         `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: notice } })}\n`
       );
