@@ -1,6 +1,9 @@
 import { basename } from "node:path";
 
 const HOUR = 3_600_000;
+
+/** A session counts as active only when Claude recorded activity this recently. */
+export const ACTIVE_WINDOW_MS = 15 * 60_000;
 const DURATION_UNITS: Record<string, number> = { m: 60_000, h: HOUR, d: 24 * HOUR };
 
 /** A Claude Code process is a session only when it is the interactive CLI, not one of its own helpers. */
@@ -24,7 +27,7 @@ export interface Session {
   ageSec: number;
   memoryMb: number | null;
   cwd: string | null;
-  /** Epoch ms of the newest transcript write; null when none could be found. */
+  /** Epoch ms of the newest Claude-recorded activity; null when none could be read. */
   lastActivityMs: number | null;
   /** Children that are doing work, MCP servers started with the session excluded. */
   liveChildren: number;
@@ -127,5 +130,5 @@ export function formatAge(seconds: number): string {
 
 export function describeActivity(idle: number | null): string {
   if (idle === null) return "unknown";
-  return idle < HOUR ? "active" : `idle ${formatAge(Math.floor(idle / 1000))}`;
+  return idle < ACTIVE_WINDOW_MS ? "active" : `idle ${formatAge(Math.floor(idle / 1000))}`;
 }

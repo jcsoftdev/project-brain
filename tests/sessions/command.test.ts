@@ -15,7 +15,7 @@ function fakeHost() {
       ),
     memoryMb: () => 100,
     cwd: () => "/p",
-    lastActivityMs: (cwd) => (cwd === "/p" ? NOW - 48 * HOUR : null),
+    lastActivityMs: (_pid, cwd) => (cwd === "/p" ? NOW - 48 * HOUR : null),
     terminate: (pid) => void killed.push(pid),
   };
   return { host, killed };
