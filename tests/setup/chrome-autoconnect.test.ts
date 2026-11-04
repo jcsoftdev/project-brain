@@ -143,3 +143,35 @@ describe("the warning shown before this mode is used", () => {
     expect(ATTACHMENT_COST_NOTE).toMatch(/\d+(\.\d+)?\s?GB/);
   });
 });
+
+describe("headless default versus autoConnect opt-in", () => {
+  const PKG = ["-y", "chrome-devtools-mcp@latest"];
+
+  it("shares a headless browser unless the command already answered", async () => {
+    const { withHeadlessDefault } = await import("../../src/setup/chrome-autoconnect.js");
+
+    expect(withHeadlessDefault(PKG)).toEqual([...PKG, "--headless"]);
+    expect(withHeadlessDefault([...PKG, "--autoConnect"])).toEqual([...PKG, "--autoConnect"]);
+    expect(withHeadlessDefault([...PKG, "--headless=false"])).toEqual([...PKG, "--headless=false"]);
+    expect(withHeadlessDefault([...PKG, "--headless"])).toEqual([...PKG, "--headless"]);
+  });
+
+  it("never leaves a command with both attach and launch flags", async () => {
+    const { argsWithAutoConnect, argsWithoutAutoConnect, entryAutoConnectState } = await import(
+      "../../src/setup/chrome-autoconnect.js"
+    );
+
+    const attached = argsWithAutoConnect([...PKG, "--headless", "--viewport=1x1"]);
+    expect(attached).toEqual([...PKG, "--viewport=1x1", "--autoConnect"]);
+    expect(entryAutoConnectState({ args: attached })).toBe("present");
+
+    expect(argsWithoutAutoConnect(attached)).toEqual([...PKG, "--viewport=1x1", "--headless"]);
+  });
+
+  it("addAutoConnect on a host entry drops the headless flag it contradicts", async () => {
+    const { addAutoConnect } = await import("../../src/setup/chrome-autoconnect.js");
+    const entry = { command: "npx", args: [...PKG, "--headless"] };
+    addAutoConnect(entry);
+    expect(entry.args).toEqual([...PKG, "--autoConnect"]);
+  });
+});

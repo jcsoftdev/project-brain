@@ -131,10 +131,62 @@ export function entryAutoConnectState(entry: unknown): "present" | "missing" | "
   return present ? "present" : "missing";
 }
 
+const HEADLESS_FLAG = "--headless";
+
+const flagNameOf = (arg: unknown) => (typeof arg === "string" ? parseFlag(arg)?.name : undefined);
+
+/**
+ * The default arrangement for a shared server: one headless browser the server
+ * launches itself.
+ *
+ * `--headless` and `--autoConnect` answer opposite questions — launch a browser
+ * versus attach to a running one — so a command is never given both. An
+ * `--autoConnect`, `--browserUrl`, `--wsEndpoint`, `--isolated` or `--userDataDir` already in
+ * the command is a choice of browser made on purpose, and leaves the arguments as they are. Past
+ * that, a `--headless` flag of any value is an answer too.
+ *
+ * With `userDataDir` the launched browser also gets that stable profile, so its logins outlive the
+ * run; without it the server falls back to its own cache directory.
+ */
+export function withHeadlessDefault(args: string[], userDataDir?: string): string[] {
+  const names = args.map(flagNameOf);
+  const chosen =
+    entryAutoConnectState({ args }) === "present" ||
+    names.some((n) => n === "isolated" || n === "userdatadir" || n === "browserurl" || n === "wsendpoint") ||
+    args.some((arg) => CONFLICTING_SHORT.has(arg));
+  if (chosen) return args;
+
+  return [
+    ...args,
+    ...(names.includes("headless") ? [] : [HEADLESS_FLAG]),
+    ...(userDataDir ? [`--userDataDir=${userDataDir}`] : []),
+  ];
+}
+
+/**
+ * The arguments with the attach flag in, and what contradicts it out: the launch flag, and the
+ * dedicated profile this tool added (`userDataDir`), which would point the attach at the wrong
+ * directory. A profile the user chose themselves is not ours to remove.
+ */
+export function argsWithAutoConnect(args: string[], userDataDir?: string): string[] {
+  if (entryAutoConnectState({ args }) === "present") return args;
+  return [
+    ...args.filter((arg) => flagNameOf(arg) !== "headless" && arg !== `--userDataDir=${userDataDir}`),
+    CANONICAL_FLAG,
+  ];
+}
+
+/** The attach flag out, back to the headless default. */
+export function argsWithoutAutoConnect(args: string[], userDataDir?: string): string[] {
+  return withHeadlessDefault(
+    args.filter((arg) => flagNameOf(arg) !== "autoconnect"),
+    userDataDir
+  );
+}
+
 /** Append the flag, unless it is already there in some spelling. */
 export function addAutoConnect(entry: any): void {
-  if (entryAutoConnectState(entry) === "present") return;
-  entry.args = [...argsOf(entry), CANONICAL_FLAG];
+  entry.args = argsWithAutoConnect(argsOf(entry));
 }
 
 /**

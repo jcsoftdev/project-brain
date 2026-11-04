@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import type { AIToolRegistrar } from "../registrars/types.js";
 import { resolveRerankerToken } from "../rerank/token.js";
+import { profileDir } from "./chrome-profile.js";
 
 /**
  * What one setup unit looks like on disk right now.
@@ -87,6 +88,12 @@ export interface SetupUnit {
   inspect(ctx: SetupContext): Promise<UnitState>;
   apply(ctx: SetupContext): Promise<void>;
   remove(ctx: SetupContext): Promise<void>;
+
+  /**
+   * One line about an install that setup will not change by itself, printed
+   * whatever the user ticks. Null when there is nothing to say.
+   */
+  notice?(ctx: SetupContext): Promise<string | null>;
 }
 
 /** One-line descriptions, kept beside the ids they belong to. */
@@ -632,6 +639,20 @@ export function guidanceUnits(): SetupUnit[] {
     ),
 
     hookUnit({
+      id: "hooks:browser-route",
+      label: "Browser route notice",
+      description:
+        "the first time a session uses a chrome-devtools tool, one line says to share the headless browser " +
+        "(isolatedContext for a separate session; your own Chrome only when you ask) (Claude Code only)",
+      probe: "project-brain browser-route",
+      strictOf: () => false,
+      load: async () => {
+        const m = await import("../hooks/claude-settings.js");
+        return { upsert: m.upsertBrowserRouteHook, remove: m.removeBrowserRouteHook };
+      },
+    }),
+
+    hookUnit({
       id: "hooks:suggest",
       label: "Skill/tool suggestions",
       description:
@@ -868,7 +889,7 @@ export function otherUnits(): SetupUnit[] {
       group: "Other",
       label: "chrome-devtools autoConnect",
       description:
-        "browser tools drive your logged-in Chrome instead of a fresh profile; needs the chrome://inspect toggle, and costs one growing attachment per open session",
+        "opt-in: browser tools drive your own logged-in Chrome instead of the default headless browser; needs the chrome://inspect toggle, and costs a growing attachment",
 
       // The only unit that ships unchecked. Every other one installs something
       // of ours; this one hands an MCP server full control of the browser the
@@ -889,9 +910,10 @@ export function otherUnits(): SetupUnit[] {
         if (actionable.length === 0) {
           const service = await findSharedChromeService(ctx);
           if (!service) return "unavailable";
-          return entryAutoConnectState({ args: service.chromeArgs }) === "present"
-            ? "current"
-            : "foreign";
+          const state = entryAutoConnectState({ args: service.chromeArgs });
+          if (state === "present") return "current";
+          // Only the service this tool installed is ours to rewrite.
+          return service.ours && state === "missing" ? "absent" : "foreign";
         }
         return actionable.every((s) => s === "present") ? "current" : "absent";
       },
@@ -903,10 +925,11 @@ export function otherUnits(): SetupUnit[] {
           TOGGLE_URL,
           REMOTE_DEBUGGING_WARNING,
           ATTACHMENT_COST_NOTE,
+          argsWithAutoConnect,
         } = await import("./chrome-autoconnect.js");
         const { upsertJsonConfig } = await import("../registrars/json-config.js");
 
-        let changed = false;
+        let changed = await retargetOwnService(ctx, (a) => argsWithAutoConnect(a, profileDir(ctx.dataDir)));
         for (const { path, containerKey, names } of await chromeDevtoolsTargets(ctx)) {
           if (names.length === 0) continue;
           await upsertJsonConfig(path, (config) => {
@@ -935,9 +958,10 @@ export function otherUnits(): SetupUnit[] {
       },
 
       async remove(ctx): Promise<void> {
-        const { removeAutoConnect } = await import("./chrome-autoconnect.js");
+        const { removeAutoConnect, argsWithoutAutoConnect } = await import("./chrome-autoconnect.js");
         const { upsertJsonConfig } = await import("../registrars/json-config.js");
 
+        await retargetOwnService(ctx, (a) => argsWithoutAutoConnect(a, profileDir(ctx.dataDir)));
         for (const { path, containerKey, names } of await chromeDevtoolsTargets(ctx)) {
           if (names.length === 0) continue;
           await upsertJsonConfig(path, (config) => {
@@ -954,7 +978,20 @@ export function otherUnits(): SetupUnit[] {
       group: "Other",
       label: "chrome-devtools shared server",
       description:
-        "one chrome-devtools MCP process for every session instead of one per session; installs a login service",
+        "one shared headless chrome-devtools browser for every session instead of one server per session; installs a login service",
+
+      async notice(ctx): Promise<string | null> {
+        const { entryAutoConnectState } = await import("./chrome-autoconnect.js");
+        const service = await findSharedChromeService(ctx);
+        if (!service?.ours || entryAutoConnectState({ args: service.chromeArgs }) !== "present") {
+          return null;
+        }
+        return (
+          `chrome-devtools shared server still runs with --autoConnect (your own Chrome); Chrome asks for approval on every ` +
+          `reconnect of it, and the default is now a shared headless browser on its own profile. To switch, untick "chrome-devtools autoConnect" in setup ` +
+          `(or run setup --without=config:chrome-autoconnect) — setup reloads the service itself.`
+        );
+      },
 
       // Unchecked for the same reason as autoConnect, plus one of its own: this
       // is the only unit that installs an OS service and a Python tool. Both
@@ -1001,9 +1038,11 @@ export function otherUnits(): SetupUnit[] {
           return;
         }
 
-        // The command to share is the one the host already runs. Taking it
-        // verbatim means every flag the user already answered for — including
-        // autoConnect — moves across without this unit deciding any of them.
+        // The command to share is the one the host already runs, so every flag
+        // the user already answered for — including an explicit autoConnect —
+        // moves across. The one thing added is the default: a command that
+        // answered neither way is shared as a headless browser.
+        const { withHeadlessDefault } = await import("./chrome-autoconnect.js");
         const targets = await chromeDevtoolsTargets(ctx);
         const source = targets.flatMap((t) => t.entries).find((e) => Array.isArray(e?.args));
         if (!source) return;
@@ -1015,16 +1054,18 @@ export function otherUnits(): SetupUnit[] {
           return;
         }
 
+        const profile = profileDir(ctx.dataDir);
         const port = await sharedServerPort(ctx);
         const spec = {
           port,
           bridgeBin,
-          command: [resolved, ...source.args],
-          logPath: `${ctx.dataDir}/chrome-devtools-shared.log`,
+          command: [resolved, ...withHeadlessDefault(source.args, profile)],
+          logPath: sharedLogPath(ctx),
           path: servicePath(bridgeBin, resolved),
         };
 
-        await installSharedService(kind, spec, mod);
+        await prepareProfile(spec.command, profile);
+        await installSharedService(kind, spec, mod, ctx);
 
         // Remember what each entry was, so removal restores it rather than
         // guessing a command back into existence.
@@ -1206,13 +1247,60 @@ async function hostsPointAt(ctx: SetupContext, port: string): Promise<boolean> {
   return false;
 }
 
+/**
+ * Create the dedicated profile directory (owner-only) when the command uses it, and say whether
+ * anyone has signed in yet. Does nothing for a command that chose its own browser or profile.
+ */
+async function prepareProfile(command: string[], profile: string): Promise<void> {
+  if (!command.includes(`--userDataDir=${profile}`)) return;
+  const { mkdir } = await import("node:fs/promises");
+  const { hasChromeProfile } = await import("./chrome-profile.js");
+
+  await mkdir(profile, { recursive: true, mode: 0o700 });
+  console.log(`\nchrome-devtools shared server: browser profile at ${profile}.`);
+  if (!(await hasChromeProfile(profile, (p) => Bun.file(p).exists()))) {
+    console.log("No Chrome profile there yet — to sign in once, run: project-brain browser login");
+  }
+}
+
+const sharedLogPath =(ctx: SetupContext) => `${ctx.dataDir}/chrome-devtools-shared.log`;
+
+/**
+ * Rewrite the chrome-devtools-mcp arguments of the service this tool installed
+ * and reload it. Returns whether anything changed; a service that is not ours,
+ * or whose argv this tool would not have written, is left as it is.
+ */
+async function retargetOwnService(
+  ctx: SetupContext,
+  transform: (chromeArgs: string[]) => string[]
+): Promise<boolean> {
+  const mod = await import("./chrome-shared-server.js");
+  const kind = mod.serviceKindFor(process.platform);
+  const service = kind && (await findSharedChromeService(ctx));
+  if (!kind || !service || !service.ours) return false;
+
+  const argv = mod.serviceArgv(kind, await Bun.file(service.file).text());
+  const current = argv && mod.respecServiceArgs(argv, (a) => a);
+  const next = argv && mod.respecServiceArgs(argv, transform);
+  if (!current || !next || current.command.join("\0") === next.command.join("\0")) return false;
+
+  const spec = {
+    ...next,
+    logPath: sharedLogPath(ctx),
+    path: servicePath(next.bridgeBin, next.command[0]!),
+  };
+  await installSharedService(kind, spec, mod, ctx);
+  return true;
+}
+
 async function installSharedService(
   kind: "launchd" | "systemd",
   spec: any,
-  mod: typeof import("./chrome-shared-server.js")
+  mod: typeof import("./chrome-shared-server.js"),
+  ctx?: SetupContext
 ): Promise<void> {
   const { mkdir } = await import("node:fs/promises");
-  const file = await sharedServiceFile(kind);
+  const file = await sharedServiceFile(kind, ctx);
   await mkdir(file.slice(0, file.lastIndexOf("/")), { recursive: true });
   await Bun.write(file, kind === "launchd" ? mod.launchdPlist(spec) : mod.systemdUnit(spec));
 

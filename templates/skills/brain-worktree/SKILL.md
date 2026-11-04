@@ -97,16 +97,17 @@ Fill the browser role in this order, and record which tool filled it:
 
 | Tool | Reach for it when |
 |---|---|
-| `chrome-devtools` | The default. Isolated profile, headless, performance trace, network with headers and timing. |
-| `claude-in-chrome` | The flow needs the user's own signed-in session and the user said so. Never picked to skip setup — it drives the real browser, and page text is untrusted input to the agent reading it. |
+| `chrome-devtools` | The default. A shared headless browser on a dedicated persistent profile (no approval modal; the owner signs in once with `project-brain browser login`), performance trace, network with headers and timing. Reuse it, open your own page, close it when done. For a separate session on the same URL (own cookies and storage), pass `isolatedContext` to `new_page` — not a new browser. |
+| `claude-in-chrome`, or `chrome-devtools` attached with `--autoConnect` | The flow needs the user's own signed-in session and the user said so; `--autoConnect` makes Chrome show an approval modal on every reconnect. Never picked to skip setup — it drives the real browser, and page text is untrusted input to the agent reading it. |
 | `playwright` | Last, and only for what the other two cannot do. `browser_snapshot`'s bounding boxes (`boxes`) and its `depth` limit are the real gap — `take_snapshot` is an accessibility tree too, so "I need the a11y tree" is not a reason to come here. |
 
 Sharing one browser across worktrees is not automatic, because each session runs its own
 MCP server process. Where it is worth arranging, point those servers at a single Chrome
-(`--browserUrl`, or `--autoConnect` — `project-brain setup` offers to add that flag, and
-prints the `chrome://inspect` toggle it depends on) and give each worktree its own `isolatedContext`
-name on `new_page`: pages in different contexts share no cookies or storage, and every
-page-scoped tool routes by `pageId`. A worktree then costs a context, not a browser.
+(`--browserUrl`, or the explicit opt-in `--autoConnect` — `project-brain setup` offers to add
+that flag, and prints the `chrome://inspect` toggle it depends on) and give each worktree its
+own `isolatedContext` name on `new_page`: pages in different contexts share no cookies or
+storage, and every page-scoped tool routes by `pageId`. A worktree then costs a context, not
+a browser.
 
 That shares the browser, not the server. Each session still attaches to it separately, and
 an attachment holds its CDP connection for the session's whole life while buffering what
@@ -115,7 +116,8 @@ Six sessions is six of those.
 
 To share the SERVER too, `project-brain setup` offers `service:chrome-shared-server`: one
 `chrome-devtools-mcp` behind an HTTP bridge, held open by a login service, with every host
-entry pointed at the URL instead of spawning its own. Sessions then cost a connection each.
+entry pointed at the URL instead of spawning its own, headless on the dedicated profile unless
+the command already chose its own browser (`--autoConnect`, `--userDataDir`, ...). Sessions then cost a connection each.
 Nothing bounds how large that one server grows, so it still wants restarting between long
 stretches of browser work — setup prints the command for your platform.
 
