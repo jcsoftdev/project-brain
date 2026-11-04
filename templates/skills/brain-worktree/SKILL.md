@@ -103,8 +103,9 @@ With `--yes` it removes the `node_modules` symlink (the link, never its target),
 `git worktree remove` and `git branch -d` (never `--force`, never `-D`), and drops the
 worktree's index. Unmerged or dirty work is never removed.
 
-`worktree sweep` applies the same rule to every linked worktree, marks those outside
-`.claude/worktrees` as `[outside .claude]` (removed only if they qualify, never moved), and
+`worktree sweep` applies the same rule to every linked worktree, removes only worktrees under
+`.claude/worktrees`. Ones outside it (siblings, other tools') are listed as `[outside .claude]`
+and removed only with `--include-outside`, or by `finish <path> --yes`, never moved. It also
 lists merged local branches that have no worktree. `sweep --yes --branches` deletes those
 with `git branch -d`.
 

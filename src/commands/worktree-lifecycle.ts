@@ -242,6 +242,8 @@ export interface FinishOutcome {
   branch: string | null;
   /** Under `<repo>/.claude/worktrees`. */
   managed: boolean;
+  /** Finished, but outside `.claude/worktrees` and not explicitly included, so left alone. */
+  heldBack?: boolean;
   finished: boolean;
   reasons: string[];
   removed: boolean;
@@ -339,13 +341,18 @@ export function pickTarget(target: string | undefined, repo: Resolved, deps: Lif
 
 export async function sweepWorktrees(
   deps: LifecycleDeps,
-  options: { apply: boolean; branches: boolean }
+  options: { apply: boolean; branches: boolean; includeOutside?: boolean }
 ): Promise<{ worktrees: FinishOutcome[]; branches: { name: string; deleted: boolean; note?: string }[] } | null> {
   const repo = resolveRepo(deps);
   if (!repo) return null;
   const worktrees: FinishOutcome[] = [];
   for (const entry of repo.entries.filter((e) => !e.isMain)) {
-    worktrees.push(await finishWorktree(entry, repo, deps, options.apply));
+    // A worktree outside .claude belongs to the owner or another tool; only an explicit flag lets a sweep remove it.
+    const managed = isInside(entry.path, join(repo.mainRoot, WORKTREES_DIR));
+    const mayRemove = managed || options.includeOutside === true;
+    const outcome = await finishWorktree(entry, repo, deps, options.apply && mayRemove);
+    if (!mayRemove && outcome.finished) outcome.heldBack = true;
+    worktrees.push(outcome);
   }
 
   const branches = repo.defaultBranch ? orphanMergedBranches(deps, repo, worktrees) : [];
@@ -403,7 +410,7 @@ export async function createWorktree(deps: LifecycleDeps, options: CreateOptions
     throw new Error(`branch ${branch} already exists`);
   }
 
-  ensureIgnored(deps, repo.mainRoot, join(WORKTREES_DIR, options.name));
+  excludeLocally(deps, repo.mainRoot, [`${WORKTREES_DIR.split(sep).join("/")}/`, ...INIT_ARTIFACTS]);
 
   const add = git(deps, repo.mainRoot, ["worktree", "add", path, "-b", branch, ...(options.base ? [options.base] : [])]);
   if (!add.ok) throw new Error(add.err || "git worktree add failed");
@@ -413,16 +420,24 @@ export async function createWorktree(deps: LifecycleDeps, options: CreateOptions
 }
 
 /**
- * Keep `.claude/worktrees/` out of the main checkout's status without touching a tracked file:
- * the exclusion is machine-local (`info/exclude`), because whether a repo ignores `.claude` is its owner's call.
+ * What `init` writes into a worktree and `finish` must not mistake for the owner's work.
+ * Anchored, so they match at a checkout's root only. `.project-brain/` and `CLAUDE.md` are
+ * written unconditionally, `docs/modules/` for detected modules, `.claude/settings.json` by the context hook.
  */
-function ensureIgnored(deps: LifecycleDeps, mainRoot: string, relPath: string): void {
-  if (git(deps, mainRoot, ["check-ignore", "-q", relPath]).ok) return;
+export const INIT_ARTIFACTS = ["/.project-brain/", "/CLAUDE.md", "/docs/modules/", "/.claude/settings.json"];
+
+/**
+ * Machine-local exclusion (`info/exclude`), never a tracked file: whether a repo ignores
+ * these paths is its owner's call. git keeps one `info/exclude` per repository, shared by
+ * every worktree, so these anchored patterns also apply to the main checkout's untracked files.
+ */
+function excludeLocally(deps: LifecycleDeps, mainRoot: string, lines: string[]): void {
   const common = git(deps, mainRoot, ["rev-parse", "--git-common-dir"]).out;
   const excludePath = join(resolve(mainRoot, common), "info", "exclude");
   mkdirSync(dirname(excludePath), { recursive: true });
   const existing = existsSync(excludePath) ? readFileSync(excludePath, "utf-8") : "";
-  const line = `${WORKTREES_DIR.split(sep).join("/")}/`;
-  if (existing.split("\n").includes(line)) return;
-  appendFileSync(excludePath, `${existing.length > 0 && !existing.endsWith("\n") ? "\n" : ""}${line}\n`);
+  const present = new Set(existing.split("\n"));
+  const missing = lines.filter((l) => !present.has(l));
+  if (missing.length === 0) return;
+  appendFileSync(excludePath, `${existing.length > 0 && !existing.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
 }

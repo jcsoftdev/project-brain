@@ -28,6 +28,7 @@ function describe(o: FinishOutcome, applied: boolean): string {
     const kept = o.branchDeleted ? "branch deleted" : `branch kept${o.branchNote ? ` (${o.branchNote})` : ""}`;
     return `removed    ${o.path} (${branch}) — ${kept}${where}`;
   }
+  if (o.heldBack) return `kept       ${o.path} (${branch}) — finished, but outside .claude; pass --include-outside to remove${where}`;
   if (o.finished) return `${applied ? "finished  " : "would remove"} ${o.path} (${branch})${where}`;
   return `keeping    ${o.path} (${branch})${where}: ${o.reasons.join("; ")}`;
 }
@@ -59,7 +60,7 @@ async function finish(args: string[], deps: LifecycleDeps): Promise<void> {
 async function sweep(args: string[], deps: LifecycleDeps): Promise<void> {
   const apply = args.includes("--yes");
   const quiet = args.includes("--quiet");
-  const result = await sweepWorktrees(deps, { apply, branches: args.includes("--branches") });
+  const result = await sweepWorktrees(deps, { apply, branches: args.includes("--branches"), includeOutside: args.includes("--include-outside") });
   if (!result) {
     if (!quiet) console.error("Not inside a git repository.");
     return;

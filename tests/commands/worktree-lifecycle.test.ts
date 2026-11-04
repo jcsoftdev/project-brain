@@ -175,6 +175,21 @@ describe("worktree lifecycle against real git repos", () => {
       expect(git(repo, "diff", "--stat")).toBe("");
     });
 
+    it("excludes what init generates, so a fresh worktree is not dirty in a repo that ignores nothing", async () => {
+      const { runInit } = await import("../../src/commands/init.js");
+      const { path } = await createWorktree(deps, {
+        name: "gen",
+        init: async (root) => {
+          await runInit({ root, skipIndex: true, skipGitHook: true, dataDir: join(dir, "data") });
+        },
+      });
+      expect(existsSync(join(path, ".project-brain", "project.json"))).toBe(true);
+      expect(git(path, "status", "--porcelain")).toBe("");
+      // anything else is still reported
+      await writeFile(join(path, "notes.md"), "n\n");
+      expect(git(path, "status", "--porcelain")).toBe("?? notes.md");
+    });
+
     it("honours --base and --branch", async () => {
       await writeFile(join(repo, "b.txt"), "b\n");
       git(repo, "add", "b.txt");
@@ -406,11 +421,53 @@ describe("worktree lifecycle against real git repos", () => {
       expect([done, open, sibling].every(existsSync)).toBe(true);
 
       const wet = (await sweepWorktrees(deps, { apply: true, branches: false }))!;
-      expect(wet.worktrees.filter((o) => o.removed).length).toBe(2);
+      expect(wet.worktrees.filter((o) => o.removed).map((o) => o.path)).toEqual([done]);
       expect(existsSync(done)).toBe(false);
-      expect(existsSync(sibling)).toBe(false);
+      expect(existsSync(sibling)).toBe(true);
+      expect(wet.worktrees.find((o) => o.path === sibling)).toMatchObject({ finished: true, heldBack: true, removed: false });
       expect(existsSync(open)).toBe(true);
       expect(git(repo, "branch", "--list", "worktree/open")).not.toBe("");
+      expect(git(repo, "branch", "--list", "side/merged")).not.toBe("");
+
+      const all = (await sweepWorktrees(deps, { apply: true, branches: false, includeOutside: true }))!;
+      expect(all.worktrees.filter((o) => o.removed).map((o) => o.path)).toEqual([sibling]);
+      expect(existsSync(sibling)).toBe(false);
+      expect(existsSync(open)).toBe(true);
+    });
+
+    it("includeOutside alone never removes anything in a dry run", async () => {
+      const sibling = join(dir, "sib2");
+      git(repo, "worktree", "add", "-q", "-b", "side/two", sibling);
+      await sweepWorktrees(deps, { apply: false, branches: false, includeOutside: true });
+      expect(existsSync(sibling)).toBe(true);
+    });
+
+    it("finish with an explicit path removes an outside worktree, even through a symlinked path", async () => {
+      const real = join(dir, "real-parent");
+      await mkdir(real);
+      await symlink(real, join(dir, "link-parent"));
+      const viaLink = join(dir, "link-parent", "sib3");
+      git(repo, "worktree", "add", "-q", "-b", "side/three", viaLink);
+      await writeFile(join(viaLink, "t.txt"), "t\n");
+      git(viaLink, "add", "t.txt");
+      git(viaLink, "commit", "-q", "-m", "t");
+      mergeIntoMain("side/three");
+
+      const r = resolveRepo(deps)!;
+      const entry = pickTarget(viaLink, r, deps);
+      expect(typeof entry).not.toBe("string");
+      const out = await finishWorktree(entry as Exclude<typeof entry, string>, r, deps, true);
+      expect(out).toMatchObject({ managed: false, removed: true });
+      expect(existsSync(join(real, "sib3"))).toBe(false);
+    });
+
+    it("treats a managed worktree reached through a symlinked repo path as managed", async () => {
+      await newWorktree("viasym");
+      mergeIntoMain("worktree/viasym");
+      await symlink(repo, join(dir, "repo-link"));
+      deps = { ...deps, cwd: realpathSync(join(dir, "repo-link")) };
+      const res = (await sweepWorktrees(deps, { apply: true, branches: false }))!;
+      expect(res.worktrees.find((o) => o.path.endsWith("viasym"))).toMatchObject({ managed: true, removed: true });
     });
 
     it("lists merged branches without a worktree, deleting them only with --branches", async () => {

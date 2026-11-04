@@ -139,7 +139,9 @@ Commands:
                                          new worktree in .claude/worktrees/<name> with its own brain
                        finish [<name|path>] [--yes] [--json]
                                          remove a merged, clean, idle worktree and its branch (dry run without --yes)
-                       sweep [--yes] [--branches] [--json]  finish every worktree that qualifies
+                       sweep [--yes] [--branches] [--include-outside] [--json]
+                                         finish every worktree under .claude/worktrees; those outside it
+                                         are removed only with --include-outside
   context slim       Measure ~/.claude/CLAUDE.md per section (estimated tokens), no changes
                        --apply <section-id>...  move your own sections into on-demand skills
                          (backup first; --description <text> sets the skill description)
