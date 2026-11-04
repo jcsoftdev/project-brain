@@ -133,9 +133,16 @@ Commands:
   sessions           List running Claude Code sessions (memory, idle time, children) [--json]
                        --prune [--idle <dur>]  close idle ones (default 24h); dry run unless --yes
                        --force-children / --include-unknown  lift the live-child / unknown-activity guards
-  worktree           Show this worktree's brain + port identity, or reclaim dead ones
+  worktree           Show this worktree's brain + port identity, create/finish worktrees, or reclaim dead ones
                        status [--json]   identity for project-brain and mcp-port-registry
                        prune [--dry-run] drop indexes of worktrees git no longer lists
+                       create <name> [--base <ref>] [--branch <name>] [--skip-index]
+                                         new worktree in .claude/worktrees/<name> with its own brain
+                       finish [<name|path>] [--yes] [--json]
+                                         remove a merged, clean, idle worktree and its branch (dry run without --yes)
+                       sweep [--yes] [--branches] [--include-outside] [--json]
+                                         finish every worktree under .claude/worktrees; those outside it
+                                         are removed only with --include-outside
   context slim       Measure ~/.claude/CLAUDE.md per section (estimated tokens), no changes
                        --apply <section-id>...  move your own sections into on-demand skills
                          (backup first; --description <text> sets the skill description)

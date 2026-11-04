@@ -326,6 +326,46 @@ export function removeSessionTitleHook(existing: object | null): object {
   return { ...base, hooks };
 }
 
+const WORKTREE_SWEEP_COMMAND = "project-brain worktree sweep --yes --quiet";
+
+/**
+ * Sweep finished worktrees when a session ends.
+ *
+ * `SessionEnd` is a documented Claude Code event (it fires once as a session terminates).
+ * The session that is ending usually still has the worktree as its cwd, so it is skipped
+ * by the same in-use check as any other process; what gets removed is the work of EARLIER
+ * sessions, which is what makes a leftover finally disappear. The command exits 0 on any
+ * error and prints only when it removed something.
+ */
+export function upsertWorktreeSweepHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  addGroup(hooks, "SessionEnd", WORKTREE_SWEEP_COMMAND, {
+    hooks: [{ type: "command", command: WORKTREE_SWEEP_COMMAND, timeout: 20 }],
+  });
+
+  return { ...base, hooks };
+}
+
+/** The inverse of {@link upsertWorktreeSweepHook}, narrow for {@link removeRoutingHooks}' reason. */
+export function removeWorktreeSweepHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "SessionEnd", [WORKTREE_SWEEP_COMMAND]);
+
+  return { ...base, hooks };
+}
+
 /**
  * Remove the worktree hooks from a parsed settings object.
  *

@@ -58,7 +58,7 @@ function runGit(cwd: string, args: string[], spawn: SpawnFn): string {
  * differently-named trunk (e.g. `trunk`) is not an error, just unresolvable,
  * and this check stays silent about it rather than guessing.
  */
-function resolveDefaultBranch(root: string, spawn: SpawnFn): string | null {
+export function resolveDefaultBranch(root: string, spawn: SpawnFn): string | null {
   const originHead = runGit(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], spawn);
   if (originHead) return originHead;
 
@@ -152,6 +152,8 @@ export interface WorktreePruneOptions {
   dryRun?: boolean;
   /** DI seam: inject a fake store in tests. */
   store?: ProjectDropper;
+  /** Consider only indexes registered at one of these roots (a targeted reclaim after `finish`). */
+  roots?: string[];
 }
 
 export interface WorktreeIndex {
@@ -203,6 +205,7 @@ export async function pruneWorktrees(
   for (const [projectId, entry] of Object.entries(registry)) {
     if (!isScopedProjectId(projectId)) continue;
     const { worktree } = parseScopedProjectId(projectId);
+    if (options.roots && !options.roots.includes(entry.root)) continue;
     const index: WorktreeIndex = { projectId, worktree, root: entry.root };
     (isDead(index) ? reclaimed : kept).push(index);
   }
@@ -229,7 +232,7 @@ export async function pruneWorktrees(
   return { reclaimed, kept };
 }
 
-/** CLI entry point: `project-brain worktree [status|prune] [--json] [--dry-run]`. */
+/** CLI entry point: `project-brain worktree [status|prune|create|finish|sweep] ...`. */
 export async function execute(args: string[]): Promise<void> {
   const sub = args.find((a) => !a.startsWith("--")) ?? "status";
 
@@ -260,6 +263,12 @@ export async function execute(args: string[]): Promise<void> {
     return;
   }
 
+  if (sub === "create" || sub === "finish" || sub === "sweep") {
+    const { executeLifecycle } = await import("./worktree-cli.js");
+    await executeLifecycle(sub, args.slice(args.indexOf(sub) + 1));
+    return;
+  }
+
   if (sub === "prune") {
     const dryRun = args.includes("--dry-run");
     const report = await pruneWorktrees({ dryRun });
@@ -278,6 +287,6 @@ export async function execute(args: string[]): Promise<void> {
   }
 
   console.error(`Unknown worktree subcommand: ${sub}`);
-  console.error("Usage: project-brain worktree [status|prune] [--json] [--dry-run]");
+  console.error("Usage: project-brain worktree [status|prune|create|finish|sweep] [--json] [--dry-run]");
   process.exitCode = 1;
 }

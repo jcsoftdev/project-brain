@@ -4,7 +4,7 @@ description: "Trigger: before starting an isolated task, run this in a worktree,
 license: Apache-2.0
 metadata:
   author: jcsoftdev
-  version: "1.0"
+  version: "1.1"
   generator: project-brain
 ---
 
@@ -66,11 +66,15 @@ worktree nobody indexed. The two halves drift apart and nothing errors.
 2. Decide isolation. Needed when the task changes code and something else must keep
    running on the current branch, or when sibling agents work in parallel. Not needed for
    a read-only task. Ask before creating one unless the user already said to.
-3. Create it with the harness's own tool (`EnterWorktree`, or the `using-git-worktrees`
-   skill). Never `git worktree add` by hand when a native tool exists — the harness
-   cannot see or clean up what it did not create.
-4. In the worktree: `project-brain init` then `project-brain sync`. Only now does the
-   agent have a graph that matches its branch.
+3. Create it with `project-brain worktree create <name> [--base <ref>]`. It puts the
+   worktree at `<repo>/.claude/worktrees/<name>` on branch `worktree/<name>` (`--branch`
+   to choose another), refuses an existing path or branch, runs the same `init` as step 4
+   and prints the path plus the `port_acquire` pair. Keep worktrees inside `.claude/`: one
+   place to look, one place the sweep cleans. A harness-native tool (`EnterWorktree`) is
+   fine when the harness must own the worktree; `finish` and `sweep` handle those too.
+4. `worktree create` already ran `init` there. For a worktree made some other way, run
+   `project-brain init` then `project-brain sync` in it. Only then does the agent have a
+   graph that matches its branch.
 5. `port_acquire(project, worktree, technology)` with the pair from step 1, once per
    service the task boots. The lease is sticky, so re-running returns the same port.
 6. Delegate. The sub-agent starts with an empty context and never reads CLAUDE.md, so
@@ -78,12 +82,36 @@ worktree nobody indexed. The two halves drift apart and nothing errors.
    and the model-routing table if it will spawn its own sub-agents. A sub-agent has the
    `Agent` tool and can nest; it does NOT have `Workflow`, so deterministic
    orchestration stays with you.
-7. Tear down. `project-brain setup` installs hooks that do this for you: `WorktreeRemove`
-   reclaims the worktree's index, and mcp-port-registry's own hook releases its ports.
-   Run `project-brain worktree prune` and `port_release` by hand only when you removed a
-   worktree outside the harness, or when a non-interactive run skipped hooks entirely.
-   Both sides reconcile against `git worktree list` on the next session start anyway,
-   which is why neither trusts the removal event alone.
+7. Tear down when the work is finished: `project-brain worktree finish [<name|path>]` (dry
+   run) then `--yes`. See "Finishing a worktree" below. Release the leased ports with
+   `port_release`; mcp-port-registry's own hook usually does it, and both sides reconcile
+   against `git worktree list` on the next session start anyway.
+
+## Finishing a worktree
+
+A worktree is finished when ALL of these hold:
+
+- it is not the main checkout, and not on the default branch;
+- its branch is merged into the default branch (or has no commits of its own and is more
+  than an hour old);
+- its tree is clean: no modified, staged or untracked file. The one exception is a lone
+  untracked `node_modules` symlink, the known leftover of isolation worktrees;
+- no process has it as its working directory, and your shell is not standing in it.
+
+`finish` is a dry run that prints what would go, or the exact reason it is not finished.
+With `--yes` it removes the `node_modules` symlink (the link, never its target), runs
+`git worktree remove` and `git branch -d` (never `--force`, never `-D`), and drops the
+worktree's index. Unmerged or dirty work is never removed.
+
+`worktree sweep` applies the same rule to every linked worktree, removes only worktrees under
+`.claude/worktrees`. Ones outside it (siblings, other tools') are listed as `[outside .claude]`
+and removed only with `--include-outside`, or by `finish <path> --yes`, never moved. It also
+lists merged local branches that have no worktree. `sweep --yes --branches` deletes those
+with `git branch -d`.
+
+`project-brain setup` installs a default-on `SessionEnd` hook that runs
+`worktree sweep --yes --quiet`: when a session ends, leftovers from earlier finished work are
+removed, silently unless something was removed. Untick `hooks:worktree-sweep` to opt out.
 
 ## Browsers are per session, not per worktree
 
@@ -131,6 +159,8 @@ A CDP port is a port like any other. Lease it with `port_acquire` instead of ass
 - Never write durable knowledge expecting it to live in the worktree. `add_knowledge`
   from a worktree is routed to the BASE project on purpose: a worktree index is
   disposable and `worktree prune` will drop it.
+- Never pass `--force` to `git worktree remove`, or `-D` to `git branch`, to get a stubborn
+  worktree out of the way. `finish` refusing is the answer: merge or commit first.
 - Never run `worktree prune` to fix a confusing result. It reclaims by asking git which
   worktrees are live, with no grace window, because a worktree index is re-derivable by
   one `sync`. That is safe for worktrees and wrong for projects — whole projects belong
