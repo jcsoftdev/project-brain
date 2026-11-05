@@ -192,6 +192,8 @@ These five are thin wrappers over the CLI. **project-brain does not install them
 |---|---|---|
 | `/brain-audit` | *(none — host skill)* | Whole-project audit: dead code, orphan UI, broken flows, coverage gaps, plus findings by severity across security, performance and architecture |
 | `/brain-okf` | *(none — host skill)* | Write an OKF concept: the reasoning behind code, anchored to a verified symbol and checkable by `okf audit` |
+| `/brain-design-review` | *(none — host skill)* | Audit a rendered UI like a designer (ten categories, AI-slop check), score it, then fix findings one commit each and re-verify |
+| `/brain-qa-only` | *(none — host skill)* | Explore a browser, API, CLI or worker surface and report reproducible bugs with evidence; never edits product code |
 | `/brain-commit` | *(none — host skill)* | Write a commit message in the convention the repository's own log already shows |
 | `/brain-record` | *(none — host skill)* | Record the flow a branch touches as video evidence for a PR or ticket |
 | `/brain-worktree` | *(none — host skill)* | Give an isolated worktree its own index (seeded from the main checkout) and its own leased port |

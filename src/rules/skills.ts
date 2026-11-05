@@ -12,6 +12,12 @@ import recordSkillMd from "../../templates/skills/brain-record/SKILL.md" with { 
 import recordScript from "../../templates/skills/brain-record/assets/record.mjs" with { type: "text" };
 import recordBuildVideo from "../../templates/skills/brain-record/assets/build-video.sh" with { type: "text" };
 import recordPitfalls from "../../templates/skills/brain-record/references/pitfalls.md" with { type: "text" };
+import designReviewSkillMd from "../../templates/skills/brain-design-review/SKILL.md" with { type: "text" };
+import designReviewAudit from "../../templates/skills/brain-design-review/references/audit.md" with { type: "text" };
+import designReviewProbes from "../../templates/skills/brain-design-review/references/probes.md" with { type: "text" };
+import designReviewFixLoop from "../../templates/skills/brain-design-review/references/fix-loop.md" with { type: "text" };
+import qaOnlySkillMd from "../../templates/skills/brain-qa-only/SKILL.md" with { type: "text" };
+import qaOnlyReport from "../../templates/skills/brain-qa-only/references/report.md" with { type: "text" };
 
 // A. Product & intent
 import functional from "../../templates/skills/brain-audit/references/functional.md" with { type: "text" };
@@ -230,6 +236,18 @@ export const BRAIN_RECORD_FILES: Record<string, string> = {
   "references/pitfalls.md": recordPitfalls,
 };
 
+export const BRAIN_DESIGN_REVIEW_FILES: Record<string, string> = {
+  "SKILL.md": designReviewSkillMd,
+  "references/audit.md": designReviewAudit,
+  "references/probes.md": designReviewProbes,
+  "references/fix-loop.md": designReviewFixLoop,
+};
+
+export const BRAIN_QA_ONLY_FILES: Record<string, string> = {
+  "SKILL.md": qaOnlySkillMd,
+  "references/report.md": qaOnlyReport,
+};
+
 /**
  * Every skill setup installs, keyed by the directory name it occupies inside a
  * skills root. Ownership is proven per skill directory, so a user's
@@ -238,7 +256,9 @@ export const BRAIN_RECORD_FILES: Record<string, string> = {
 export const SKILL_MANIFESTS: Record<string, Record<string, string>> = {
   "brain-audit": BRAIN_AUDIT_FILES,
   "brain-commit": BRAIN_COMMIT_FILES,
+  "brain-design-review": BRAIN_DESIGN_REVIEW_FILES,
   "brain-okf": BRAIN_OKF_FILES,
+  "brain-qa-only": BRAIN_QA_ONLY_FILES,
   "brain-record": BRAIN_RECORD_FILES,
   "brain-style": BRAIN_STYLE_FILES,
   "brain-worktree": BRAIN_WORKTREE_FILES,

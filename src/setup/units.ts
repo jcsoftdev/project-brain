@@ -100,7 +100,9 @@ export interface SetupUnit {
 const SKILL_DESCRIPTIONS: Record<string, string> = {
   "brain-audit": "whole-project audit: dead code, orphan UI, broken flows, security findings",
   "brain-commit": "writes commit messages in the convention the repository already uses",
+  "brain-design-review": "audits a rendered UI like a designer, scores it, fixes findings one commit each",
   "brain-okf": "records the reasoning behind code as an Open Knowledge Format concept",
+  "brain-qa-only": "finds and documents reproducible bugs with evidence, never edits product code",
   "brain-record": "records a branch's flow as video evidence for a PR or ticket",
   "brain-style": "keeps generated code architecture-first and declarative — no comments, the why goes to the commit or the knowledge bundle",
   "brain-worktree": "gives an isolated worktree its own brain and its own port",
