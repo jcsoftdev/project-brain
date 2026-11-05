@@ -195,6 +195,39 @@ describe("commitCheckDecision", () => {
     expect(f.gitCalls).toHaveLength(0);
   });
 
+  it("names files that add comment lines, with or without a token, and never blocks", async () => {
+    const diff = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "+++ b/src/a.ts",
+      "+  // explains the next line",
+      "diff --git a/src/b.ts b/src/b.ts",
+      "+const ok = 1;",
+      "diff --git a/README.md b/README.md",
+      "+* a bullet",
+      "diff --git a/src/c.tsx b/src/c.tsx",
+      "+  {/* jsx note */}",
+      "",
+    ].join("\n");
+    for (const token of [null, TOKEN]) {
+      const f = fake({ names: "src/a.ts\nsrc/b.ts\nsrc/c.tsx\nREADME.md\n", diff, token, mode: "block" });
+      const d = await commitCheckDecision(commit("git commit -m x"), f.ctx);
+      expect(d.block).toBe(false);
+      expect(d.message).toContain("  src/a.ts");
+      expect(d.message).toContain("  src/c.tsx");
+      expect(d.message).not.toContain("src/b.ts");
+      expect(d.message).not.toContain("README.md");
+      expect(d.message).toContain("brain-style");
+    }
+  });
+
+  it("appends the comment warning to a Jev escalation instead of replacing it", async () => {
+    const diff = "diff --git a/src/a.ts b/src/a.ts\n+// note\n";
+    const f = fake({ names: "src/a.ts\ntests/a.test.ts\n", diff, answers: { security: answer(0.97) } });
+    const d = await commitCheckDecision(commit("git commit -m x"), f.ctx);
+    expect(d.message).toContain("Jev flags");
+    expect(d.message).toContain("adds comment lines");
+  });
+
   it("produces no output at all for a routine change, and sends one ask", async () => {
     const f = fake({ names: "src/a.ts\ntests/a.test.ts\n" });
     expect(await commitCheckDecision(commit("git commit -m x"), f.ctx)).toEqual({ block: false });
@@ -272,11 +305,10 @@ describe("commitCheckDecision", () => {
   });
 
   describe("fails open", () => {
-    it("without a token, and without touching git or the network", async () => {
+    it("without a token, and without touching the network", async () => {
       const f = fake({ token: null, answers: { security: answer(0.99) } });
       expect(await commitCheckDecision(commit("git commit -m x"), f.ctx)).toEqual({ block: false });
       expect(f.asks).toHaveLength(0);
-      expect(f.gitCalls).toHaveLength(0);
     });
 
     it("on an empty staged diff", async () => {

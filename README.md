@@ -540,7 +540,7 @@ A `PreToolUse` hook on `Bash` that acts only on `git commit` (including `git -C 
 project-brain setup --with=hooks:commit-check
 ```
 
-`setup` ticks it by default only when a token is already configured, since the diff (first 16,000 characters) is sent to `api.typesafe.ai`. Without a token, with an empty diff, or on any error or timeout, it does nothing. The default is a warning delivered as `additionalContext`; to make the review escalation block (exit `2`, reason on stderr), write `~/.project-brain/commit-check.json`:
+`setup` ticks it by default only when a token is already configured, since the diff (first 16,000 characters) is sent to `api.typesafe.ai`. Without a token, with an empty diff, or on any error or timeout, the Jev part does nothing. Independently of Jev, it names the source files whose staged diff adds comment lines (the `brain-style` rule is zero comments in new code); that check is local, needs no token, and only warns. The default is a warning delivered as `additionalContext`; to make the review escalation block (exit `2`, reason on stderr), write `~/.project-brain/commit-check.json`:
 
 ```json
 { "mode": "block" }
