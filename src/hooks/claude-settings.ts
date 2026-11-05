@@ -482,6 +482,38 @@ export function removeArchGuardHooks(existing: object | null): object {
   return { ...base, hooks };
 }
 
+const STYLE_GUARD_COMMAND = "project-brain style-guard";
+
+function withHooks(existing: object | null, change: (hooks: Record<string, unknown>) => void): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+  change(hooks);
+  return { ...base, hooks };
+}
+
+export function upsertStyleGuardHooks(existing: object | null): object {
+  return withHooks(existing, (hooks) =>
+    addGroup(hooks, "PreToolUse", STYLE_GUARD_COMMAND, {
+      matcher: EDIT_TOOL_MATCHER,
+      hooks: [
+        {
+          type: "command",
+          command: STYLE_GUARD_COMMAND,
+          timeout: 5,
+          statusMessage: "project-brain: loading coding rules",
+        },
+      ],
+    })
+  );
+}
+
+export function removeStyleGuardHooks(existing: object | null): object {
+  return withHooks(existing, (hooks) => dropGroups(hooks, "PreToolUse", [STYLE_GUARD_COMMAND]));
+}
+
 const BROWSER_ROUTE_COMMAND = "project-brain browser-route";
 
 /** Every tool of the chrome-devtools MCP server, and nothing else. */

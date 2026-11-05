@@ -667,6 +667,21 @@ export function guidanceUnits(): SetupUnit[] {
     ),
 
     hookUnit({
+      id: "hooks:style-guard",
+      label: "Coding rules guard",
+      description:
+        "the first time an agent (the session or a sub-agent) edits a code file, injects the installed brain-style skill " +
+        "so the rules arrive when code is written (Claude Code only); warn-only, local, once per session and agent; " +
+        "for a file type it cannot classify and with a TypeSafe token it asks Jev, sending only the file path to api.typesafe.ai",
+      probe: "project-brain style-guard",
+      strictOf: () => false,
+      load: async () => {
+        const m = await import("../hooks/claude-settings.js");
+        return { upsert: m.upsertStyleGuardHooks, remove: m.removeStyleGuardHooks };
+      },
+    }),
+
+    hookUnit({
       id: "hooks:browser-route",
       label: "Browser route notice",
       description:
