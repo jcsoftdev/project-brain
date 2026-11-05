@@ -486,6 +486,18 @@ Override the table in `~/.project-brain/model-routing.json`:
 
 Add `--routing-hook-strict` for enforcement: a `PreToolUse` hook that blocks a spawn naming no model and tells the model to re-issue it with one. Off by default — inheriting the session model is sometimes the right call, and the guard fails open on any payload it cannot parse. `--no-routing-hook` skips both.
 
+#### Coding rules guard
+
+A `PreToolUse` hook on `Edit`, `Write` and `MultiEdit` that hands an agent the installed `brain-style` skill the first time it edits a code file, so the rules arrive when code is written rather than when a prompt is typed. It reaches sub-agents too: Claude Code fires `PreToolUse` inside them, and the hook keys its once-only memory by session and agent. It is selected by default in `setup` because it is local and warn-only: it exits 0 and adds the rules as `additionalContext`, and fails open on anything it cannot read.
+
+```bash
+project-brain setup --with=hooks:style-guard    # already on in a plain `setup`
+```
+
+**Which skills apply.** A table maps file extensions to skills (code files to `brain-style`; prose, data and config files to nothing). Only a file the table cannot classify, and only when a TypeSafe token exists, goes to Jev, which sees the file path alone and answers per skill whether it applies; without a token the hook stays silent for those files. The rules text is read from `~/.claude/skills/<skill>/SKILL.md`, so editing the installed skill changes what is injected; if the skill is not installed the hook says nothing.
+
+**Opt out.** Deselect `hooks:style-guard` in `setup`.
+
 #### Architecture guard
 
 A `PreToolUse` hook on `Edit`, `Write` and `MultiEdit` that checks an edit against your architecture boundaries. It is selected by default in `setup` because it is local and warn-only out of the box: the setup unit installs the hook and seeds a **global default** at `~/.project-brain/architecture.json` (hexagonal/clean preset, `"mode": "warn"`), so every project is covered with no per-project step.
@@ -528,7 +540,7 @@ A `PreToolUse` hook on `Bash` that acts only on `git commit` (including `git -C 
 project-brain setup --with=hooks:commit-check
 ```
 
-`setup` ticks it by default only when a token is already configured, since the diff (first 16,000 characters) is sent to `api.typesafe.ai`. Without a token, with an empty diff, or on any error or timeout, it does nothing. The default is a warning delivered as `additionalContext`; to make the review escalation block (exit `2`, reason on stderr), write `~/.project-brain/commit-check.json`:
+`setup` ticks it by default only when a token is already configured, since the diff (first 16,000 characters) is sent to `api.typesafe.ai`. Without a token, with an empty diff, or on any error or timeout, the Jev part does nothing. Independently of Jev, it names the source files whose staged diff adds comment lines (the `brain-style` rule is zero comments in new code); that check is local, needs no token, and only warns. The default is a warning delivered as `additionalContext`; to make the review escalation block (exit `2`, reason on stderr), write `~/.project-brain/commit-check.json`:
 
 ```json
 { "mode": "block" }

@@ -358,6 +358,11 @@ switch (command) {
     await execute();
     break;
   }
+  case "style-guard": {
+    const { execute } = await import("./hooks/style-guard.js");
+    await execute();
+    break;
+  }
   case "browser": {
     const { execute } = await import("./commands/browser.js");
     await execute(args);

@@ -370,6 +370,90 @@ function coverageEntries(
   return entries;
 }
 
+const ADDED_COMMENT_LINE = /^\+\s*(\/\/|\/\*|\*\s|\{\/\*)/;
+
+export function filesAddingComments(diff: string): string[] {
+  const files: string[] = [];
+  let current: string | null = null;
+  for (const line of diff.split("\n")) {
+    const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+    if (header) {
+      current = isSourcePath(header[2]!) && !isSecretPath(header[2]!) ? header[2]! : null;
+      continue;
+    }
+    if (current !== null && ADDED_COMMENT_LINE.test(line) && !files.includes(current)) files.push(current);
+  }
+  return files;
+}
+
+function commentWarning(diff: string): string | null {
+  const files = filesAddingComments(diff);
+  if (files.length === 0) return null;
+  return [
+    "project-brain commit-check: the staged diff adds comment lines in:",
+    ...files.map((file) => `  ${file}`),
+    "The brain-style skill allows no comments in new code: move the why to the commit message or the okf/ bundle, " +
+      "or rename until the code says it. This is a warning, not a requirement.",
+  ].join("\n");
+}
+
+interface StagedChange {
+  staged: string[];
+  diffText: string;
+}
+
+async function jevVerdict(change: StagedChange, ctx: CommitCheckContext, startedAt: number): Promise<CommitCheckDecision> {
+  const { staged, diffText } = change;
+  const token = await ctx.token();
+  if (!token) return SILENT;
+
+  const hasStagedTest = staged.some(isTestPath);
+  const untested = hasStagedTest
+    ? []
+    : staged.filter((f) => isSourcePath(f) && !isSecretPath(f)).slice(0, MAX_TEST_QUESTIONS);
+
+  const left = HOOK_BUDGET_MS - BUDGET_MARGIN_MS - (ctx.now() - startedAt);
+  if (left <= 0) return SILENT;
+
+  const diff = truncateDiff(sanitizeDiff(diffText));
+  const listed = staged.slice(0, 50).map((f) => (isSecretPath(f) ? `${f} ${WITHHELD}` : f));
+  const answers = await (ctx.ask ?? (jevAsk as ArchAsk))(
+    token,
+    { diff, files: listed },
+    questionsFor(untested),
+    { fetchFn: ctx.fetchFn, timeoutMs: Math.min(JEV_TIMEOUT_MS, left) }
+  );
+
+  const looksRisky = RISKY_LOOKING.test(`${staged.join("\n")}\n${diff}`);
+  if (!answers) {
+    if (!looksRisky) return SILENT;
+    return { block: false, message: reviewMessage("Jev was unavailable and this staged diff looks risky.") };
+  }
+
+  const { flagged, lowConfidence } = triage(answers);
+  const parts: string[] = [];
+  let escalated = false;
+
+  if (flagged.length > 0) {
+    escalated = true;
+    const why = flagged.map((f) => `${f.label} (P=${f.probability.toFixed(2)})`).join("; ");
+    parts.push(reviewMessage(`Jev flags this staged diff: ${why}.`));
+  } else if (lowConfidence && looksRisky) {
+    parts.push(reviewMessage("Jev was unsure about this staged diff and it looks risky."));
+  }
+
+  const coverage = coverageEntries(answers, untested);
+  if (coverage.length > 0) parts.push(coverageMessage(coverage));
+
+  if (parts.length === 0) return SILENT;
+  return { block: ctx.mode === "block" && escalated, message: parts.join("\n\n") };
+}
+
+function withWarning(decision: CommitCheckDecision, warning: string | null): CommitCheckDecision {
+  if (warning === null) return decision;
+  return { ...decision, message: [decision.message, warning].filter((part) => part !== undefined).join("\n\n") };
+}
+
 export async function commitCheckDecision(payload: unknown, ctx: CommitCheckContext): Promise<CommitCheckDecision> {
   const startedAt = ctx.now();
   try {
@@ -379,12 +463,8 @@ export async function commitCheckDecision(payload: unknown, ctx: CommitCheckCont
     const invocation = parseGitCommit(input.command);
     if (!invocation) return SILENT;
 
-    const token = await ctx.token();
-    if (!token) return SILENT;
-
     const base = typeof payload.cwd === "string" ? payload.cwd : process.cwd();
     const cwd = resolve(base, ...invocation.dirs);
-    // `git commit -a` stages tracked changes at commit time, so the index alone would miss them.
     const against = invocation.all ? ["HEAD"] : ["--cached"];
     const [names, diffText] = await Promise.all([
       ctx.git(cwd, ["diff", ...against, "--name-only", "--no-ext-diff"]),
@@ -392,48 +472,8 @@ export async function commitCheckDecision(payload: unknown, ctx: CommitCheckCont
     ]);
     if (names === null || diffText === null || diffText.trim() === "") return SILENT;
 
-    const staged = names.split("\n").filter((f) => f !== "");
-    const hasStagedTest = staged.some(isTestPath);
-    const untested = hasStagedTest
-      ? []
-      : staged.filter((f) => isSourcePath(f) && !isSecretPath(f)).slice(0, MAX_TEST_QUESTIONS);
-
-    const left = HOOK_BUDGET_MS - BUDGET_MARGIN_MS - (ctx.now() - startedAt);
-    if (left <= 0) return SILENT;
-
-    const diff = truncateDiff(sanitizeDiff(diffText));
-    const listed = staged.slice(0, 50).map((f) => (isSecretPath(f) ? `${f} ${WITHHELD}` : f));
-    const answers = await (ctx.ask ?? (jevAsk as ArchAsk))(
-      token,
-      { diff, files: listed },
-      questionsFor(untested),
-      { fetchFn: ctx.fetchFn, timeoutMs: Math.min(JEV_TIMEOUT_MS, left) }
-    );
-
-    const looksRisky = RISKY_LOOKING.test(`${staged.join("\n")}\n${diff}`);
-    if (!answers) {
-      // Unreachable Jev must not wave a sensitive-looking commit through unremarked, but it never blocks.
-      if (!looksRisky) return SILENT;
-      return { block: false, message: reviewMessage("Jev was unavailable and this staged diff looks risky.") };
-    }
-
-    const { flagged, lowConfidence } = triage(answers);
-    const parts: string[] = [];
-    let escalated = false;
-
-    if (flagged.length > 0) {
-      escalated = true;
-      const why = flagged.map((f) => `${f.label} (P=${f.probability.toFixed(2)})`).join("; ");
-      parts.push(reviewMessage(`Jev flags this staged diff: ${why}.`));
-    } else if (lowConfidence && looksRisky) {
-      parts.push(reviewMessage("Jev was unsure about this staged diff and it looks risky."));
-    }
-
-    const coverage = coverageEntries(answers, untested);
-    if (coverage.length > 0) parts.push(coverageMessage(coverage));
-
-    if (parts.length === 0) return SILENT;
-    return { block: ctx.mode === "block" && escalated, message: parts.join("\n\n") };
+    const change: StagedChange = { staged: names.split("\n").filter((f) => f !== ""), diffText };
+    return withWarning(await jevVerdict(change, ctx, startedAt), commentWarning(diffText));
   } catch {
     return SILENT;
   }

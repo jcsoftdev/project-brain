@@ -129,6 +129,7 @@ describe("guidance units", () => {
       "hooks:index-maintenance",
       "hooks:routing",
       "hooks:session-title",
+      "hooks:style-guard",
       "hooks:suggest",
       "hooks:worktree",
       "hooks:worktree-sweep",

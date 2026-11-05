@@ -102,7 +102,7 @@ const SKILL_DESCRIPTIONS: Record<string, string> = {
   "brain-commit": "writes commit messages in the convention the repository already uses",
   "brain-okf": "records the reasoning behind code as an Open Knowledge Format concept",
   "brain-record": "records a branch's flow as video evidence for a PR or ticket",
-  "brain-style": "keeps generated code declarative — comments only where the code cannot speak",
+  "brain-style": "keeps generated code architecture-first and declarative — no comments, the why goes to the commit or the knowledge bundle",
   "brain-worktree": "gives an isolated worktree its own brain and its own port",
 };
 
@@ -665,6 +665,21 @@ export function guidanceUnits(): SetupUnit[] {
         },
       })
     ),
+
+    hookUnit({
+      id: "hooks:style-guard",
+      label: "Coding rules guard",
+      description:
+        "the first time an agent (the session or a sub-agent) edits a code file, injects the installed brain-style skill " +
+        "so the rules arrive when code is written (Claude Code only); warn-only, local, once per session and agent; " +
+        "for a file type it cannot classify and with a TypeSafe token it asks Jev, sending only the file path to api.typesafe.ai",
+      probe: "project-brain style-guard",
+      strictOf: () => false,
+      load: async () => {
+        const m = await import("../hooks/claude-settings.js");
+        return { upsert: m.upsertStyleGuardHooks, remove: m.removeStyleGuardHooks };
+      },
+    }),
 
     hookUnit({
       id: "hooks:browser-route",
