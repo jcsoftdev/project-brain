@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { SpawnFn } from "../bench/mine.js";
+import { cloneDependencies, type DependencyOutcome } from "./worktree-dependencies.js";
 import { resolveDefaultBranch, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 
 /** Where worktrees live, relative to the main checkout. */
@@ -391,6 +392,7 @@ export interface CreateResult {
   path: string;
   branch: string;
   status: WorktreeStatus;
+  dependencies: DependencyOutcome;
 }
 
 const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -415,8 +417,11 @@ export async function createWorktree(deps: LifecycleDeps, options: CreateOptions
   const add = git(deps, repo.mainRoot, ["worktree", "add", path, "-b", branch, ...(options.base ? [options.base] : [])]);
   if (!add.ok) throw new Error(add.err || "git worktree add failed");
 
+  const dependencies = cloneDependencies(repo.mainRoot, path, deps.spawn);
+  if (dependencies.cloned) excludeLocally(deps, repo.mainRoot, ["/node_modules/"]);
+
   await options.init(safeRealpath(path));
-  return { path: safeRealpath(path), branch, status: await worktreeStatus(path, deps.spawn) };
+  return { path: safeRealpath(path), branch, status: await worktreeStatus(path, deps.spawn), dependencies };
 }
 
 /**

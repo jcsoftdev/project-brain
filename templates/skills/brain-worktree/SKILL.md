@@ -44,6 +44,16 @@ only the files that actually differ get embedded. It copies nothing when the mai
 has no index, when the worktree already has one, or when the two would disagree about the
 embedding model, and a full index in those cases is the correct answer, not a failure.
 
+## Dependencies
+
+`worktree create` also gives the worktree the main checkout's `node_modules` without a
+second copy on disk. When the main checkout has one, the lockfile content hash matches
+the worktree's, and Node major, platform and arch are the same, it clones the folder
+copy-on-write (`cp -c -R` on macOS/APFS, `cp --reflink=always` on Linux). A clone is
+independent: changing a dependency inside the worktree never touches the main checkout.
+When any condition fails, or the filesystem cannot clone, nothing is copied (never a full
+copy) and `create` prints one line saying why; install in the worktree as before.
+
 ## The one identifier rule
 
 `project-brain worktree status --json` returns both spellings. They are not
