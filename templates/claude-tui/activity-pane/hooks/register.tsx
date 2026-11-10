@@ -10,6 +10,7 @@ import type {
   CambiosScope,
   CommitRecord,
   ContextUsage,
+  StepContext,
   Decision,
   DiffPatch,
   DiffRow,
@@ -97,6 +98,7 @@ const changes = atom({ plugin: 'project-brain-activity', key: 'changes' } as con
 const openFiles = atom({ plugin: 'project-brain-activity', key: 'openFiles' } as const, [] as string[], { shape: 'open-files-2' })
 const diffs = atom({ plugin: 'project-brain-activity', key: 'diffs' } as const, {} as Record<string, DiffPatch>, { shape: 'diffs-2' })
 const costUsd = atom({ plugin: 'project-brain-activity', key: 'costUsd' } as const, 0, { shape: 'cost-1' })
+const stepContext = atom({ plugin: 'project-brain-activity', key: 'stepContext' } as const, {} as Record<string, StepContext>, { shape: 'step-context-1' })
 const contextUsage = atom({ plugin: 'project-brain-activity', key: 'context' } as const, { window: 0 } as ContextUsage, { shape: 'context-2' })
 const agents = atom({ plugin: 'project-brain-activity', key: 'agents' } as const, [] as AgentRecord[], { shape: 'agents-1' })
 const pickedAgent = atom({ plugin: 'project-brain-activity', key: 'pickedAgent' } as const, '', { shape: 'picked-1' })
@@ -174,10 +176,22 @@ export const contextPercentOf = (usage: ContextUsage): number | undefined =>
   usage.tokens === undefined || usage.window <= 0 ? undefined : (usage.percent ?? (usage.tokens / usage.window) * 100)
 
 export const contextLabel = (usage: ContextUsage): string => {
-  if (usage.window <= 0) return 'Contexto: sin medir'
+  if (usage.window <= 0) return usage.tokens === undefined ? 'Contexto: sin medir' : `Contexto: ${compact(usage.tokens)} tokens`
   const percent = contextPercentOf(usage)
   const tokens = usage.tokens === undefined ? '—' : compact(usage.tokens)
   return `Contexto: ${tokens} / ${compact(usage.window)} tokens${percent === undefined ? '' : ` (${Math.round(percent)} %)`}`
+}
+
+/**
+ * The context of the selected loop: the session's own figures for the main loop; for a subagent, its last
+ * model request (input + cache written + cache read) over the main window when it runs the same model.
+ */
+export const scopedContext = (snap: Pick<Snapshot, 'context' | 'steps'>, scope: string): ContextUsage => {
+  if (scope === MAIN) return snap.context
+  const own = snap.steps[scope]
+  if (own === undefined) return { window: snap.context.window }
+  const sameModel = snap.steps[MAIN] !== undefined && snap.steps[MAIN].model === own.model
+  return sameModel ? { tokens: own.tokens, window: snap.context.window } : { tokens: own.tokens, window: 0 }
 }
 
 export const contextBar = (percent: number | undefined): string => {
@@ -761,6 +775,7 @@ export type Snapshot = {
   files: FileChange[]
   usd: number
   context: ContextUsage
+  steps: Record<string, StepContext>
   opened: string[]
   patches: Record<string, DiffPatch>
   records: AgentRecord[]
@@ -1013,10 +1028,11 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
 
   const decisions = scoped.flatMap(one => one.decisions ?? [])
   const readFiles = distinct(scoped.filter(one => one.tool === 'Read').map(one => one.file)).reverse()
-  const percent = contextPercentOf(snap.context)
+  const usage = scopedContext(snap, scope)
+  const percent = contextPercentOf(usage)
   const contextRow = (key: string, indent: string): Row => {
-    const label = contextLabel(snap.context)
-    const hint = ' de la última respuesta'
+    const label = contextLabel(usage)
+    const hint = scope === MAIN ? ' de la última respuesta' : ' de la última respuesta de este agente'
     const used = indent.length + 2 + 11 + label.length
     return {
       key,
@@ -1025,7 +1041,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
           span(`${indent}${ICONS.gauge} `),
           span(`${contextBar(percent)} `, { color: contextTone(percent) }),
           span(fit(label, width - indent.length - 13)),
-          ...(snap.context.tokens !== undefined && used + hint.length <= width ? [span(hint, { dim: true })] : []),
+          ...(usage.tokens !== undefined && used + hint.length <= width ? [span(hint, { dim: true })] : []),
         ],
       }],
     }
@@ -1190,6 +1206,16 @@ export const register: Register = on => {
     return next(e)
   })
 
+  on('turn.step', async function* ($, e, next) {
+    const result = yield* next(e)
+    const used = result?.usage
+    if (used) {
+      const tokens = used.input_tokens + used.cache_creation_input_tokens + used.cache_read_input_tokens
+      await update($, stepContext, all => ({ ...all, [e.agentId ?? MAIN]: { tokens, model: used.model } })).catch(() => undefined)
+    }
+    return result
+  })
+
   on('turn.start', async ($, e, next) => {
     const loopId = e.agentId
     if (loopId === undefined) await update($, working, () => true)
@@ -1236,11 +1262,11 @@ export const register: Register = on => {
   })
 
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView] = await Promise.all([
+    const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps] = await Promise.all([
       read($, entries), read($, tabs), read($, toggled), read($, changes), read($, costUsd), read($, contextUsage), read($, openFiles), read($, diffs),
-      read($, agents), read($, pickedAgent), read($, working), read($, scroll), read($, commits), read($, scopes), read($, branch),
+      read($, agents), read($, pickedAgent), read($, working), read($, scroll), read($, commits), read($, scopes), read($, branch), read($, stepContext),
     ])
-    const snap: Snapshot = { list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view }
+    const snap: Snapshot = { list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view }
     const frame = paneFrame(buildPane(snap, 80), e.bodyRows, view, false)
     if (!frame.isWindowed) return next(e)
     const isJump = Math.abs(e.by) === e.contentRows && e.contentRows !== e.bodyRows
@@ -1439,11 +1465,11 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView] = await Promise.all([
+    const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps] = await Promise.all([
       read($, entries), read($, tabs), read($, toggled), read($, changes), read($, costUsd), read($, contextUsage), read($, openFiles), read($, diffs),
-      read($, agents), read($, pickedAgent), read($, working), read($, scroll), read($, commits), read($, scopes), read($, branch),
+      read($, agents), read($, pickedAgent), read($, working), read($, scroll), read($, commits), read($, scopes), read($, branch), read($, stepContext),
     ])
-    const snap: Snapshot = { list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view }
+    const snap: Snapshot = { list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view }
     const width = Math.max(1, e.props.bodyColumns)
     const model = buildPane(snap, width)
     const frame = paneFrame(model, e.props.scroll.bodyRows, view, e.props.placement === 'dock')

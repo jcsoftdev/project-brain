@@ -71,6 +71,8 @@ export type DiffPatch = { rows: DiffRow[]; total: number }
 
 export type ContextUsage = { tokens?: number; window: number; percent?: number }
 
+export type StepContext = { tokens: number; model: string }
+
 export type EditorState = { dir: string; tab: string }
 
 declare module 'claude-code' {
@@ -82,6 +84,7 @@ declare module 'claude-code' {
       changes: Shaped<FileChange[]>
       costUsd: Shaped<number>
       context: Shaped<ContextUsage>
+      stepContext: Shaped<Record<string, StepContext>>
       openFiles: Shaped<string[]>
       diffs: Shaped<Record<string, DiffPatch>>
       agents: Shaped<AgentRecord[]>
