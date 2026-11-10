@@ -115,7 +115,7 @@ let autoOpenSent = false
 // ---------------------------------------------------------------- text
 
 const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007]*(?:\u0007|\u001b\\)|\u001b[@-_]/g
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
 export const clean = (value: string): string => value.replace(ANSI, '').replace(/\t/g, '  ').replace(CONTROL, '')
 
 const text = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined)
@@ -353,11 +353,11 @@ export const diffRows = (patch: string): DiffRow[] => {
 // ---------------------------------------------------------------- git loaders
 
 export type RunResult = { exitCode: number; stdout: string; stderr: string }
-export type Run = (argv: readonly string[], init?: { cwd?: string; timeoutMs?: number }) => Promise<RunResult>
+export type Run = (argv: readonly string[], init?: { cwd?: string; timeoutMs?: number; stdin?: string }) => Promise<RunResult>
 export type ReadText = (path: string) => Promise<string>
 
-const quietly = (run: Run, argv: readonly string[], cwd?: string): Promise<RunResult | undefined> =>
-  run(argv, cwd === undefined ? undefined : { cwd }).catch(() => undefined)
+const quietly = (run: Run, argv: readonly string[], cwd?: string, stdin?: string): Promise<RunResult | undefined> =>
+  run(argv, cwd === undefined && stdin === undefined ? undefined : { ...(cwd === undefined ? {} : { cwd }), ...(stdin === undefined ? {} : { stdin }) }).catch(() => undefined)
 
 export const gitTop = async (run: Run, cwd?: string): Promise<string | undefined> => {
   const found = await quietly(run, ['git', 'rev-parse', '--show-toplevel'], cwd)
@@ -447,7 +447,8 @@ export const fetchDiff = async (run: Run, top: string, target: DiffTarget): Prom
 /** POSIX single quoting: the one quoting helper every command string uses. */
 export const shQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`
 
-const SAFE_PATH = /^[^\u0000-\u001f\u007f]+$/
+const SAFE_PATH = /^[^\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]+$/
+const SAFE_DIR = /^[\w./-]+$/
 const SAFE_BASE = /^(?:HEAD|[0-9a-f]{7,64})(?:~1)?$/
 const SAFE_TAB = /^[\w-]{1,64}$/
 
@@ -480,11 +481,12 @@ export const openInEditor = async (run: Run, exists: (path: string) => Promise<b
   const env = await readEnv(run)
 
   let dir = request.editor.dir
+  if (dir !== '' && !(await isPrivateDir(run, dir))) dir = ''
   if (dir === '' || !(await exists(dir).catch(() => false))) {
     const base = (env.XDG_RUNTIME_DIR || env.TMPDIR || '/tmp').replace(/\/+$/, '')
     const made = await quietly(run, ['mktemp', '-d', `${base}/pb-nvim.XXXXXX`])
     dir = made?.exitCode === 0 ? made.stdout.trim() : ''
-    if (dir === '' || !SAFE_PATH.test(dir)) return { ok: false, message: 'No se pudo crear la carpeta privada del editor.' }
+    if (dir === '' || !SAFE_DIR.test(dir)) return { ok: false, message: 'No se pudo crear la carpeta privada del editor.' }
   }
   const sock = `${dir}/nvim.sock`
   const state: EditorState = { dir, tab: dir === request.editor.dir ? request.editor.tab : '' }
@@ -500,7 +502,11 @@ export const openInEditor = async (run: Run, exists: (path: string) => Promise<b
   }
 
   await quietly(run, ['rm', '-f', '--', sock])
-  const start = `cd ${shQuote(request.top)} && nvim --listen ${shQuote(sock)} ${shQuote(`+${diffCommand(request.base)}`)} -- ${shQuote(file)}`
+  const launcher = `${dir}/open.sh`
+  const script = `#!/bin/sh\ncd ${shQuote(request.top)} && exec nvim --listen ${shQuote(sock)} ${shQuote(`+${diffCommand(request.base)}`)} -- ${shQuote(file)}\n`
+  const written = await quietly(run, ['sh', '-c', 'umask 077 && cat > "$1"', 'write-launcher', launcher], undefined, script)
+  if (written?.exitCode !== 0) return { ok: false, message: 'No se pudo preparar el editor.', editor: state }
+  const start = `/bin/sh ${launcher}`
   if (env.SUPACODE_SOCKET_PATH !== '') {
     const split = await quietly(run, ['supacode', 'pane', 'split', '-d', 'h', '-i', start])
     if (split?.exitCode === 0) {
@@ -509,7 +515,7 @@ export const openInEditor = async (run: Run, exists: (path: string) => Promise<b
     }
   }
   if (env.TMUX !== '') {
-    const split = await quietly(run, ['tmux', 'split-window', '-h', '-c', request.top, start])
+    const split = await quietly(run, ['tmux', 'split-window', '-h', start])
     if (split?.exitCode === 0) return { ok: true, editor: { dir, tab: '' } }
   }
   const terminal = await quietly(run, [
@@ -517,13 +523,20 @@ export const openInEditor = async (run: Run, exists: (path: string) => Promise<b
     '-e', 'on run argv',
     '-e', 'tell application "Terminal" to do script (item 1 of argv)',
     '-e', 'end run',
-    // `start` always opens with `cd `, so it can never read as an option; man osascript
-    // documents `-e` as ending the file lookup, and is silent on `--`.
     start,
   ])
   return terminal?.exitCode === 0
     ? { ok: true, editor: { dir, tab: '' } }
     : { ok: false, message: 'No se pudo abrir el editor (sin Supacode, tmux ni Terminal).', editor: { dir, tab: '' } }
+}
+
+/** The socket directory is reused only while it is still ours: a directory, owned by this user, mode 0700. */
+const isPrivateDir = async (run: Run, dir: string): Promise<boolean> => {
+  if (!SAFE_DIR.test(dir)) return false
+  const uid = (await quietly(run, ['id', '-u']))?.stdout.trim() ?? ''
+  if (!/^\d+$/.test(uid)) return false
+  const found = await quietly(run, ['find', dir, '-maxdepth', '0', '-type', 'd', '-user', uid, '-perm', '700'])
+  return found?.exitCode === 0 && found.stdout.trim() === dir
 }
 
 export const editorBase = (target: DiffTarget): string =>
@@ -1309,7 +1322,10 @@ export const register: Register = on => {
     const refresh = async () => {
       const top = await gitTop(run)
       if (top === undefined) return
-      const fileList = await loadUncommitted(run, top, path => $.fs.read(path))
+      const fileList = await loadUncommitted(run, top, async path => {
+        const info = await $.fs.stat(path)
+        return info.isLink || info.kind !== 'file' || info.size > 2_000_000 ? Promise.reject(new Error('skipped')) : $.fs.read(path)
+      })
       if (fileList !== undefined) await update($, changes, () => fileList)
 
       for (const key of await read($, openFiles)) {
