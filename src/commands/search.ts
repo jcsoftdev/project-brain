@@ -3,6 +3,7 @@ import type { Reranker } from "../rerank/jev.js";
 import { featureEnabled } from "../features.js";
 import { handleSearch } from "../tools/search.js";
 import { isNonCodePrompt } from "./trivial-prompt.js";
+import type { InjectedLedger } from "../hooks/injected.js";
 
 /**
  * Hook budget: the UserPromptSubmit race in {@link execute} below gives up
@@ -22,20 +23,22 @@ export const HOOK_TIMEOUT_MS = 4000;
  * Never throws.
  */
 export function parsePromptFromStdin(raw: string): string {
-  if (!raw.trim()) return "";
+  return parseHookStdin(raw).prompt;
+}
+
+/** `prompt` and `session_id` of the UserPromptSubmit payload; empty/undefined on any malformed input. Never throws. */
+export function parseHookStdin(raw: string): { prompt: string; sessionId?: string } {
+  if (!raw.trim()) return { prompt: "" };
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return "";
-    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { prompt: "" };
     const obj = parsed as Record<string, unknown>;
-    return typeof obj.prompt === "string" ? obj.prompt : "";
+    return {
+      prompt: typeof obj.prompt === "string" ? obj.prompt : "",
+      ...(typeof obj.session_id === "string" && obj.session_id !== "" ? { sessionId: obj.session_id } : {}),
+    };
   } catch {
-    return "";
+    return { prompt: "" };
   }
 }
 
@@ -76,7 +79,24 @@ export interface SearchDeps {
   dbPath?: string;
   /** Optional Jev reranker — absent means opt-out (no token configured), never an error. */
   reranker?: Reranker;
+  /** Snippets this session was already given (hook path only); they are not injected again. */
+  ledger?: InjectedLedger | null;
 }
+
+interface Hit {
+  chunk_id?: string;
+  source: string;
+  symbol?: string;
+  signature?: string;
+  snippet: string;
+  score: number;
+  start_line?: number;
+  end_line?: number;
+}
+
+/** A snippet's identity across prompts: its file and line range, which survive a re-index that renames chunk ids. */
+const hitKey = (r: Hit): string =>
+  r.start_line != null && r.end_line != null ? `${r.source}#L${r.start_line}-${r.end_line}` : (r.chunk_id ?? `${r.source}#${r.symbol ?? ""}`);
 
 /**
  * Core search logic — DI-friendly for testing.
@@ -97,20 +117,10 @@ export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<voi
     // Embeddings unavailable or retrieval error → print nothing
     if (result.isError) return;
 
-    const parsed = JSON.parse(result.content[0].text) as {
-      results?: Array<{
-        chunk_id?: string;
-        source: string;
-        symbol?: string;
-        signature?: string;
-        snippet: string;
-        score: number;
-        start_line?: number;
-        end_line?: number;
-      }>;
-    };
+    const parsed = JSON.parse(result.content[0].text) as { results?: Hit[] };
 
-    const results = (parsed.results ?? []).filter((r) => r.score >= (deps.reranker ? minScore : 0)).slice(0, maxHits);
+    const relevant = (parsed.results ?? []).filter((r) => r.score >= (deps.reranker ? minScore : 0)).slice(0, maxHits);
+    const results = deps.ledger ? relevant.filter((r) => !deps.ledger!.seen.has(hitKey(r))) : relevant;
     if (results.length === 0) return;
 
     // Build compact markdown block
@@ -139,6 +149,7 @@ export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<voi
 
     lines.push("</project-brain>");
     console.log(lines.join("\n"));
+    await deps.ledger?.remember(results.map(hitKey));
 
     if (deps.dbPath) {
       const { clearLastError } = await import("../store/error-state.js");
@@ -194,14 +205,14 @@ export async function execute(
       }
 
       let query: string;
+      let sessionId: string | undefined;
       const gate = featureEnabled("search-gate");
 
       if (useStdin) {
         // Read ALL of stdin, parse JSON, use .prompt as query.
         // Any failure (empty, bad JSON, missing .prompt) → no-op.
         try {
-          const raw = await readStdin();
-          query = parsePromptFromStdin(raw);
+          ({ prompt: query, sessionId } = parseHookStdin(await readStdin()));
         } catch {
           return;
         }
@@ -279,7 +290,11 @@ export async function execute(
         const maxHits = envNumber("PROJECT_BRAIN_SEARCH_MAX_HITS", HOOK_MAX_HITS, (n) => Number.isInteger(n) && n > 0);
         const hookGate = useStdin && gate ? { minScore, maxHits } : {};
 
-        await runSearch({ query, project, limit, ...hookGate }, { store, embeddings, dbPath: DB_PATH, reranker });
+        const { DATA_DIR } = await import("../constants.js");
+        const { openLedger } = await import("../hooks/injected.js");
+        const ledger = useStdin ? await openLedger(DATA_DIR, sessionId, "search") : null;
+
+        await runSearch({ query, project, limit, ...hookGate }, { store, embeddings, dbPath: DB_PATH, reranker, ledger });
       };
 
       // Skill/tool suggestions are not made here: `project-brain suggest --stdin` owns them,

@@ -45,7 +45,7 @@ export interface SwapRecord {
 const sessionsDir = (dataDir: string) => join(dataDir, "sessions");
 const swapsDir = (dataDir: string) => join(dataDir, "swaps");
 // A session id is the host's, so it is made safe to use as a file name rather than trusted to be.
-const sessionFile = (dataDir: string, id: string) => join(sessionsDir(dataDir), `${id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 120)}.json`);
+export const sessionFile = (dataDir: string, id: string) => join(sessionsDir(dataDir), `${id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 120)}.json`);
 
 async function readJson<T>(file: string, fallback: T): Promise<T> {
   try {
@@ -59,7 +59,7 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
  * Drop entries older than a week. Decided from mtime alone, in parallel, and at most once a day
  * (a marker file), so SessionStart does not pay for a directory of thousands of sessions.
  */
-async function pruneOld(dir: string, now: number, keep = Infinity): Promise<void> {
+export async function pruneOld(dir: string, now: number, keep = Infinity): Promise<void> {
   const marker = join(dir, ".pruned");
   const last = await stat(marker).then((s) => s.mtimeMs, () => 0);
   if (now - last < PRUNE_EVERY_MS) return;

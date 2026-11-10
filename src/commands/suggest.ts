@@ -93,6 +93,21 @@ export interface SuggestDeps {
   claimNotice?: (sessionId: string, kind: "clear" | "compact") => Promise<boolean>;
   /** The one-time "project-brain updated" block for this session, or null. Injectable for tests. */
   upgradeNotice?: (input: HookInput) => Promise<{ text: string; commit: () => Promise<void> } | null>;
+  /** Where the session's already-injected suggestions are kept. Defaults to DATA_DIR. */
+  dataDir?: string;
+}
+
+/** A suggestion's identity across prompts: its kind and name, not the description Jev may word differently. */
+const suggestionKey = (line: string): string => line.split(" — ")[0]!;
+
+/** Never throws: no ledger means every suggestion is shown, as before dedup existed. */
+async function suggestLedger(sessionId: string | undefined, deps: SuggestDeps) {
+  try {
+    const { openLedger } = await import("../hooks/injected.js");
+    return await openLedger(deps.dataDir ?? (await import("../constants.js")).DATA_DIR, sessionId, "suggest");
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -234,7 +249,9 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
       queryEmbedding: vector,
       ...(task ? { taskSwitch: { recent: task.recent, ...(task.assistant ? { assistant: task.assistant } : {}) }, onTaskSwitch: (p: Record<string, number>) => (switchProbabilities = p) } : {}),
     });
-    for (const line of lines) if (line) out.push(line);
+    const ledger = await suggestLedger(input.sessionId, deps);
+    const fresh = lines.filter((line) => line && !ledger?.seen.has(suggestionKey(line)));
+    out.push(...fresh);
 
     const { decideTaskSwitch, taskSwitchMessage } = await import("../hooks/task-switch.js");
     let message: string | null = null;
@@ -245,6 +262,7 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
       message = first ? taskSwitchMessage(verdict, task.usedPct, prompt) : null;
     }
     await flush(message);
+    await ledger?.remember(fresh.map(suggestionKey));
   } catch {
     // A suggestion hook must never disturb the prompt.
   }

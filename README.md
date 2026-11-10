@@ -616,11 +616,14 @@ echo "how does auth work" | project-brain search --stdin
 
 The hook only injects when it is likely to help. Before any embedding work it skips prompts that carry no code question: very short prompts (under 3 words or 15 characters, unless they name a code identifier), acknowledgements and continuations in English and Spanish ("ok", "sí", "continúa", "commit y push"), slash-command echoes, and pasted harness or agent reports. Hits scoring below 0.5 are dropped and at most 5 are kept; if nothing survives, nothing is printed. The plain CLI `search "<q>"` is not gated.
 
+Hook output stays in the conversation, so a snippet is injected once per Claude Code session: later prompts skip the ones already given (identified by file and line range) and print nothing when every relevant hit was already injected. The skill/tool suggestion hook does the same per suggested name. The record lives in `~/.project-brain/sessions/<session_id>.search-injected.json` and `.suggest-injected.json` (newest 500 entries, pruned with the session after 7 days), and the routing `SessionStart` hook (unit `hooks:routing`) clears it after `/compact` or `/clear`, since that context is gone. Without that hook nothing could clear it, so a session it never recorded is not deduplicated.
+
 | Variable | Default | Effect |
 |---|---|---|
 | `PROJECT_BRAIN_SEARCH_MIN_SCORE` | `0.5` | Minimum reranker score (0-1) a hit needs to be injected; ignored without a reranker token, where only `PROJECT_BRAIN_SEARCH_MAX_HITS` applies |
 | `PROJECT_BRAIN_SEARCH_MAX_HITS` | `5` | Maximum snippets injected |
 | `PROJECT_BRAIN_SEARCH_PROMPT_FILTER` | on | Set to `0` to search every prompt, including non-code ones |
+| `PROJECT_BRAIN_CONTEXT_DEDUP` | on | Set to `0` to inject snippets and suggestions on every prompt, even when the session already has them |
 
 ### Structural & lexical commands (`find`, `callers`, `callees`, `impact`, `trace`, `map`, `code`)
 
