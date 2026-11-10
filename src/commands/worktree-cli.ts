@@ -100,7 +100,7 @@ async function create(args: string[], deps: LifecycleDeps): Promise<void> {
     return;
   }
   const skipIndex = args.includes("--skip-index");
-  const { path, branch, status } = await createWorktree(deps, {
+  const { path, branch, status, dependencies } = await createWorktree(deps, {
     name,
     base: flagValue(args, "--base"),
     branch: flagValue(args, "--branch"),
@@ -113,6 +113,7 @@ async function create(args: string[], deps: LifecycleDeps): Promise<void> {
     },
   });
   console.log(`Created ${path} on branch ${branch}`);
+  console.log(dependencies.note);
   console.log(`projectId  ${status.projectId}`);
   console.log(`port-registry pair: project="${status.project}" worktree="${status.worktree}"`);
 }
