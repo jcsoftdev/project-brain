@@ -161,8 +161,4 @@ async function recordThisSession(readSessionId: () => Promise<SessionStartInput 
   const { DATA_DIR, VERSION } = await import("../constants.js");
   const { recordSession } = await import("./session-versions.js");
   await recordSession(dataDir ?? DATA_DIR, input.sessionId, VERSION, Date.now(), input.source);
-  if (input.source === "compact" || input.source === "clear") {
-    const { forgetInjected } = await import("./injected.js");
-    await forgetInjected(dataDir ?? DATA_DIR, input.sessionId);
-  }
 }
