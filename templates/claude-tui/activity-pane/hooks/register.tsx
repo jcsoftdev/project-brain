@@ -833,7 +833,10 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
   const commands = scoped.filter(one => one.command !== undefined)
   const lastCommand = commands.at(-1)
   const edited = distinct(scoped.filter(one => CHANGE_TOOLS.has(one.tool)).map(one => one.file))
-  const scopedFiles = scope === MAIN ? snap.files : snap.files.filter(change => touches(change, edited))
+  const sessionEdited = distinct(list.filter(one => CHANGE_TOOLS.has(one.tool)).map(one => one.file))
+  const visibleFiles = snap.files.filter(change => !change.untracked || touches(change, sessionEdited))
+  const hiddenUntracked = snap.files.length - visibleFiles.length
+  const scopedFiles = scope === MAIN ? visibleFiles : visibleFiles.filter(change => touches(change, edited))
   const waiting = list.some(one => one.tool === 'AskUserQuestion' && one.status === 'running')
 
   const isOpen = (key: string, byDefault: boolean): boolean => byDefault !== flipped.includes(key)
@@ -951,8 +954,11 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
   }
 
   const uncommittedRows = (): Row[] => {
-    if (scopedFiles.length === 0) return [line('no-changes', scope === MAIN ? 'Sin cambios sin commitear.' : 'Este agente no tiene cambios sin commitear.', { dim: true })]
-    return scopedFiles.flatMap(file => fileRows({ scope: 'uncommitted', path: file.path, ...(file.untracked ? { untracked: true } : {}) }, file, ''))
+    const hidden = scope === MAIN && hiddenUntracked > 0
+      ? [line('hidden-untracked', `${hiddenUntracked} archivos sin seguimiento de antes de la sesión, ocultos`, { dim: true })]
+      : []
+    if (scopedFiles.length === 0) return [line('no-changes', scope === MAIN ? 'Sin cambios sin commitear.' : 'Este agente no tiene cambios sin commitear.', { dim: true }), ...hidden]
+    return [...scopedFiles.flatMap(file => fileRows({ scope: 'uncommitted', path: file.path, ...(file.untracked ? { untracked: true } : {}) }, file, '')), ...hidden]
   }
 
   const commitRows = (): Row[] => {
