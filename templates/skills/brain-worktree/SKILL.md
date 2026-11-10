@@ -47,12 +47,16 @@ embedding model, and a full index in those cases is the correct answer, not a fa
 ## Dependencies
 
 `worktree create` also gives the worktree the main checkout's `node_modules` without a
-second copy on disk. When the main checkout has one, the lockfile content hash matches
-the worktree's, it clones the folder
-copy-on-write (`cp -c -R` on macOS/APFS, `cp --reflink=always` on Linux). A clone is
-independent: changing a dependency inside the worktree never touches the main checkout.
-When any condition fails, or the filesystem cannot clone, nothing is copied (never a full
-copy) and `create` prints one line saying why; install in the worktree as before.
+second copy on disk: the root one and every workspace package's (from `package.json`
+`workspaces` or `pnpm-workspace.yaml`), each only where that package exists in the worktree
+and has none yet. It clones them copy-on-write (`cp -c -R` on macOS/APFS,
+`cp --reflink=always` on Linux). A clone is independent: changing a dependency inside the
+worktree never touches the main checkout. When the lockfile content hash differs from the
+main checkout's, it clones anyway and then runs the lockfile's package manager install in
+the worktree (`bun`, `pnpm`, `npm` or `yarn install`), which only writes what changed. If
+that install fails or the tool is missing, every clone is removed and `create` prints one
+line saying why; install in the worktree yourself. When the filesystem cannot clone,
+nothing is copied (never a full copy) and `create` prints one line saying why.
 
 ## The one identifier rule
 

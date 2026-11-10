@@ -418,7 +418,7 @@ export async function createWorktree(deps: LifecycleDeps, options: CreateOptions
   if (!add.ok) throw new Error(add.err || "git worktree add failed");
 
   const dependencies = cloneDependencies(repo.mainRoot, path, deps.spawn);
-  if (dependencies.cloned) excludeLocally(deps, repo.mainRoot, ["/node_modules/"]);
+  if (dependencies.cloned) excludeLocally(deps, repo.mainRoot, dependencies.folders.map((folder) => `/${folder}/`));
 
   await options.init(safeRealpath(path));
   return { path: safeRealpath(path), branch, status: await worktreeStatus(path, deps.spawn), dependencies };
