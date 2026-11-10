@@ -125,10 +125,11 @@ const GROUP_BLURBS: Record<string, string> = {
   Hosts: "AI tools that get the MCP server registered and a rules file written",
   Guidance: "rules and hooks written into those tools",
   Skills: "skills installed for every detected tool",
+  "Claude TUI": "Claude Code's terminal: the activity pane (in the fullscreen renderer) and readable replies",
   Other: "machine-wide extras",
 };
 
-const GROUP_ORDER = ["Hosts", "Guidance", "Skills", "Other"];
+const GROUP_ORDER = ["Hosts", "Guidance", "Skills", "Claude TUI", "Other"];
 
 /**
  * Split the inspected rows into one section per group, in a stable order.

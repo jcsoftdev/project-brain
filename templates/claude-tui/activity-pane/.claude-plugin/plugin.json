@@ -1,0 +1,7 @@
+{
+  "name": "project-brain-activity",
+  "version": "0.1.0",
+  "description": "A side pane with each tool call's command, status and short output, so the chat can stay short.",
+  "author": { "name": "jcsoftdev" },
+  "types": "./types/index.d.ts"
+}

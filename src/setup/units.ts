@@ -70,7 +70,7 @@ export interface SetupContext {
 export interface SetupUnit {
   /** Stable across releases — it is persisted in the selection file. */
   id: string;
-  group: "Hosts" | "Guidance" | "Skills" | "Other";
+  group: "Hosts" | "Guidance" | "Skills" | "Claude TUI" | "Other";
   label: string;
   /** One line, shown beside the checkbox. */
   description: string;
@@ -1441,7 +1441,7 @@ async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, 
  * Code's.
  */
 export function allUnits(ctx: SetupContext): SetupUnit[] {
-  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit()];
+  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...claudeTuiUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit()];
 }
 
 
@@ -1619,4 +1619,85 @@ function mcpPruneUnit(): SetupUnit {
       await revertPrune(env);
     },
   };
+}
+
+/** The global rules file beside the settings file, so a redirected settings path redirects it too. */
+const claudeMdOf = (ctx: SetupContext) => join(dirname(ctx.claudeSettingsPath), "CLAUDE.md");
+
+/**
+ * The Claude Code terminal setup: the activity pane mod (with the fullscreen renderer it docks in) and the reply rules.
+ * Never `autoOnUpgrade`: each changes ~/.claude, so an upgrader sees them as new and decides.
+ */
+export function claudeTuiUnits(): SetupUnit[] {
+  return [
+    {
+      id: "tui:activity-pane",
+      group: "Claude TUI",
+      label: "Activity pane",
+      description:
+        "installs the project-brain-activity mod (right pane with todos, commands and uncommitted changes; /activity reopens it) from a local marketplace under the project-brain data dir, " +
+        'registered in ~/.claude/settings.json under extraKnownMarketplaces and enabledPlugins, and sets `tui` to "fullscreen" so the pane docks right; ' +
+        "untick to remove both entries and the files and put your previous `tui` value back",
+      defaultSelected: true,
+
+      async inspect(ctx): Promise<UnitState> {
+        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+        if (settings === "unparseable") return "foreign";
+        const { activityPaneState } = await import("./claude-tui.js");
+        return activityPaneState(settings, ctx.dataDir);
+      },
+
+      async apply(ctx): Promise<void> {
+        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+        if (settings === "unparseable") {
+          console.warn(`Warning: ${ctx.claudeSettingsPath} is not valid JSON — activity pane not installed.`);
+          return;
+        }
+        const { activityPaneState, installActivityPane } = await import("./claude-tui.js");
+        if ((await activityPaneState(settings, ctx.dataDir)) === "foreign") return;
+        const next = await installActivityPane(settings, ctx.dataDir);
+        await mkdir(dirname(ctx.claudeSettingsPath), { recursive: true });
+        await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+      },
+
+      async remove(ctx): Promise<void> {
+        const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+        if (settings === "unparseable" || settings === null) return;
+        const { uninstallActivityPane } = await import("./claude-tui.js");
+        const next = await uninstallActivityPane(settings, ctx.dataDir);
+        if (next !== settings) await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+      },
+    },
+
+    {
+      id: "tui:readable-replies",
+      group: "Claude TUI",
+      label: "Readable replies",
+      description:
+        "adds a marked block to ~/.claude/CLAUDE.md: result first, full sentences, evidence at the end, no narration between tool calls; untick to delete the block (the rest of the file is untouched)",
+      defaultSelected: true,
+
+      async inspect(ctx): Promise<UnitState> {
+        const { READABLE_REPLIES_CONTENT, READABLE_REPLIES_SECTION_ID } = await import("./claude-tui.js");
+        const { extractSection } = await import("../markers.js");
+        const text = await Bun.file(claudeMdOf(ctx)).text().catch(() => "");
+        const written = extractSection(text, READABLE_REPLIES_SECTION_ID);
+        if (written === null) return "absent";
+        return written === READABLE_REPLIES_CONTENT ? "current" : "stale";
+      },
+
+      async apply(ctx): Promise<void> {
+        const { READABLE_REPLIES_CONTENT, READABLE_REPLIES_SECTION_ID } = await import("./claude-tui.js");
+        const { writeSection } = await import("../rules/section-marker.js");
+        await mkdir(dirname(claudeMdOf(ctx)), { recursive: true });
+        await writeSection(claudeMdOf(ctx), READABLE_REPLIES_CONTENT, READABLE_REPLIES_SECTION_ID);
+      },
+
+      async remove(ctx): Promise<void> {
+        const { READABLE_REPLIES_SECTION_ID } = await import("./claude-tui.js");
+        const { removeSection } = await import("../rules/section-marker.js");
+        await removeSection(claudeMdOf(ctx), READABLE_REPLIES_SECTION_ID);
+      },
+    },
+  ];
 }
