@@ -90,14 +90,16 @@ const previousTuiPath = (dataDir: string) => join(marketplaceDir(dataDir), PREVI
 
 export type ActivityPaneState = "absent" | "current" | "stale" | "foreign";
 
-/** `foreign` when another marketplace already answers to the name; `stale` when the embedded mod changed or files are missing. */
+/**
+ * `foreign` when another marketplace already answers to the name; `stale` when the embedded mod changed or files are missing.
+ * The `tui` value is not checked: fullscreen is only the default at first install, and a later choice of the user's stands.
+ */
 export async function activityPaneState(settings: Settings | null, dataDir: string): Promise<ActivityPaneState> {
   const ownership = marketplaceOwnership(settings, dataDir);
   if (ownership === "foreign") return "foreign";
   const enabled = entriesOf(settings, "enabledPlugins")[ACTIVITY_PLUGIN_KEY];
   if (ownership === "none" && enabled === undefined) return "absent";
   if (ownership === "none" || enabled === undefined) return "stale";
-  if (settings?.[TUI_KEY] !== TUI_FULLSCREEN) return "stale";
   for (const [path, text] of Object.entries(ownedFiles(dataDir))) {
     const onDisk = await readFile(path, "utf8").catch(() => null);
     if (onDisk !== text) return "stale";
@@ -106,8 +108,8 @@ export async function activityPaneState(settings: Settings | null, dataDir: stri
 }
 
 /**
- * Writes the marketplace directory and switches Claude Code to the fullscreen renderer, the only one the pane docks right in.
- * The `tui` value it replaces is recorded once, so a re-apply never records our own "fullscreen" as the user's.
+ * Writes the marketplace directory and, at first install only, switches Claude Code to the fullscreen renderer, the only one the pane docks right in.
+ * The `tui` value it replaces is recorded then, so an update never overrides a renderer the user picked afterwards.
  * A plugin the user switched off (`false`) stays off.
  */
 export async function installActivityPane(settings: Settings | null, dataDir: string): Promise<Settings> {
@@ -115,14 +117,15 @@ export async function installActivityPane(settings: Settings | null, dataDir: st
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, text, "utf8");
   }
-  if (!existsSync(previousTuiPath(dataDir))) {
+  const isFirstInstall = !existsSync(previousTuiPath(dataDir));
+  if (isFirstInstall) {
     const previous = settings?.[TUI_KEY] === undefined ? {} : { [TUI_KEY]: settings[TUI_KEY] };
     await writeFile(previousTuiPath(dataDir), `${JSON.stringify(previous)}\n`, "utf8");
   }
   const enabled = entriesOf(settings, "enabledPlugins");
   return {
     ...(settings ?? {}),
-    [TUI_KEY]: TUI_FULLSCREEN,
+    ...(isFirstInstall ? { [TUI_KEY]: TUI_FULLSCREEN } : {}),
     extraKnownMarketplaces: { ...entriesOf(settings, "extraKnownMarketplaces"), [MARKETPLACE_NAME]: marketplaceSource(dataDir) },
     enabledPlugins: { ...enabled, [ACTIVITY_PLUGIN_KEY]: enabled[ACTIVITY_PLUGIN_KEY] ?? true },
   };
@@ -130,6 +133,7 @@ export async function installActivityPane(settings: Settings | null, dataDir: st
 
 /**
  * Drops both settings entries and the files setup wrote, and puts the previous `tui` value back unless the user changed it since.
+ * Without the record of what install replaced, `tui` is left as it is: it may be the user's own.
  * A foreign marketplace and its plugin entry are left alone.
  */
 export async function uninstallActivityPane(settings: Settings, dataDir: string): Promise<Settings> {
@@ -144,9 +148,9 @@ export async function uninstallActivityPane(settings: Settings, dataDir: string)
     if (Object.keys(rest).length === 0) delete next[key];
     else next[key] = rest;
   }
-  if (settings[TUI_KEY] === TUI_FULLSCREEN) {
+  if (settings[TUI_KEY] === TUI_FULLSCREEN && existsSync(previousTuiPath(dataDir))) {
     const previous = await readPreviousTui(dataDir);
-    if (previous === undefined) delete next[TUI_KEY];
+    if (previous === undefined || previous === null) delete next[TUI_KEY];
     else next[TUI_KEY] = previous;
   }
   const files = [...Object.keys(ownedFiles(dataDir)), previousTuiPath(dataDir)];

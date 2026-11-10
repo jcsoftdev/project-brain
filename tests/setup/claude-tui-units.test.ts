@@ -161,9 +161,23 @@ describe("tui:activity-pane fullscreen renderer", () => {
     const unit = unitOf("tui:activity-pane");
     await unit.apply(ctxFor());
     await seedSettings({ ...(await readSettings()), tui: "default" });
-    expect(await unit.inspect(ctxFor())).toBe("stale");
     await unit.remove(ctxFor());
     expect((await readSettings()).tui).toBe("default");
+  });
+
+  it("an update after the user picked another renderer keeps their choice", async () => {
+    const unit = unitOf("tui:activity-pane");
+    await unit.apply(ctxFor());
+    await seedSettings({ ...(await readSettings()), tui: "default" });
+    expect(await unit.inspect(ctxFor())).toBe("current");
+    await unit.apply(ctxFor());
+    expect((await readSettings()).tui).toBe("default");
+  });
+
+  it("remove without the install record leaves the user's own fullscreen", async () => {
+    await seedSettings({ ...USER_SETTINGS, tui: "fullscreen", enabledPlugins: { ...USER_SETTINGS.enabledPlugins, "project-brain-activity@project-brain": false } });
+    await unitOf("tui:activity-pane").remove(ctxFor());
+    expect((await readSettings()).tui).toBe("fullscreen");
   });
 });
 
