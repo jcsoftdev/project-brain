@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { Hook, Register } from 'claude-code'
 
 import type {
   AgentRecord,
@@ -8,6 +8,7 @@ import type {
   BranchView,
   CallStatus,
   CambiosScope,
+  CommitCall,
   CommitRecord,
   ContextUsage,
   StepContext,
@@ -16,6 +17,9 @@ import type {
   DiffRow,
   EditorState,
   FileChange,
+  HistoryFiles,
+  HistoryRow,
+  HistoryView,
   PaneScroll,
   Tab,
   TestFile,
@@ -34,6 +38,12 @@ const COMMIT_FILES = 100
 const BRANCH_COMMITS = 100
 const OPEN_DIFFS = 40
 const REFRESH_MS = 400
+const RESCAN_MS = 800
+const SCAN_COMMITS = 200
+const COMMIT_CALLS = 100
+const HISTORY_COMMITS = 400
+const HISTORY_FILES = 40
+const WINDOW_SLACK_MS = 2000
 const SUMMARY_FIELDS = ['command', 'file_path', 'notebook_path', 'pattern', 'url', 'query', 'description', 'prompt', 'skill'] as const
 const ENVELOPE_FIELDS = new Set(['tool', 'tool_use_id', 'agentId', 'consent', 'requestMeta'])
 const CHANGE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit'])
@@ -44,6 +54,7 @@ export const ICONS = {
   summary: '\u{F0756}',
   commands: '\u{E795}',
   diff: '\u{F4D2}',
+  history: '\u{F02A2}',
   ok: '\u{F00C}',
   error: '\u{F00D}',
   running: '\u{F0996}',
@@ -63,7 +74,7 @@ export const ICONS = {
   validate: '\u{F0668}',
   command: '\u{E795}',
   other: '\u{F0EB}',
-  history: '\u{F1DA}',
+  log: '\u{F1DA}',
   folder: '\u{F07C}',
   file: '\u{F016}',
   commit: '\u{E729}',
@@ -109,10 +120,20 @@ const scopes = atom({ plugin: 'project-brain-activity', key: 'scopes' } as const
 const branch = atom({ plugin: 'project-brain-activity', key: 'branch' } as const, { isLoaded: false, files: [], commits: [] } as BranchView, { shape: 'branch-1' })
 const autoOpen = atom({ plugin: 'project-brain-activity', key: 'autoOpen' } as const, true, { shape: 'auto-open-1' })
 const editor = atom({ plugin: 'project-brain-activity', key: 'editor' } as const, { dir: '', tab: '' } as EditorState, { shape: 'editor-1' })
+const sessionStart = atom({ plugin: 'project-brain-activity', key: 'sessionStart' } as const, 0, { shape: 'session-start-1' })
+const commitCalls = atom({ plugin: 'project-brain-activity', key: 'commitCalls' } as const, [] as CommitCall[], { shape: 'commit-calls-1' })
+const history = atom({ plugin: 'project-brain-activity', key: 'history' } as const, { state: 'idle', rows: [], more: 0, loadedAt: 0 } as HistoryView, { shape: 'history-1' })
+const historyFiles = atom({ plugin: 'project-brain-activity', key: 'historyFiles' } as const, {} as Record<string, HistoryFiles>, { shape: 'history-files-1' })
+
+type Api = Parameters<Hook<'turn.complete'>>[0]
 
 // Timers are not drawn state: a reload dropping them only loses one debounce.
 let refreshTimer: { cancel: () => void } | undefined
 let autoOpenSent = false
+let rescanTimer: { cancel: () => void } | undefined
+let scanning: Promise<void> | undefined
+let scanAgain = false
+let historyLoading: Promise<void> | undefined
 
 // ---------------------------------------------------------------- text
 
@@ -232,10 +253,40 @@ export const isCheckCommand = (command: string): boolean => commandHeads(command
 
 export const isValidationCommand = (command: string): boolean => isTestCommand(command) || isCheckCommand(command)
 
-const GIT_VERB = /^git(?:\s+-[Cc]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+(commit|merge|cherry-pick|revert)\b/
+const WORD = String.raw`(?:'[^']*'|"[^"]*"|[^\s'"]+)`
+const GIT_OPTION = String.raw`(?:\s+-[Cc]\s+${WORD}|\s+--?[\w-]+(?:=${WORD})?)`
+const GIT_VERB = new RegExp(String.raw`^\(*\s*git(${GIT_OPTION}*)\s+(commit|merge|cherry-pick|revert)\b`)
+const CD_HEAD = new RegExp(String.raw`^\(*\s*(?:cd|pushd)\s+(${WORD})\s*\)?$`)
+const DASH_C = new RegExp(String.raw`\s-C\s+(${WORD})`, 'g')
 
+const unquote = (word: string): string => word.replace(/^'([\s\S]*)'$/, '$1').replace(/^"([\s\S]*)"$/, '$1')
+
+const joinDir = (base: string | undefined, next: string): string =>
+  base === undefined || next.startsWith('/') || next.startsWith('~') ? next : `${base.replace(/\/+$/, '')}/${next}`
+
+/** The git verbs that make a commit, in a command with any `cd`, `git -C` or global option before them. */
 export const gitCommitVerbs = (command: string): string[] =>
-  distinct(commandHeads(command).map(head => GIT_VERB.exec(head)?.[1]))
+  distinct(commandHeads(command).map(head => GIT_VERB.exec(head)?.[2]))
+
+/**
+ * The directory the first commit verb runs in, as the command names it: every
+ * `cd` before it, then its own `-C` options. Undefined when it names none.
+ */
+export const commitDirOf = (command: string): string | undefined => {
+  let dir: string | undefined
+  for (const head of commandHeads(command)) {
+    const cd = CD_HEAD.exec(head)
+    if (cd?.[1] !== undefined) {
+      dir = joinDir(dir, unquote(cd[1]))
+      continue
+    }
+    const verb = GIT_VERB.exec(head)
+    if (verb === null) continue
+    for (const option of (verb[1] ?? '').matchAll(DASH_C)) dir = joinDir(dir, unquote(option[1] ?? ''))
+    return dir
+  }
+  return undefined
+}
 
 export const exitCodeOf = (output: string | undefined, isError: boolean): number | undefined => {
   if (!isError) return 0
@@ -433,6 +484,170 @@ export const loadBranch = async (run: Run, top: string): Promise<BranchView> => 
     return { isLoaded: true, baseRef: ref, base, files: parseNumstatZ(numstat?.stdout ?? ''), commits: parseLogZ(log?.stdout ?? '') }
   }
   return { isLoaded: true, files: [], commits: [], error: 'No encontré main ni master para comparar la rama.' }
+}
+
+// ---------------------------------------------------------------- session commits
+
+export type ScannedCommit = { sha: string; subject: string; at: number; isMerge: boolean; branch: string; agentId?: string }
+export type Worktree = { path: string; branch?: string; head?: string }
+
+export const SCAN_FORMAT = '--format=%H%x1f%ct%x1f%P%x1f%s'
+
+export const parseScanZ = (stdout: string): Omit<ScannedCommit, 'branch'>[] =>
+  stdout
+    .split('\0')
+    .map(record => record.replace(/^\n+/, '').split('\u001f'))
+    .filter(([sha, at]) => sha !== undefined && /^[0-9a-f]{40,64}$/.test(sha) && /^\d+$/.test(at ?? ''))
+    .map(([sha, at, parents, ...subject]) => ({
+      sha: sha ?? '',
+      at: Number(at) * 1000,
+      isMerge: (parents ?? '').trim().split(/\s+/).filter(Boolean).length > 1,
+      subject: oneLine(subject.join(' ')),
+    }))
+
+export const parseWorktrees = (porcelain: string): Worktree[] =>
+  porcelain
+    .split(/\n\s*\n/)
+    .map(block => {
+      const lines = block.split('\n')
+      const value = (name: string) => lines.find(one => one.startsWith(`${name} `))?.slice(name.length + 1)
+      const path = value('worktree')
+      const branchRef = value('branch')
+      const head = value('HEAD')
+      return path === undefined || !SAFE_PATH.test(path)
+        ? undefined
+        : { path, ...(branchRef ? { branch: oneLine(branchRef.replace(/^refs\/heads\//, '')) } : {}), ...(head ? { head } : {}) }
+    })
+    .filter((one): one is Worktree => one !== undefined)
+
+/** `git name-rev --name-only` lines, one per sha in order: `main~2` names `main`. */
+export const parseNameRev = (stdout: string, shas: string[]): Record<string, string> => {
+  const names = stdout.split('\n')
+  return Object.fromEntries(
+    shas
+      .map((sha, index) => [sha, oneLine((names[index] ?? '').replace(/[~^].*$/, ''))] as const)
+      .filter(([, name]) => name !== '' && name !== 'undefined'),
+  )
+}
+
+/**
+ * Who made a commit the rescan found: the agent whose commit-verb call was
+ * running when it was made (preferring one in the commit's worktree); else the
+ * agent whose latest commit-verb call ran in that worktree; else the main loop.
+ */
+export const attributeCommit = (commit: Pick<ScannedCommit, 'at' | 'branch'>, calls: CommitCall[], worktrees: Worktree[]): string | undefined => {
+  const tree = worktrees.find(one => one.branch !== undefined && one.branch === commit.branch)?.path
+  const during = calls.filter(call => call.startedAt - WINDOW_SLACK_MS <= commit.at && commit.at <= call.endedAt + WINDOW_SLACK_MS)
+  const inTree = tree === undefined ? [] : during.filter(call => call.top === tree)
+  const owners = distinct((inTree.length > 0 ? inTree : during).map(call => call.agentId ?? MAIN))
+  if (owners.length === 1) return owners[0] === MAIN ? undefined : owners[0]
+  if (tree === undefined) return undefined
+  const there = calls.filter(call => call.top === tree).sort((a, b) => a.startedAt - b.startedAt)
+  const latest = there.filter(call => call.startedAt <= commit.at + WINDOW_SLACK_MS).at(-1) ?? there.at(-1)
+  return latest?.agentId
+}
+
+const sameSha = (a: string, b: string): boolean => a.length > 0 && b.length > 0 && (a.startsWith(b) || b.startsWith(a))
+
+/** Adds what the rescan found to the list, keyed by sha: a commit already known keeps its agent. */
+export const mergeScanned = (list: CommitRecord[], found: ScannedCommit[]): CommitRecord[] => {
+  const merged = list.map(known => {
+    const same = found.find(one => sameSha(known.sha, one.sha))
+    return same !== undefined && known.branch === '' ? { ...known, branch: same.branch } : known
+  })
+  for (const one of found) {
+    if (merged.some(known => sameSha(known.sha, one.sha))) continue
+    merged.push({
+      sha: one.sha,
+      subject: one.subject,
+      branch: one.branch,
+      at: one.at,
+      ...(one.isMerge ? { isMerge: true } : {}),
+      ...(one.agentId === undefined ? {} : { agentId: one.agentId }),
+    })
+  }
+  return merged.sort((a, b) => a.at - b.at).slice(-SCAN_COMMITS)
+}
+
+export type SessionScan = { repo: string; commits: ScannedCommit[] }
+
+/** Every commit this user made since `since`, on any branch of any worktree of the session's repository. */
+export const scanSessionCommits = async (run: Run, since: number, calls: CommitCall[]): Promise<SessionScan | undefined> => {
+  const top = await gitTop(run)
+  if (top === undefined) return undefined
+  const common = await quietly(run, ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], top)
+  const repo = common?.exitCode === 0 && SAFE_PATH.test(common.stdout.trim()) ? common.stdout.trim() : top
+  const email = (await quietly(run, ['git', 'config', 'user.email'], top))?.stdout.trim() ?? ''
+  const author = email !== '' && SAFE_PATH.test(email) ? ['-F', `--author=<${email}>`] : []
+  const log = await quietly(run, ['git', 'log', '--all', `--since=@${Math.floor(since / 1000)}`, ...author, '-z', `-n${SCAN_COMMITS}`, SCAN_FORMAT], repo)
+  if (log?.exitCode !== 0) return undefined
+  const found = parseScanZ(log.stdout)
+  if (found.length === 0) return { repo, commits: [] }
+  const listed = await quietly(run, ['git', 'worktree', 'list', '--porcelain'], repo)
+  const worktrees = listed?.exitCode === 0 ? parseWorktrees(listed.stdout) : []
+  const shas = found.map(one => one.sha)
+  const named = await quietly(run, ['git', 'name-rev', '--name-only', '--refs=refs/heads/*', ...shas], repo)
+  const branches = named?.exitCode === 0 ? parseNameRev(named.stdout, shas) : {}
+  return {
+    repo,
+    commits: found.map(one => {
+      const branchName = branches[one.sha] ?? ''
+      const agentId = attributeCommit({ at: one.at, branch: branchName }, calls, worktrees)
+      return { ...one, branch: branchName, ...(agentId === undefined ? {} : { agentId }) }
+    }),
+  }
+}
+
+// ---------------------------------------------------------------- history
+
+export const HISTORY_FORMAT = '--format=%x1e%h%x1f%D%x1f%ct%x1f%an%x1f%s'
+
+export const parseGraphLog = (stdout: string): HistoryRow[] =>
+  stdout
+    .split('\n')
+    .filter(raw => raw.trim() !== '')
+    .map((raw): HistoryRow => {
+      const mark = raw.indexOf('\u001e')
+      const [sha, refs, at, author, ...subject] = mark < 0 ? [] : raw.slice(mark + 1).split('\u001f')
+      if (mark < 0 || sha === undefined || !SHA.test(sha)) return { graph: clean(raw).trimEnd() }
+      return {
+        graph: clean(raw.slice(0, mark)),
+        sha,
+        refs: (refs ?? '').split(', ').map(oneLine).filter(Boolean),
+        subject: oneLine(subject.join(' ')),
+        ...(/^\d+$/.test(at ?? '') ? { at: Number(at) } : {}),
+        author: oneLine(author ?? ''),
+      }
+    })
+
+export const loadHistory = async (run: Run, now: number): Promise<HistoryView> => {
+  const top = await gitTop(run)
+  if (top === undefined) return { state: 'error', rows: [], more: 0, loadedAt: now, error: 'No hay repositorio git aquí.' }
+  const log = await quietly(run, ['git', 'log', '--graph', '--all', '--date-order', '--no-color', `-n${HISTORY_COMMITS}`, HISTORY_FORMAT], top)
+  if (log?.exitCode !== 0) {
+    const reason = oneLine(log?.stderr ?? '').slice(0, 160)
+    return { state: 'error', rows: [], more: 0, loadedAt: now, error: `git log falló${reason ? `: ${reason}` : '.'}` }
+  }
+  const rows = parseGraphLog(log.stdout)
+  const shown = rows.filter(row => row.sha !== undefined).length
+  const counted = await quietly(run, ['git', 'rev-list', '--all', '--count'], top)
+  const total = counted?.exitCode === 0 ? Number(counted.stdout.trim()) : shown
+  return { state: 'ready', rows, more: Number.isFinite(total) ? Math.max(0, total - shown) : 0, loadedAt: now }
+}
+
+export const ago = (atSeconds: number | undefined, nowMs: number): string => {
+  if (atSeconds === undefined) return ''
+  const minutes = Math.max(0, Math.round((nowMs / 1000 - atSeconds) / 60))
+  if (minutes < 1) return 'ahora'
+  if (minutes < 60) return `hace ${minutes} min`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `hace ${hours} h`
+  const days = Math.round(hours / 24)
+  if (days < 14) return `hace ${days} d`
+  if (days < 60) return `hace ${Math.round(days / 7)} sem`
+  if (days < 365) return `hace ${Math.round(days / 30)} meses`
+  const years = Math.round(days / 365)
+  return `hace ${years} ${years === 1 ? 'año' : 'años'}`
 }
 
 export type DiffTarget = { scope: 'uncommitted' | 'commit' | 'branch'; path: string; sha?: string; untracked?: boolean }
@@ -765,6 +980,7 @@ export type Action =
   | { kind: 'scope'; scope: CambiosScope }
   | { kind: 'diff'; target: DiffTarget }
   | { kind: 'open'; target: DiffTarget }
+  | { kind: 'commit'; sha: string }
 export type Cell = { spans: Span[]; action?: Action; label?: string; key?: string }
 export type Row = { key: string; cells: Cell[]; right?: Span[] }
 
@@ -785,9 +1001,11 @@ export type Snapshot = {
   scopeByAgent: Record<string, CambiosScope>
   branchView: BranchView
   view: PaneScroll
+  historyView: HistoryView
+  historyFiles: Record<string, HistoryFiles>
 }
 
-export type PaneModel = { header: Row[]; body: Row[]; footer: Row[]; scope: string; cambios: CambiosScope }
+export type PaneModel = { header: Row[]; body: Row[]; footer: Row[]; scope: string; cambios: CambiosScope; tab: Tab }
 
 type Look = { icon: string; color: Tone }
 
@@ -819,6 +1037,7 @@ const TAB_LABELS: { value: Tab; icon: string; label: string }[] = [
   { value: 'summary', icon: ICONS.summary, label: 'Resumen' },
   { value: 'commands', icon: ICONS.commands, label: 'Comandos' },
   { value: 'diff', icon: ICONS.diff, label: 'Cambios' },
+  { value: 'history', icon: ICONS.history, label: 'Historial' },
 ]
 
 const SCOPE_LABELS: { value: CambiosScope; icon: string; label: string }[] = [
@@ -832,11 +1051,22 @@ const span = (value: string, style: Omit<Span, 'text'> = {}): Span => ({ text: v
 const touches = (change: FileChange, edited: string[]): boolean =>
   edited.some(path => path === change.path || path.endsWith(`/${change.path}`))
 
+/** The main loop's view lists every session commit; an agent's, its own. */
 export const commitsFor = (list: CommitRecord[], scope: string): CommitRecord[] =>
-  list.filter(one => (one.agentId ?? MAIN) === scope)
+  scope === MAIN ? list : list.filter(one => (one.agentId ?? MAIN) === scope)
+
+/** Which loop made each session commit, by its first seven hex digits; the caller checks the full sha. */
+export const sessionOwners = (list: CommitRecord[]): Map<string, CommitRecord[]> => {
+  const owners = new Map<string, CommitRecord[]>()
+  for (const commit of list) owners.set(commit.sha.slice(0, 7), [...(owners.get(commit.sha.slice(0, 7)) ?? []), commit])
+  return owners
+}
+
+export const ownerOf = (owners: Map<string, CommitRecord[]>, sha: string): CommitRecord | undefined =>
+  owners.get(sha.slice(0, 7))?.find(one => sameSha(one.sha, sha))
 
 export const cambiosScopeOf = (snap: Pick<Snapshot, 'scopeByAgent' | 'commitList'>, scope: string): CambiosScope =>
-  snap.scopeByAgent[scope] ?? ((scope === MAIN ? snap.commitList.length : commitsFor(snap.commitList, scope).length) > 0 ? 'commits' : 'uncommitted')
+  snap.scopeByAgent[scope] ?? (commitsFor(snap.commitList, scope).length > 0 ? 'commits' : 'uncommitted')
 
 export const buildPane = (snap: Snapshot, width: number): PaneModel => {
   const { list, flipped, opened, patches, records } = snap
@@ -858,6 +1088,11 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
   const line = (key: string, value: string, style: Omit<Span, 'text'> = {}): Row => ({ key, cells: [{ spans: [span(fit(value, width), style)] }] })
   const blank = (key: string): Row => line(key, ' ')
   const divider = (key: string): Row => line(key, '─'.repeat(width), { dim: true })
+  const agentTag = (agentId: string | undefined): string => {
+    if (agentId === undefined) return ''
+    const record = records.find(one => one.id === agentId)
+    return ` · ${record ? shortName(record) : 'agente'}`
+  }
   const toggleRow = (key: string, label: string, open: boolean, indent = ''): Row => ({
     key,
     cells: [{ spans: [span(fit(`${indent}${open ? '▼' : '▶'} ${label}`, width))], action: { kind: 'toggle', key }, label, key: `btn-${key}` }],
@@ -978,13 +1213,13 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
 
   const commitRows = (): Row[] => {
     const own = commitsFor(snap.commitList, scope).slice().reverse()
-    const others = scope === MAIN ? snap.commitList.length - own.length : 0
     const rows: Row[] = []
-    if (own.length === 0) rows.push(line('no-commits', scope === MAIN ? 'Sin commits de la sesión principal todavía.' : 'Este agente no ha hecho commits.', { dim: true }))
+    if (own.length === 0) rows.push(line('no-commits', scope === MAIN ? 'Sin commits en esta sesión todavía.' : 'Este agente no ha hecho commits.', { dim: true }))
     for (const commit of own) {
       const key = `commit-${commit.sha}`
       const open = isOpen(key, false)
       const totals = commit.added === undefined ? (commit.statsFailed ? '?' : '…') : `+${commit.added} −${commit.removed ?? 0}`
+      const tag = scope === MAIN ? agentTag(commit.agentId) : ''
       rows.push({
         key,
         cells: [
@@ -993,7 +1228,8 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
             spans: [
               span(`${commit.isMerge ? ICONS.merge : ICONS.commit} `, { color: 'claude' }),
               span(`${commit.sha.slice(0, 7)} `, { color: 'warning' }),
-              span(fit(commit.subject, width - totals.length - 14)),
+              span(fit(commit.subject, width - totals.length - tag.length - 14)),
+              ...(tag ? [span(tag, { color: 'claude', dim: true })] : []),
             ],
           },
         ],
@@ -1004,7 +1240,66 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
       if (commit.files === undefined) rows.push(line(`${key}-loading`, commit.statsFailed ? '    No se pudo leer el commit.' : '    Cargando archivos…', { dim: true }))
       else commit.files.forEach(file => rows.push(...fileRows({ scope: 'commit', sha: commit.sha, path: file.path }, file, '  ')))
     }
-    if (others > 0) rows.push(blank('gap-others'), line('others', `+ ${others} ${others === 1 ? 'commit' : 'commits'} de subagentes (elígelos arriba)`, { dim: true }))
+    return rows
+  }
+
+  const historyTabRows = (): Row[] => {
+    const view = snap.historyView
+    if (view.state === 'error') return [line('hist-error', view.error ?? 'git falló.', { color: 'warning' })]
+    if (view.rows.length === 0) return [line('hist-loading', view.state === 'ready' ? 'Sin commits todavía.' : 'Cargando historial…', { dim: true })]
+    const owners = sessionOwners(snap.commitList)
+    const shown = view.rows.filter(row => row.sha !== undefined).length
+    const ours = view.rows.filter(row => row.sha !== undefined && ownerOf(owners, row.sha) !== undefined).length
+    const rows: Row[] = [{
+      key: 'hist-legend',
+      cells: [{ spans: [span(`${ICONS.history} ${shown} commits · `, { dim: true }), span('●', { color: 'claude' }), span(` ${ours} de esta sesión`, { dim: true }), ...(view.state === 'loading' ? [span(' · actualizando…', { dim: true })] : [])] }],
+    }]
+    view.rows.forEach((row, index) => {
+      const sha = row.sha
+      if (sha === undefined) {
+        rows.push(line(`hg-${index}`, `  ${row.graph}`, { dim: true }))
+        return
+      }
+      const owner = ownerOf(owners, sha)
+      const loop = owner === undefined ? undefined : (owner.agentId ?? MAIN)
+      const strength = loop === undefined ? 'none' : scope === MAIN || loop === scope ? 'strong' : 'soft'
+      const accent: Omit<Span, 'text'> = strength === 'strong' ? { color: 'claude' } : strength === 'soft' ? { color: 'claude', dim: true } : {}
+      const key = `hist-${sha}`
+      const open = isOpen(key, false)
+      const right = [ago(row.at, view.loadedAt), fit(row.author ?? '', 14)].filter(Boolean).join(' · ')
+      const tag = owner !== undefined && scope === MAIN ? agentTag(owner.agentId) : ''
+      const refSpans = (row.refs ?? []).flatMap((ref, at): Span[] => {
+        const isHead = ref === 'HEAD' || ref.startsWith('HEAD -> ')
+        return [span(at === 0 ? '(' : ', ', { color: 'suggestion', dim: true }), span(ref, { color: 'suggestion', bold: isHead })]
+      })
+      const refsText = refSpans.length > 0 ? refSpans.map(one => one.text).join('').length + 2 : 0
+      const used = 2 + row.graph.length + sha.length + 1 + refsText + tag.length + right.length + 2
+      rows.push({
+        key,
+        cells: [{
+          spans: [
+            span(strength === 'none' ? '  ' : '● ', { ...accent, bold: strength === 'strong' }),
+            span(row.graph, { dim: true }),
+            span(`${sha} `, strength === 'none' ? { color: 'warning' } : { ...accent, bold: strength === 'strong' }),
+            ...refSpans,
+            ...(refSpans.length > 0 ? [span(') ', { color: 'suggestion', dim: true })] : []),
+            span(fit(row.subject ?? '', width - used), accent),
+            ...(tag ? [span(tag, { color: 'claude', dim: true })] : []),
+          ],
+          action: { kind: 'commit', sha },
+          label: open ? 'Ocultar archivos' : 'Ver archivos',
+          key: `btn-${key}`,
+        }],
+        right: [span(right, { dim: true })],
+      })
+      if (!open) return
+      const files = owner?.files ?? snap.historyFiles[sha]?.files
+      const failed = owner?.statsFailed === true || snap.historyFiles[sha]?.failed === true
+      if (files === undefined) rows.push(line(`${key}-loading`, failed ? '    No se pudo leer el commit.' : '    Cargando archivos…', { dim: true }))
+      else if (files.length === 0) rows.push(line(`${key}-empty`, '    El commit no cambia archivos.', { dim: true }))
+      else files.forEach(file => rows.push(...fileRows({ scope: 'commit', sha: owner?.sha ?? sha, path: file.path }, file, '    ')))
+    })
+    if (view.more > 0) rows.push(line('hist-more', `… ${view.more} más`, { dim: true }))
     return rows
   }
 
@@ -1066,7 +1361,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
               line(`a-${index}`, `    → ${one.answer || 'pendiente'}`, { color: one.refused ? 'error' : one.answer ? 'success' : 'warning' }),
             ]),
       ),
-      ...section(`history-${scope}`, `${ICONS.history} ${scope === MAIN ? 'Historial de comandos' : 'Historial de este agente'} · ${commands.length}`, false, historyRows),
+      ...section(`history-${scope}`, `${ICONS.log} ${scope === MAIN ? 'Historial de comandos' : 'Historial de este agente'} · ${commands.length}`, false, historyRows),
       ...section(`context-${scope}`, `${ICONS.brain} Contexto consultado`, false, () => [
         contextRow('ctx-usage', '  '),
         ...readFiles.slice(0, 30).map(path => line(`ctx-${path}`, `  ${fileIcon(path)} ${path}`)),
@@ -1080,12 +1375,12 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
       line('last-title', `${ICONS.command} Último comando`, { bold: true }),
       ...commandRows(lastCommand, `cmdtab-${scope}`),
       blank('gap-history'),
-      line('history-title', `${ICONS.history} Historial · ${commands.length}`, { bold: true }),
+      line('history-title', `${ICONS.log} Historial · ${commands.length}`, { bold: true }),
       ...historyRows(),
     ]
   }
 
-  const body = current === 'diff' ? cambiosRows() : current === 'commands' ? commandsTabRows() : summaryRows()
+  const body = current === 'diff' ? cambiosRows() : current === 'commands' ? commandsTabRows() : current === 'history' ? historyTabRows() : summaryRows()
 
   const status = waiting
     ? span(`${ICONS.waiting} esperando respuesta`, { color: 'warning' })
@@ -1158,7 +1453,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     contextRow('footer-context', ''),
   ]
 
-  return { header, body, footer, scope, cambios }
+  return { header, body, footer, scope, cambios, tab: current }
 }
 
 export type PaneFrame = { rows: Row[]; isWindowed: boolean; total: number; room: number }
@@ -1184,9 +1479,86 @@ export const paneFrame = (model: PaneModel, bodyRows: number, view: PaneScroll, 
 
 // ---------------------------------------------------------------- hooks
 
+const runOf = ($: Api): Run => (argv, init) => $.process.run(argv, init)
+
+const readSnapshot = async ($: Api): Promise<Snapshot> => {
+  const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps, historyView, historyFilesBySha] = await Promise.all([
+    read($, entries), read($, tabs), read($, toggled), read($, changes), read($, costUsd), read($, contextUsage), read($, openFiles), read($, diffs),
+    read($, agents), read($, pickedAgent), read($, working), read($, scroll), read($, commits), read($, scopes), read($, branch), read($, stepContext),
+    read($, history), read($, historyFiles),
+  ])
+  return { list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view, historyView, historyFiles: historyFilesBySha }
+}
+
+/** Fills in the line counts and files of up to ten commits that have none yet. */
+const fillCommitStats = async ($: Api, run: Run, top: string): Promise<void> => {
+  const pending = (await read($, commits)).filter(one => one.added === undefined && !one.statsFailed).slice(0, 10)
+  for (const commit of pending) {
+    const stats = await loadCommitStats(run, top, commit.sha)
+    await update($, commits, list =>
+      list.map(one => (one.sha !== commit.sha ? one : stats ? { ...one, added: stats.added, removed: stats.removed, files: stats.files, isMerge: stats.isMerge } : { ...one, statsFailed: true })),
+    )
+  }
+}
+
+/** One history load at a time; a request while one runs joins it. */
+const reloadHistory = ($: Api): Promise<void> => {
+  historyLoading ??= (async () => {
+    await update($, history, (view): HistoryView => ({ ...view, state: 'loading' }))
+    const loaded = await loadHistory(runOf($), await $.clock.now())
+    await update($, history, () => loaded)
+  })()
+    .catch(() => undefined)
+    .finally(() => {
+      historyLoading = undefined
+    })
+  return historyLoading
+}
+
+const rescanOnce = async ($: Api): Promise<void> => {
+  const [start, calls] = await Promise.all([read($, sessionStart), read($, commitCalls)])
+  if (start <= 0) return
+  const run = runOf($)
+  const scan = await scanSessionCommits(run, start, calls)
+  if (scan === undefined) return
+  if (scan.commits.length > 0) await update($, commits, list => mergeScanned(list, scan.commits))
+  await fillCommitStats($, run, scan.repo)
+  if ((await read($, history)).state !== 'idle') await reloadHistory($)
+}
+
+/** Asks git for the session's commits shortly after a trigger; one rescan in flight, at most one queued. */
+const scheduleRescan = ($: Api): void => {
+  rescanTimer?.cancel()
+  rescanTimer = $.clock.after(RESCAN_MS, () => {
+    rescanTimer = undefined
+    if (scanning !== undefined) {
+      scanAgain = true
+      return
+    }
+    scanning = (async () => {
+      do {
+        scanAgain = false
+        await rescanOnce($)
+      } while (scanAgain)
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        scanning = undefined
+      })
+  })
+}
+
+/** The session's start: stored once; a mod loaded mid-session reaches back to what it already recorded. */
+export const sessionStartOf = (stored: number, now: number, list: ToolEntry[], known: CommitRecord[]): number =>
+  stored > 0 ? stored : Math.min(now, ...list.map(one => one.startedAt), ...known.map(one => one.at))
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'activity', description: 'Abre el panel de actividad' })
+    const [stored, list, known] = await Promise.all([read($, sessionStart), read($, entries), read($, commits)])
+    const now = await $.clock.now()
+    await update($, sessionStart, () => sessionStartOf(stored, now, list, known))
+    scheduleRescan($ as Api)
     return next(e)
   })
 
@@ -1228,6 +1600,7 @@ export const register: Register = on => {
     const loopId = e.agentId
     if (loopId === undefined) await update($, working, () => false)
     else await update($, agents, list => setAgentState(list, loopId, turnEndState(e.reason)))
+    scheduleRescan($)
     return done
   })
 
@@ -1262,11 +1635,8 @@ export const register: Register = on => {
   })
 
   on('ui.scroll', { requestId: PANE }, async ($, e, next) => {
-    const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps] = await Promise.all([
-      read($, entries), read($, tabs), read($, toggled), read($, changes), read($, costUsd), read($, contextUsage), read($, openFiles), read($, diffs),
-      read($, agents), read($, pickedAgent), read($, working), read($, scroll), read($, commits), read($, scopes), read($, branch), read($, stepContext),
-    ])
-    const snap: Snapshot = { list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view }
+    const snap = await readSnapshot($ as Api)
+    const view = snap.view
     const frame = paneFrame(buildPane(snap, 80), e.bodyRows, view, false)
     if (!frame.isWindowed) return next(e)
     const isJump = Math.abs(e.by) === e.contentRows && e.contentRows !== e.bodyRows
@@ -1339,6 +1709,14 @@ export const register: Register = on => {
     await finish(finished)
 
     const rawCommand = text(input.command)
+    if (e.tool === 'Bash' && status !== 'denied' && rawCommand !== undefined && gitCommitVerbs(rawCommand).length > 0) {
+      const endedAt = await $.clock.now()
+      const dir = commitDirOf(rawCommand)
+      const top = dir === undefined || !SAFE_PATH.test(dir) ? undefined : await gitTop(run, dir)
+      const call: CommitCall = { startedAt, endedAt, ...(loopId === undefined ? {} : { agentId: loopId }), ...(top === undefined ? {} : { top }) }
+      await update($, commitCalls, list => [...list, call].slice(-COMMIT_CALLS))
+      scheduleRescan($ as Api)
+    }
     if (e.tool === 'Bash' && status === 'ok' && rawCommand !== undefined && ran.text !== undefined) {
       const found = commitsIn(rawCommand, ran.text)
       if (found.length > 0) await update($, commits, list => addCommits(list, found, loopId, startedAt))
@@ -1376,13 +1754,7 @@ export const register: Register = on => {
         await update($, diffs, all => ({ ...all, [key]: patch }))
       }
 
-      const pending = (await read($, commits)).filter(one => one.added === undefined && !one.statsFailed).slice(0, 10)
-      for (const commit of pending) {
-        const stats = await loadCommitStats(run, top, commit.sha)
-        await update($, commits, list =>
-          list.map(one => (one.sha !== commit.sha ? one : stats ? { ...one, added: stats.added, removed: stats.removed, files: stats.files, isMerge: stats.isMerge } : { ...one, statsFailed: true })),
-        )
-      }
+      await fillCommitStats($ as Api, run, top)
 
       if ((await read($, branch)).isLoaded) {
         const view = await loadBranch(run, top)
@@ -1465,15 +1837,13 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps] = await Promise.all([
-      read($, entries), read($, tabs), read($, toggled), read($, changes), read($, costUsd), read($, contextUsage), read($, openFiles), read($, diffs),
-      read($, agents), read($, pickedAgent), read($, working), read($, scroll), read($, commits), read($, scopes), read($, branch), read($, stepContext),
-    ])
-    const snap: Snapshot = { list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view }
+    const snap = await readSnapshot($ as Api)
+    const view = snap.view
     const width = Math.max(1, e.props.bodyColumns)
     const model = buildPane(snap, width)
     const frame = paneFrame(model, e.props.scroll.bodyRows, view, e.props.placement === 'dock')
     const run: Run = (argv, init) => $.process.run(argv, init)
+    if (model.tab === 'history' && snap.historyView.state === 'idle') void reloadHistory($ as Api)
 
     const resetScroll = () => update($, scroll, () => ({ offset: 0, follow: false }))
     const toggleDiff = async (target: DiffTarget) => {
@@ -1490,6 +1860,20 @@ export const register: Register = on => {
       const top = await gitTop(run)
       const patch = top === undefined ? { rows: [], total: 0 } : await fetchDiff(run, top, target)
       await update($, diffs, all => ({ ...Object.fromEntries(Object.entries(all).filter(([name]) => keys.includes(name))), [key]: patch }))
+    }
+    const toggleCommit = async (sha: string) => {
+      const key = `hist-${sha}`
+      let isOpening = false
+      await update($, toggled, keys => {
+        isOpening = !keys.includes(key)
+        return isOpening ? [...keys, key].slice(-200) : keys.filter(one => one !== key)
+      })
+      const known = ownerOf(sessionOwners(await read($, commits)), sha)
+      if (!isOpening || known?.files !== undefined || (await read($, historyFiles))[sha]?.files !== undefined) return
+      const top = await gitTop(run)
+      const stats = top === undefined ? undefined : await loadCommitStats(run, top, sha)
+      const loaded: HistoryFiles = stats ? { files: stats.files } : { failed: true }
+      await update($, historyFiles, all => Object.fromEntries([...Object.entries(all).filter(([name]) => name !== sha), [sha, loaded]].slice(-HISTORY_FILES)))
     }
     const openTarget = async (target: DiffTarget) => {
       const top = await gitTop(run)
@@ -1508,6 +1892,7 @@ export const register: Register = on => {
       } else if (action.kind === 'tab') {
         await update($, tabs, all => ({ ...all, [model.scope]: action.tab }))
         await resetScroll()
+        if (action.tab === 'history') await reloadHistory($ as Api)
       } else if (action.kind === 'agent') {
         await update($, pickedAgent, () => action.id)
         await resetScroll()
@@ -1519,6 +1904,8 @@ export const register: Register = on => {
           const loaded: BranchView = top === undefined ? { isLoaded: true, files: [], commits: [], error: 'No hay repositorio git aquí.' } : await loadBranch(run, top)
           await update($, branch, () => loaded)
         }
+      } else if (action.kind === 'commit') {
+        await toggleCommit(action.sha)
       } else if (action.kind === 'diff') {
         await toggleDiff(action.target)
       } else {

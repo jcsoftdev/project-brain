@@ -22,7 +22,7 @@ export type ToolEntry = {
   spawned?: string
 }
 
-export type Tab = 'summary' | 'commands' | 'diff'
+export type Tab = 'summary' | 'commands' | 'diff' | 'history'
 
 export type CambiosScope = 'commits' | 'uncommitted' | 'branch'
 
@@ -65,6 +65,18 @@ export type BranchView = {
   error?: string
 }
 
+/** A commit-verb Bash call: when it ran, who ran it, and the worktree it ran in when the command named one. */
+export type CommitCall = { agentId?: string; top?: string; startedAt: number; endedAt: number }
+
+/** One line of `git log --graph`: graph glyphs alone, or a commit with its fields. */
+export type HistoryRow = { graph: string; sha?: string; refs?: string[]; subject?: string; at?: number; author?: string }
+
+export type HistoryState = 'idle' | 'loading' | 'ready' | 'error'
+
+export type HistoryView = { state: HistoryState; rows: HistoryRow[]; more: number; loadedAt: number; error?: string }
+
+export type HistoryFiles = { files?: FileChange[]; failed?: boolean }
+
 export type DiffRow = { gutter: string; sign: string; text: string; kind: 'add' | 'del' | 'hunk' | 'same' }
 
 export type DiffPatch = { rows: DiffRow[]; total: number }
@@ -96,6 +108,10 @@ declare module 'claude-code' {
       branch: Shaped<BranchView>
       autoOpen: Shaped<boolean>
       editor: Shaped<EditorState>
+      sessionStart: Shaped<number>
+      commitCalls: Shaped<CommitCall[]>
+      history: Shaped<HistoryView>
+      historyFiles: Shaped<Record<string, HistoryFiles>>
     }
   }
 }
