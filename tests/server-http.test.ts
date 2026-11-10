@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { join } from "node:path";
+import { rm } from "node:fs/promises";
 import { stubEmbeddings } from "./stub-embeddings.js";
+import { makeTempProject } from "./helpers/temp-project.js";
 
 /**
  * T-12: authorize() pure helper — exhaustive unit tests
@@ -86,9 +89,12 @@ describe("createHttpServer — token guard (T-13)", () => {
   it("resolves to a handle with port and close() when token is valid", async () => {
     const { createHttpServer } = await import("../src/server-http.js");
 
+    const project = await makeTempProject("pb-http-guard-");
     const handle = await createHttpServer({
       port: 13003,
       token: "valid-token",
+      dbPath: join(project, "data"),
+      projectRoot: project,
       embeddings: stubEmbeddings,
     });
     expect(handle).toBeDefined();
@@ -96,6 +102,7 @@ describe("createHttpServer — token guard (T-13)", () => {
     expect(typeof handle.close).toBe("function");
     // Close without binding (handle is pre-wired but not listening on port yet)
     await handle.close();
+    await rm(project, { recursive: true, force: true });
   });
 });
 
@@ -146,9 +153,12 @@ describe("S4: HTTP project scoping (structural)", () => {
     const { createHttpServer } = await import("../src/server-http.js");
 
     // Using port 0 for ephemeral binding (OS assigns a free port)
+    const project = await makeTempProject("pb-http-scope-");
     const handle = await createHttpServer({
       port: 0,
       token: "scope-test-token",
+      dbPath: join(project, "data"),
+      projectRoot: project,
       embeddings: stubEmbeddings,
     });
     expect(typeof handle.port).toBe("number");
@@ -164,5 +174,6 @@ describe("S4: HTTP project scoping (structural)", () => {
     expect(handleKeys.length).toBe(2);
 
     await handle.close();
+    await rm(project, { recursive: true, force: true });
   });
 });

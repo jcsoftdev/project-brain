@@ -25,6 +25,7 @@ describe("createHttpServer — HTTP round-trip auth (integration)", () => {
       port: 0,
       token: TOKEN,
       dbPath: tempDir,
+      projectRoot: tempDir,
       embeddings: stubEmbeddings,
     });
   });
