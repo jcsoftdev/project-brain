@@ -107,9 +107,59 @@ export interface DependencyOutcome {
   folders: string[];
 }
 
+const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+const INSTALL_MAX_BUFFER = 64 * 1024 * 1024;
+
 function failureText(result: ReturnType<SpawnFn>, fallback: string): string {
   const stderr = (result.stderr ?? "").toString().trim().split("\n").pop() ?? "";
   return stderr || result.error?.message || fallback;
+}
+
+interface Volume {
+  device: string;
+  mountPoint: string;
+}
+
+export function parseDf(stdout: string): Volume | null {
+  const line = stdout.trim().split("\n").pop() ?? "";
+  const match = line.match(/^(.+?)\s+\d+\s+\d+\s+\d+\s+\d+%\s+(.+)$/);
+  return match ? { device: match[1], mountPoint: match[2] } : null;
+}
+
+export function filesystemTypeAt(mountOutput: string, mountPoint: string): string | null {
+  for (const line of mountOutput.split("\n")) {
+    const match = line.match(/^.+? on (.+) \(([^,)]+)/);
+    if (match && match[1] === mountPoint) return match[2].trim();
+  }
+  return null;
+}
+
+function volumeOf(path: string, spawn: SpawnFn): Volume | null {
+  const result = spawn("df", ["-P", path], { encoding: "utf-8" });
+  return result.status === 0 ? parseDf((result.stdout ?? "").toString()) : null;
+}
+
+export function darwinCloneBlocker(source: string, target: string, spawn: SpawnFn): string | null {
+  const from = volumeOf(source, spawn);
+  const to = volumeOf(target, spawn);
+  const mounts = spawn("mount", [], { encoding: "utf-8" });
+  if (!from || !to || mounts.status !== 0) return "could not tell whether the filesystem supports copy-on-write cloning";
+  const mountOutput = (mounts.stdout ?? "").toString();
+  for (const volume of [from, to]) {
+    const type = filesystemTypeAt(mountOutput, volume.mountPoint);
+    if (!type) return "could not tell whether the filesystem supports copy-on-write cloning";
+    if (type !== "apfs") return `copy-on-write cloning is unavailable on ${type}`;
+  }
+  if (from.device !== to.device || from.mountPoint !== to.mountPoint) return "the worktree is on a different volume than the main checkout";
+  return null;
+}
+
+function installFailure(result: ReturnType<SpawnFn>, command: string, label: string): string {
+  const code = (result.error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === "ENOENT") return `${command} is not available`;
+  if (code === "ETIMEDOUT") return `\`${label}\` timed out after ${INSTALL_TIMEOUT_MS / 60000} minutes`;
+  if (result.error) return `\`${label}\` failed (${result.error.message})`;
+  return `\`${label}\` failed (${failureText(result, result.signal ? `killed by ${result.signal}` : `exit ${result.status}`)})`;
 }
 
 export function cloneDependencies(mainRoot: string, worktreePath: string, spawn: SpawnFn, platform: string = process.platform): DependencyOutcome {
@@ -130,17 +180,25 @@ export function cloneDependencies(mainRoot: string, worktreePath: string, spawn:
   const decision = decideClone(fingerprintOf(mainRoot), worktreeFingerprint);
   if (!decision.clone) return skipped(decision.reason);
 
+  if (!cloneCommand(platform, mainRoot, worktreePath)) return skipped(`copy-on-write cloning is unsupported on ${platform}`);
+  if (platform === "darwin") {
+    const blocker = darwinCloneBlocker(join(mainRoot, wanted[0]), worktreePath, spawn);
+    if (blocker) return skipped(blocker);
+  }
+
+  const absentBefore = workspaceDirectories(worktreePath)
+    .map((dir) => posix.join(dir, "node_modules"))
+    .filter((folder) => !existsSync(join(worktreePath, folder)));
   const created: string[] = [];
-  const removeCreated = () => created.forEach((folder) => rmSync(join(worktreePath, folder), { recursive: true, force: true }));
+  const remove = (folders: string[]) => folders.forEach((folder) => rmSync(join(worktreePath, folder), { recursive: true, force: true }));
 
   for (const folder of wanted) {
-    const command = cloneCommand(platform, join(mainRoot, folder), join(worktreePath, folder));
-    if (!command) return skipped(`copy-on-write cloning is unsupported on ${platform}`);
+    const command = cloneCommand(platform, join(mainRoot, folder), join(worktreePath, folder))!;
     const result = spawn(command.command, command.args, { encoding: "utf-8" });
     created.push(folder);
     if (result.status !== 0) {
-      removeCreated();
-      return skipped(`filesystem cannot clone (${failureText(result, "cp failed")})`);
+      remove(created);
+      return skipped(`cloning failed (${failureText(result, "cp failed")})`);
     }
   }
 
@@ -149,10 +207,15 @@ export function cloneDependencies(mainRoot: string, worktreePath: string, spawn:
 
   const install = installCommand(worktreeFingerprint!.lockfile);
   const label = `${install.command} ${install.args.join(" ")}`;
-  const result = spawn(install.command, install.args, { cwd: worktreePath, encoding: "utf-8" });
-  if (result.status === 0) return { cloned: true, note: `${cloned}, then \`${label}\` applied the lockfile changes`, folders: created };
+  const result = spawn(install.command, install.args, {
+    cwd: worktreePath,
+    encoding: "utf-8",
+    stdio: ["ignore", "ignore", "pipe"],
+    timeout: INSTALL_TIMEOUT_MS,
+    maxBuffer: INSTALL_MAX_BUFFER,
+  });
+  if (result.status === 0 && !result.error) return { cloned: true, note: `${cloned}, then \`${label}\` applied the lockfile changes`, folders: created };
 
-  removeCreated();
-  const why = result.error ? `${install.command} is not available` : `\`${label}\` failed (${failureText(result, `exit ${result.status}`)})`;
-  return skipped(`lockfile differs from the main checkout and ${why}`);
+  remove([...new Set([...created, ...absentBefore])]);
+  return skipped(`lockfile differs from the main checkout and ${installFailure(result, install.command, label)}`);
 }

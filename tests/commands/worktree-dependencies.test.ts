@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile, mkdir, readFile } from "node:fs/promises";
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { cloneDependencies, decideClone, workspaceDirectories, type DependencyFingerprint } from "../../src/commands/worktree-dependencies.js";
+import { cloneDependencies, decideClone, filesystemTypeAt, parseDf, workspaceDirectories, type DependencyFingerprint } from "../../src/commands/worktree-dependencies.js";
 import { createWorktree, type LifecycleDeps } from "../../src/commands/worktree-lifecycle.js";
 
 const same: DependencyFingerprint = { lockfile: "bun.lock", lockfileHash: "aaa" };
@@ -58,10 +58,24 @@ describe("workspaceDirectories", () => {
   }
 });
 
+describe("volume probes", () => {
+  it("parses df -P output, including a mount point with spaces", () => {
+    expect(parseDf("Filesystem 512-blocks Used Available Capacity Mounted on\n/dev/disk5s1 61344 1088 60256 2% /Volumes/My Disk\n")).toEqual({ device: "/dev/disk5s1", mountPoint: "/Volumes/My Disk" });
+    expect(parseDf("garbage")).toBeNull();
+  });
+
+  it("reads the filesystem type of an exact mount point", () => {
+    const mount = "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)\n/dev/disk5s1 on /Volumes/My Disk (hfs, local, nodev)\n";
+    expect(filesystemTypeAt(mount, "/Volumes/My Disk")).toBe("hfs");
+    expect(filesystemTypeAt(mount, "/System/Volumes/Data")).toBe("apfs");
+    expect(filesystemTypeAt(mount, "/Volumes/My")).toBeNull();
+  });
+});
+
 describe("cloneDependencies with a lockfile that differs", () => {
   let main: string;
   let worktree: string;
-  let calls: Array<{ command: string; args: string[]; cwd?: string }>;
+  let calls: Array<{ command: string; args: string[]; cwd?: string; options?: Record<string, unknown> }>;
 
   beforeEach(async () => {
     main = await scratch("pb-deps-main-");
@@ -77,14 +91,29 @@ describe("cloneDependencies with a lockfile that differs", () => {
     await rm(worktree, { recursive: true, force: true });
   });
 
-  function fakeSpawn(install: { status: number | null; stderr?: string; error?: Error }) {
-    return ((command: string, args: string[], options: { cwd?: string }) => {
-      calls.push({ command, args, cwd: options?.cwd });
+  const apfs = { df: { main: "/dev/disk3s5", worktree: "/dev/disk3s5" }, mountPoints: { main: "/System/Volumes/Data", worktree: "/System/Volumes/Data" }, types: { "/System/Volumes/Data": "apfs" } as Record<string, string> };
+
+  function fakeSpawn(
+    install: { status: number | null; stderr?: string; error?: Error; signal?: string; onInstall?: () => void },
+    volumes: { df: { main: string; worktree: string }; mountPoints: { main: string; worktree: string }; types: Record<string, string>; dfFails?: boolean } = apfs,
+  ) {
+    return ((command: string, args: string[], options: { cwd?: string } & Record<string, unknown>) => {
+      if (command === "df") {
+        if (volumes.dfFails) return { status: 1, stdout: "", stderr: "df: no such file" };
+        const side = args[1].startsWith(main) ? "main" : "worktree";
+        return { status: 0, stdout: `Filesystem 512-blocks Used Available Capacity Mounted on\n${volumes.df[side]} 100 50 50 50% ${volumes.mountPoints[side]}\n`, stderr: "" };
+      }
+      if (command === "mount") {
+        const lines = Object.entries(volumes.types).map(([point, type]) => `/dev/x on ${point} (${type}, local, journaled)`);
+        return { status: 0, stdout: `/dev/disk3s1s1 on / (apfs, sealed, local)\n${lines.join("\n")}\n`, stderr: "" };
+      }
+      calls.push({ command, args, cwd: options?.cwd, options });
       if (command === "cp") {
         mkdirSync(args[args.length - 1], { recursive: true });
         return { status: 0, stdout: "", stderr: "" };
       }
-      return { stdout: "", stderr: install.stderr ?? "", ...install };
+      install.onInstall?.();
+      return { stdout: null, stderr: install.stderr ?? "", ...install };
     }) as unknown as LifecycleDeps["spawn"];
   }
 
@@ -92,7 +121,8 @@ describe("cloneDependencies with a lockfile that differs", () => {
     const outcome = cloneDependencies(main, worktree, fakeSpawn({ status: 0 }), "darwin");
 
     expect(calls.map((c) => c.command)).toEqual(["cp", "cp", "pnpm"]);
-    expect(calls[2]).toEqual({ command: "pnpm", args: ["install"], cwd: worktree });
+    expect(calls[2]).toMatchObject({ command: "pnpm", args: ["install"], cwd: worktree });
+    expect(calls[2].options).toMatchObject({ timeout: 10 * 60 * 1000, maxBuffer: 64 * 1024 * 1024 });
     expect(outcome).toEqual({
       cloned: true,
       note: "node_modules cloned copy-on-write from the main checkout (2 folders), then `pnpm install` applied the lockfile changes",
@@ -113,12 +143,70 @@ describe("cloneDependencies with a lockfile that differs", () => {
   });
 
   it("removes every clone when the package manager is missing", () => {
-    const outcome = cloneDependencies(main, worktree, fakeSpawn({ status: null, error: new Error("spawnSync pnpm ENOENT") }), "darwin");
+    const outcome = cloneDependencies(main, worktree, fakeSpawn({ status: null, error: Object.assign(new Error("spawnSync pnpm ENOENT"), { code: "ENOENT" }) }), "darwin");
 
     expect(outcome.note).toBe("node_modules not cloned: lockfile differs from the main checkout and pnpm is not available");
     expect(existsSync(join(worktree, "node_modules"))).toBe(false);
     expect(existsSync(join(worktree, "packages", "a", "node_modules"))).toBe(false);
   });
+
+  it("reports a timed-out install as a timeout and removes the clones", () => {
+    const timeout = Object.assign(new Error("spawnSync pnpm ETIMEDOUT"), { code: "ETIMEDOUT" });
+    const outcome = cloneDependencies(main, worktree, fakeSpawn({ status: null, signal: "SIGTERM", error: timeout }), "darwin");
+
+    expect(outcome.note).toBe("node_modules not cloned: lockfile differs from the main checkout and `pnpm install` timed out after 10 minutes");
+    expect(existsSync(join(worktree, "node_modules"))).toBe(false);
+  });
+
+  it("does not call an overflowing install output a missing tool", () => {
+    const overflow = Object.assign(new Error("spawnSync pnpm ENOBUFS"), { code: "ENOBUFS" });
+    const outcome = cloneDependencies(main, worktree, fakeSpawn({ status: 0, error: overflow }), "darwin");
+
+    expect(outcome.note).toBe("node_modules not cloned: lockfile differs from the main checkout and `pnpm install` failed (spawnSync pnpm ENOBUFS)");
+    expect(existsSync(join(worktree, "node_modules"))).toBe(false);
+  });
+
+  it("on install failure removes node_modules the install created but keeps ones that existed before", async () => {
+    const manifest = JSON.stringify({ workspaces: ["packages/*"] });
+    await layout(worktree, { "package.json": manifest, "packages/c/node_modules/kept/i.js": "" }, ["packages/b"]);
+    const outcome = cloneDependencies(
+      main,
+      worktree,
+      fakeSpawn({ status: 1, stderr: "boom", onInstall: () => mkdirSync(join(worktree, "packages", "b", "node_modules", "z"), { recursive: true }) }),
+      "darwin",
+    );
+
+    expect(outcome.cloned).toBe(false);
+    expect(existsSync(join(worktree, "node_modules"))).toBe(false);
+    expect(existsSync(join(worktree, "packages", "a", "node_modules"))).toBe(false);
+    expect(existsSync(join(worktree, "packages", "b", "node_modules"))).toBe(false);
+    expect(existsSync(join(worktree, "packages", "c", "node_modules", "kept", "i.js"))).toBe(true);
+  });
+
+  const blocked: Array<[string, Parameters<typeof fakeSpawn>[1], string]> = [
+    ["a non-APFS volume", { ...apfs, types: { "/System/Volumes/Data": "hfs" } }, "copy-on-write cloning is unavailable on hfs"],
+    [
+      "an exFAT worktree volume",
+      { df: { main: "/dev/disk3s5", worktree: "/dev/disk5s1" }, mountPoints: { main: "/System/Volumes/Data", worktree: "/Volumes/USB" }, types: { "/System/Volumes/Data": "apfs", "/Volumes/USB": "exfat" } },
+      "copy-on-write cloning is unavailable on exfat",
+    ],
+    [
+      "a different APFS volume",
+      { df: { main: "/dev/disk3s5", worktree: "/dev/disk4s1" }, mountPoints: { main: "/System/Volumes/Data", worktree: "/Volumes/Other" }, types: { "/System/Volumes/Data": "apfs", "/Volumes/Other": "apfs" } },
+      "the worktree is on a different volume than the main checkout",
+    ],
+    ["an unknown volume", { ...apfs, dfFails: true }, "could not tell whether the filesystem supports copy-on-write cloning"],
+  ];
+
+  for (const [name, volumes, reason] of blocked) {
+    it(`never copies on macOS when the clone would land on ${name}`, () => {
+      const outcome = cloneDependencies(main, worktree, fakeSpawn({ status: 0 }, volumes), "darwin");
+
+      expect(outcome).toEqual({ cloned: false, note: `node_modules not cloned: ${reason}`, folders: [] });
+      expect(calls).toEqual([]);
+      expect(existsSync(join(worktree, "node_modules"))).toBe(false);
+    });
+  }
 
   it("does not install when the lockfiles match", async () => {
     await writeFile(join(worktree, "pnpm-lock.yaml"), "v1\n");
@@ -198,7 +286,7 @@ describe("createWorktree dependency cloning", () => {
 
     if (process.platform === "darwin" || process.platform === "linux") {
       expect(dependencies.cloned).toBe(false);
-      expect(dependencies.note).toContain("filesystem cannot clone (not supported)");
+      expect(dependencies.note).toContain("cloning failed (not supported)");
     }
     expect(existsSync(join(path, "node_modules"))).toBe(false);
   });
@@ -217,7 +305,7 @@ describe("createWorktree dependency cloning", () => {
 
     const { path, dependencies } = await createWorktree({ ...deps, spawn: failingBun }, { name: "drift", init: async () => {} });
 
-    if (dependencies.note.includes("filesystem cannot clone") || dependencies.note.includes("unsupported")) return;
+    if (dependencies.note.includes("cloning failed") || dependencies.note.includes("unsupported") || dependencies.note.includes("unavailable")) return;
     expect(installs).toEqual(["install"]);
     expect(dependencies).toEqual({
       cloned: false,

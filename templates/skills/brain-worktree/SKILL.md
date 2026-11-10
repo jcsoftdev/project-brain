@@ -53,10 +53,14 @@ and has none yet. It clones them copy-on-write (`cp -c -R` on macOS/APFS,
 `cp --reflink=always` on Linux). A clone is independent: changing a dependency inside the
 worktree never touches the main checkout. When the lockfile content hash differs from the
 main checkout's, it clones anyway and then runs the lockfile's package manager install in
-the worktree (`bun`, `pnpm`, `npm` or `yarn install`), which only writes what changed. If
-that install fails or the tool is missing, every clone is removed and `create` prints one
-line saying why; install in the worktree yourself. When the filesystem cannot clone,
-nothing is copied (never a full copy) and `create` prints one line saying why.
+the worktree (`bun`, `pnpm`, `npm` or `yarn install`), which only writes what changed.
+That install runs the package manager's lifecycle scripts (such as `postinstall`) from the
+worktree's `package.json`. If it fails, times out (10 minutes), or the tool is missing,
+every clone is removed, along with any `node_modules` the install created, and `create`
+prints one line saying why; install in the worktree yourself. On macOS the main checkout
+and the worktree must be on the same APFS volume; on HFS+, exFAT, or another volume, and
+whenever the filesystem cannot clone, nothing is copied (never a full copy) and `create`
+prints one line saying why.
 
 ## The one identifier rule
 
