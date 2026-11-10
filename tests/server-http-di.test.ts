@@ -56,6 +56,7 @@ describe("createHttpServer DI", () => {
       port: 0,
       token: "tok",
       dbPath: dir,
+      projectRoot: dir,
       ...opts,
     } as never);
     cleanup.push(async () => {

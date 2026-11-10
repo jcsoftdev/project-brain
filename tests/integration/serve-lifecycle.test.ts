@@ -19,13 +19,20 @@
  *
  * What works is asking whether the ORIGINAL parent still exists, via signal 0.
  */
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { makeTempProject } from "../helpers/temp-project.js";
 
 const CLI = join(import.meta.dir, "../../src/cli.ts");
-const REPO = join(import.meta.dir, "../..");
+let project: string;
+beforeAll(async () => {
+  project = await makeTempProject("pb-serve-project-");
+});
+afterAll(async () => {
+  await rm(project, { recursive: true, force: true });
+});
 
 /** Resolves to the exit code, or null if the process outlived the deadline. */
 async function exitWithin(proc: Bun.Subprocess, ms: number): Promise<number | null> {
@@ -39,11 +46,12 @@ async function exitWithin(proc: Bun.Subprocess, ms: number): Promise<number | nu
  * cwd MUST be a real project. In an empty directory no watcher starts, nothing
  * holds the event loop, and the server exits on its own — which made an earlier
  * version of these tests pass against the buggy build. Every orphan measured in
- * the wild was serving an indexed project.
+ * the wild was serving an indexed project. It is a temporary one rather than
+ * this checkout, which inside an uninitialized git worktree is refused outright.
  */
 function spawnServe(dataDir: string, extraEnv: Record<string, string> = {}) {
   return Bun.spawn(["bun", CLI, "serve"], {
-    cwd: REPO,
+    cwd: project,
     stdin: "pipe",
     stdout: "ignore",
     stderr: "ignore",
@@ -89,7 +97,7 @@ describe("serve — stdio lifecycle", () => {
     const shell = Bun.spawn(
       ["bash", "-c", `bun ${CLI} serve <&0 & echo $! && wait`],
       {
-        cwd: REPO,
+        cwd: project,
         stdin: "pipe",
         stdout: "pipe",
         stderr: "ignore",
@@ -171,7 +179,7 @@ describe("serve — stdio lifecycle", () => {
     });
 
     const proc = Bun.spawn(["bun", CLI, "serve"], {
-      cwd: REPO,
+      cwd: project,
       stdin: "pipe",
       stdout: "pipe",
       stderr: "ignore",
@@ -237,7 +245,7 @@ describe("serve — client pid handed down by the shim", () => {
     // The server's real parent is bun-test, which stays alive throughout. Only
     // BRAIN_CLIENT_PID going away may end it — proving it watches that pid.
     const server = Bun.spawn(["bun", CLI, "serve"], {
-      cwd: REPO,
+      cwd: project,
       stdin: "pipe",
       stdout: "ignore",
       stderr: "ignore",

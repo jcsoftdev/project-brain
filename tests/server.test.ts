@@ -1,4 +1,4 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +7,7 @@ import { SERVER_INSTRUCTIONS, GRAPH_DB_FILE } from "../src/constants.js";
 import { openGraphDb } from "../src/graph/db.js";
 import { GraphStore } from "../src/graph/store.js";
 import type { EmbeddingClient } from "../src/types.js";
+import { makeTempProject } from "./helpers/temp-project.js";
 
 const stubEmbeddings: EmbeddingClient = {
   dim: 768,
@@ -16,8 +17,16 @@ const stubEmbeddings: EmbeddingClient = {
 };
 
 describe("Server", () => {
+  let project: string;
+  beforeAll(async () => {
+    project = await makeTempProject("pb-server-");
+  });
+  afterAll(async () => {
+    await rm(project, { recursive: true, force: true });
+  });
+
   it("createServer returns a configured McpServer", async () => {
-    const { server } = await createServer({ dbPath: "/tmp/brain-test-server", embeddings: stubEmbeddings });
+    const { server } = await createServer({ dbPath: join(project, "data"), projectRoot: project, embeddings: stubEmbeddings });
     expect(server).toBeDefined();
   });
 
@@ -104,7 +113,7 @@ describe("Server", () => {
   });
 
   it("registers all 21 tools", async () => {
-    const { toolNames } = await createServer({ dbPath: "/tmp/brain-test-server", embeddings: stubEmbeddings });
+    const { toolNames } = await createServer({ dbPath: join(project, "data"), projectRoot: project, embeddings: stubEmbeddings });
     const expected = [
       "search_context",
       "search_code",
@@ -135,7 +144,7 @@ describe("Server", () => {
   });
 
   it("wires SERVER_INSTRUCTIONS into the server (instructions const is passed)", async () => {
-    const { instructions } = await createServer({ dbPath: "/tmp/brain-test-server", embeddings: stubEmbeddings });
+    const { instructions } = await createServer({ dbPath: join(project, "data"), projectRoot: project, embeddings: stubEmbeddings });
     expect(instructions).toBe(SERVER_INSTRUCTIONS);
   });
 });
