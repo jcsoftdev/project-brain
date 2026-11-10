@@ -111,6 +111,7 @@ declare module 'claude-code' {
       sessionStart: Shaped<number>
       commitCalls: Shaped<CommitCall[]>
       history: Shaped<HistoryView>
+      accent: Shaped<string>
       historyFiles: Shaped<Record<string, HistoryFiles>>
     }
   }

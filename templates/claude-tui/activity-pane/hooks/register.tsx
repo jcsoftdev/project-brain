@@ -120,6 +120,35 @@ const scopes = atom({ plugin: 'project-brain-activity', key: 'scopes' } as const
 const branch = atom({ plugin: 'project-brain-activity', key: 'branch' } as const, { isLoaded: false, files: [], commits: [] } as BranchView, { shape: 'branch-1' })
 const autoOpen = atom({ plugin: 'project-brain-activity', key: 'autoOpen' } as const, true, { shape: 'auto-open-1' })
 const editor = atom({ plugin: 'project-brain-activity', key: 'editor' } as const, { dir: '', tab: '' } as EditorState, { shape: 'editor-1' })
+const accentColor = atom({ plugin: 'project-brain-activity', key: 'accent' } as const, 'claude' as string, { shape: 'accent-1' })
+
+/** Claude Code's session colours (/color) in the default theme; 'default' and unknown names keep the claude tone. */
+const SESSION_COLORS: Record<string, string> = {
+  red: 'rgb(220,38,38)', blue: 'rgb(106,155,204)', green: 'rgb(22,163,74)', yellow: 'rgb(202,138,4)',
+  purple: 'rgb(130,125,189)', orange: 'rgb(217,119,87)', pink: 'rgb(196,102,134)', cyan: 'rgb(8,145,178)',
+}
+
+/** The last `"agentColor":"<name>"` grep match in the transcript, as a colour the pane can paint. */
+export const accentOf = (grepOutput: string): string => {
+  const names = [...grepOutput.matchAll(/"agentColor":"([a-z]+)"/g)].map(match => match[1] ?? '')
+  return SESSION_COLORS[names.at(-1) ?? ''] ?? 'claude'
+}
+
+/** Reads the session colour Claude Code writes into the transcript as an `agent-color` entry. */
+const refreshAccent = async ($: Api): Promise<void> => {
+  const [id, root, home] = await Promise.all([
+    $.session.id(),
+    $.session.root(),
+    $.process.run(['/usr/bin/printenv', 'HOME']).then(out => out.stdout.trim()).catch(() => ''),
+  ])
+  if (!home || !/^[0-9a-f-]{36}$/.test(id)) return
+  const transcript = `${home}/.claude/projects/${root.replace(/[^A-Za-z0-9]/g, '-')}/${id}.jsonl`
+  const found = await $.process.run(['/usr/bin/grep', '-a', '-o', '"agentColor":"[a-z]*"', transcript], { timeoutMs: 3000 }).catch(() => undefined)
+  if (!found) return
+  const next = accentOf(found.stdout)
+  if (next !== (await read($, accentColor))) await update($, accentColor, () => next)
+}
+
 const sessionStart = atom({ plugin: 'project-brain-activity', key: 'sessionStart' } as const, 0, { shape: 'session-start-1' })
 const commitCalls = atom({ plugin: 'project-brain-activity', key: 'commitCalls' } as const, [] as CommitCall[], { shape: 'commit-calls-1' })
 const history = atom({ plugin: 'project-brain-activity', key: 'history' } as const, { state: 'idle', rows: [], more: 0, loadedAt: 0 } as HistoryView, { shape: 'history-1' })
@@ -972,7 +1001,7 @@ export const windowStart = (state: PaneScroll, total: number, room: number): num
 // ---------------------------------------------------------------- pane model
 
 export type Tone = 'success' | 'error' | 'warning' | 'subtle' | 'permission' | 'claude' | 'suggestion' | 'diffAdded' | 'diffRemoved'
-export type Span = { text: string; color?: Tone; dim?: boolean; bold?: boolean; inverse?: boolean }
+export type Span = { text: string; color?: Tone | (string & {}); dim?: boolean; bold?: boolean; inverse?: boolean }
 export type Action =
   | { kind: 'toggle'; key: string }
   | { kind: 'tab'; tab: Tab }
@@ -992,6 +1021,7 @@ export type Snapshot = {
   usd: number
   context: ContextUsage
   steps: Record<string, StepContext>
+  accent: string
   opened: string[]
   patches: Record<string, DiffPatch>
   records: AgentRecord[]
@@ -1070,6 +1100,7 @@ export const cambiosScopeOf = (snap: Pick<Snapshot, 'scopeByAgent' | 'commitList
 
 export const buildPane = (snap: Snapshot, width: number): PaneModel => {
   const { list, flipped, opened, patches, records } = snap
+  const accent = snap.accent
   const scope = defaultAgent(records, snap.picked)
   const current: Tab = snap.tabByAgent[scope] ?? 'summary'
   const cambios = cambiosScopeOf(snap, scope)
@@ -1226,10 +1257,10 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
           { spans: [span(`${open ? '▾' : '▸'} `)], action: { kind: 'toggle', key }, label: open ? 'Ocultar archivos' : 'Ver archivos', key: `btn-${key}` },
           {
             spans: [
-              span(`${commit.isMerge ? ICONS.merge : ICONS.commit} `, { color: 'claude' }),
+              span(`${commit.isMerge ? ICONS.merge : ICONS.commit} `, { color: accent }),
               span(`${commit.sha.slice(0, 7)} `, { color: 'warning' }),
               span(fit(commit.subject, width - totals.length - tag.length - 14)),
-              ...(tag ? [span(tag, { color: 'claude', dim: true })] : []),
+              ...(tag ? [span(tag, { color: accent, dim: true })] : []),
             ],
           },
         ],
@@ -1252,7 +1283,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     const ours = view.rows.filter(row => row.sha !== undefined && ownerOf(owners, row.sha) !== undefined).length
     const rows: Row[] = [{
       key: 'hist-legend',
-      cells: [{ spans: [span(`${ICONS.history} ${shown} commits · `, { dim: true }), span('●', { color: 'claude' }), span(` ${ours} de esta sesión`, { dim: true }), ...(view.state === 'loading' ? [span(' · actualizando…', { dim: true })] : [])] }],
+      cells: [{ spans: [span(`${ICONS.history} ${shown} commits · `, { dim: true }), span('●', { color: accent }), span(` ${ours} de esta sesión`, { dim: true }), ...(view.state === 'loading' ? [span(' · actualizando…', { dim: true })] : [])] }],
     }]
     view.rows.forEach((row, index) => {
       const sha = row.sha
@@ -1263,7 +1294,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
       const owner = ownerOf(owners, sha)
       const loop = owner === undefined ? undefined : (owner.agentId ?? MAIN)
       const strength = loop === undefined ? 'none' : scope === MAIN || loop === scope ? 'strong' : 'soft'
-      const accent: Omit<Span, 'text'> = strength === 'strong' ? { color: 'claude' } : strength === 'soft' ? { color: 'claude', dim: true } : {}
+      const mark: Omit<Span, 'text'> = strength === 'strong' ? { color: accent } : strength === 'soft' ? { color: accent, dim: true } : {}
       const key = `hist-${sha}`
       const open = isOpen(key, false)
       const right = [ago(row.at, view.loadedAt), fit(row.author ?? '', 14)].filter(Boolean).join(' · ')
@@ -1278,13 +1309,13 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
         key,
         cells: [{
           spans: [
-            span(strength === 'none' ? '  ' : '● ', { ...accent, bold: strength === 'strong' }),
+            span(strength === 'none' ? '  ' : '● ', { ...mark, bold: strength === 'strong' }),
             span(row.graph, { dim: true }),
-            span(`${sha} `, strength === 'none' ? { color: 'warning' } : { ...accent, bold: strength === 'strong' }),
+            span(`${sha} `, strength === 'none' ? { color: 'warning' } : { ...mark, bold: strength === 'strong' }),
             ...refSpans,
             ...(refSpans.length > 0 ? [span(') ', { color: 'suggestion', dim: true })] : []),
-            span(fit(row.subject ?? '', width - used), accent),
-            ...(tag ? [span(tag, { color: 'claude', dim: true })] : []),
+            span(fit(row.subject ?? '', width - used), mark),
+            ...(tag ? [span(tag, { color: accent, dim: true })] : []),
           ],
           action: { kind: 'commit', sha },
           label: open ? 'Ocultar archivos' : 'Ver archivos',
@@ -1312,7 +1343,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
       ...section('branch-commits', `Commits de la rama · ${view.commits.length}`, true, () =>
         view.commits.map(commit => ({
           key: `bc-${commit.sha}`,
-          cells: [{ spans: [span(`  ${ICONS.commit} `, { color: 'claude' }), span(`${commit.sha} `, { color: 'warning' }), span(fit(commit.subject, width - commit.sha.length - 6))] }],
+          cells: [{ spans: [span(`  ${ICONS.commit} `, { color: accent }), span(`${commit.sha} `, { color: 'warning' }), span(fit(commit.subject, width - commit.sha.length - 6))] }],
         })),
       ),
       ...(view.files.length === 0 ? [line('branch-nofiles', 'La rama no cambia archivos.', { dim: true })] : view.files.flatMap(file => fileRows({ scope: 'branch', sha: view.base, path: file.path }, file, ''))),
@@ -1408,7 +1439,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
   if (agent) {
     const look = AGENT_LOOK[agent.state]
     header.push(
-      { key: 'agent-head', cells: [{ spans: [span(`${ICONS.agent} ${shortName(agent)}`, { color: 'claude', bold: true }), span(` · ${agent.id.slice(0, 4)} · `, { dim: true }), span(look.label, { color: look.color })] }] },
+      { key: 'agent-head', cells: [{ spans: [span(`${ICONS.agent} ${shortName(agent)}`, { color: accent, bold: true }), span(` · ${agent.id.slice(0, 4)} · `, { dim: true }), span(look.label, { color: look.color })] }] },
       line('agent-task', agent.description, { dim: true }),
     )
   }
@@ -1482,12 +1513,12 @@ export const paneFrame = (model: PaneModel, bodyRows: number, view: PaneScroll, 
 const runOf = ($: Api): Run => (argv, init) => $.process.run(argv, init)
 
 const readSnapshot = async ($: Api): Promise<Snapshot> => {
-  const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps, historyView, historyFilesBySha] = await Promise.all([
+  const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps, historyView, historyFilesBySha, accent] = await Promise.all([
     read($, entries), read($, tabs), read($, toggled), read($, changes), read($, costUsd), read($, contextUsage), read($, openFiles), read($, diffs),
     read($, agents), read($, pickedAgent), read($, working), read($, scroll), read($, commits), read($, scopes), read($, branch), read($, stepContext),
-    read($, history), read($, historyFiles),
+    read($, history), read($, historyFiles), read($, accentColor),
   ])
-  return { list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view, historyView, historyFiles: historyFilesBySha }
+  return { accent, list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view, historyView, historyFiles: historyFilesBySha }
 }
 
 /** Fills in the line counts and files of up to ten commits that have none yet. */
@@ -1559,6 +1590,7 @@ export const register: Register = on => {
     const now = await $.clock.now()
     await update($, sessionStart, () => sessionStartOf(stored, now, list, known))
     scheduleRescan($ as Api)
+    void refreshAccent($ as Api).catch(() => undefined)
     return next(e)
   })
 
@@ -1601,6 +1633,7 @@ export const register: Register = on => {
     if (loopId === undefined) await update($, working, () => false)
     else await update($, agents, list => setAgentState(list, loopId, turnEndState(e.reason)))
     scheduleRescan($)
+    void refreshAccent($).catch(() => undefined)
     return done
   })
 
