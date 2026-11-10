@@ -7,15 +7,12 @@ import { spawnSync } from "node:child_process";
 import { decideClone, type DependencyFingerprint } from "../../src/commands/worktree-dependencies.js";
 import { createWorktree, type LifecycleDeps } from "../../src/commands/worktree-lifecycle.js";
 
-const same: DependencyFingerprint = { lockfileHash: "aaa", nodeMajor: "22", platform: "darwin", arch: "arm64" };
+const same: DependencyFingerprint = { lockfileHash: "aaa" };
 
 describe("decideClone", () => {
   const cases: Array<[string, DependencyFingerprint | null, DependencyFingerprint | null, string | null]> = [
     ["identical", same, { ...same }, null],
     ["different lockfile", same, { ...same, lockfileHash: "bbb" }, "lockfile differs from the main checkout"],
-    ["different node major", same, { ...same, nodeMajor: "24" }, "Node major differs"],
-    ["different platform", same, { ...same, platform: "linux" }, "platform or arch differs"],
-    ["different arch", same, { ...same, arch: "x64" }, "platform or arch differs"],
     ["no lockfile in main", null, same, "no lockfile to compare"],
     ["no lockfile in worktree", same, null, "no lockfile to compare"],
   ];

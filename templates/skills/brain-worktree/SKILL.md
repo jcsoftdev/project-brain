@@ -48,7 +48,7 @@ embedding model, and a full index in those cases is the correct answer, not a fa
 
 `worktree create` also gives the worktree the main checkout's `node_modules` without a
 second copy on disk. When the main checkout has one, the lockfile content hash matches
-the worktree's, and Node major, platform and arch are the same, it clones the folder
+the worktree's, it clones the folder
 copy-on-write (`cp -c -R` on macOS/APFS, `cp --reflink=always` on Linux). A clone is
 independent: changing a dependency inside the worktree never touches the main checkout.
 When any condition fails, or the filesystem cannot clone, nothing is copied (never a full
