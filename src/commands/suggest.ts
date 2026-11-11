@@ -96,6 +96,15 @@ export interface SuggestDeps {
 }
 
 /**
+ * Whether the conversation still shows this suggestion: same kind and name at the start of a line,
+ * whatever description Jev worded it with then.
+ */
+function alreadySuggested(shown: string, line: string): boolean {
+  const name = line.split(" — ")[0]!;
+  return `\n${shown}`.includes(`\n${name} — `);
+}
+
+/**
  * Printed once, on the first prompt of a session that started on an older version than the binary
  * now running. Hooks and skills are already live; CLAUDE.md is not reloaded, so the routing
  * guidance is repeated here in full. One small file read when the session is unknown or current.
@@ -225,6 +234,7 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
         queryEmbedding(prompt, projectDir).then(done, () => done(null));
       }));
 
+    const alreadyShown = import("../hooks/injected.js").then((m) => m.liveHookOutput(input.transcriptPath), () => null);
     const task = await taskContextFor(input, deps);
     // Nothing to wait for in the Jev round trip: print the notice now so a slow pick cannot cost it.
     if (!task) await flush(null);
@@ -234,7 +244,8 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
       queryEmbedding: vector,
       ...(task ? { taskSwitch: { recent: task.recent, ...(task.assistant ? { assistant: task.assistant } : {}) }, onTaskSwitch: (p: Record<string, number>) => (switchProbabilities = p) } : {}),
     });
-    for (const line of lines) if (line) out.push(line);
+    const shown = await alreadyShown;
+    for (const line of lines) if (line && !(shown && alreadySuggested(shown, line))) out.push(line);
 
     const { decideTaskSwitch, taskSwitchMessage } = await import("../hooks/task-switch.js");
     let message: string | null = null;

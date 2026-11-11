@@ -3,6 +3,7 @@ import type { Reranker } from "../rerank/jev.js";
 import { featureEnabled } from "../features.js";
 import { handleSearch } from "../tools/search.js";
 import { isNonCodePrompt } from "./trivial-prompt.js";
+import { withoutScores } from "../hooks/injected.js";
 
 /**
  * Hook budget: the UserPromptSubmit race in {@link execute} below gives up
@@ -22,20 +23,22 @@ export const HOOK_TIMEOUT_MS = 4000;
  * Never throws.
  */
 export function parsePromptFromStdin(raw: string): string {
-  if (!raw.trim()) return "";
+  return parseHookStdin(raw).prompt;
+}
+
+/** `prompt` and `transcript_path` of the UserPromptSubmit payload; empty/undefined on any malformed input. Never throws. */
+export function parseHookStdin(raw: string): { prompt: string; transcriptPath?: string } {
+  if (!raw.trim()) return { prompt: "" };
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return "";
-    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { prompt: "" };
     const obj = parsed as Record<string, unknown>;
-    return typeof obj.prompt === "string" ? obj.prompt : "";
+    return {
+      prompt: typeof obj.prompt === "string" ? obj.prompt : "",
+      ...(typeof obj.transcript_path === "string" && obj.transcript_path !== "" ? { transcriptPath: obj.transcript_path } : {}),
+    };
   } catch {
-    return "";
+    return { prompt: "" };
   }
 }
 
@@ -76,6 +79,43 @@ export interface SearchDeps {
   dbPath?: string;
   /** Optional Jev reranker — absent means opt-out (no token configured), never an error. */
   reranker?: Reranker;
+  /**
+   * The hook output still in the live conversation (hook path only): a snippet printed there
+   * exactly as it would print now is not injected again. Null or absent dedups nothing.
+   */
+  alreadyShown?: Promise<string | null> | string | null;
+}
+
+interface Hit {
+  chunk_id?: string;
+  source: string;
+  symbol?: string;
+  signature?: string;
+  snippet: string;
+  score: number;
+  start_line?: number;
+  end_line?: number;
+}
+
+/** One injected item: `- source › symbol (Lstart-end) [score x.xx]` and the first two non-empty snippet lines. */
+function formatHit(r: Hit): string {
+  const symbol = r.symbol ? ` › ${r.symbol}` : "";
+  const range = r.start_line != null && r.end_line != null ? ` (L${r.start_line}-${r.end_line})` : "";
+  const snippet = r.snippet
+    .split("\n")
+    .filter((l) => l.trim().length > 0)
+    .slice(0, 2)
+    .map((l) => `  ${l.trim()}`);
+  return [`- ${r.source}${symbol}${range} [score ${r.score.toFixed(2)}]`, ...snippet].join("\n");
+}
+
+/**
+ * Whether this exact item, score aside, is already in the conversation. Matching the printed text
+ * rather than an id keeps two chunks with one range apart and treats an edited snippet as new.
+ */
+function alreadyInjected(shown: string, item: string): boolean {
+  const block = withoutScores(item);
+  return shown.includes(`${block}\n- `) || shown.includes(`${block}\n</project-brain>`);
 }
 
 /**
@@ -97,48 +137,15 @@ export async function runSearch(args: SearchArgs, deps: SearchDeps): Promise<voi
     // Embeddings unavailable or retrieval error → print nothing
     if (result.isError) return;
 
-    const parsed = JSON.parse(result.content[0].text) as {
-      results?: Array<{
-        chunk_id?: string;
-        source: string;
-        symbol?: string;
-        signature?: string;
-        snippet: string;
-        score: number;
-        start_line?: number;
-        end_line?: number;
-      }>;
-    };
+    const parsed = JSON.parse(result.content[0].text) as { results?: Hit[] };
 
-    const results = (parsed.results ?? []).filter((r) => r.score >= (deps.reranker ? minScore : 0)).slice(0, maxHits);
-    if (results.length === 0) return;
+    const relevant = (parsed.results ?? []).filter((r) => r.score >= (deps.reranker ? minScore : 0)).slice(0, maxHits);
+    const shown = await deps.alreadyShown;
+    const visible = shown ? withoutScores(shown) : null;
+    const items = relevant.map(formatHit).filter((item) => !visible || !alreadyInjected(visible, item));
+    if (items.length === 0) return;
 
-    // Build compact markdown block
-    const lines: string[] = ["<project-brain: relevant context for this prompt>"];
-
-    for (const r of results) {
-      // Header: source › symbol? (Lstart-end)? [score x.xx]
-      const symbol = r.symbol ? ` › ${r.symbol}` : "";
-      const range =
-        r.start_line != null && r.end_line != null
-          ? ` (L${r.start_line}-${r.end_line})`
-          : "";
-      const score = `[score ${r.score.toFixed(2)}]`;
-      lines.push(`- ${r.source}${symbol}${range} ${score}`);
-
-      // Snippet: first two non-empty lines of the pre-budgeted snippet
-      const snippet = r.snippet
-        .split("\n")
-        .filter((l) => l.trim().length > 0)
-        .slice(0, 2)
-        .map((l) => `  ${l.trim()}`)
-        .join("\n");
-
-      if (snippet) lines.push(snippet);
-    }
-
-    lines.push("</project-brain>");
-    console.log(lines.join("\n"));
+    console.log(["<project-brain: relevant context for this prompt>", ...items, "</project-brain>"].join("\n"));
 
     if (deps.dbPath) {
       const { clearLastError } = await import("../store/error-state.js");
@@ -160,7 +167,7 @@ export async function execute(
   /** Optional DI seam for reading stdin — defaults to Bun.stdin.text(). */
   readStdin: () => Promise<string> = () => Bun.stdin.text(),
   /** Optional DI seam replacing the retrieval step (store + embeddings), so tests need neither. */
-  retrieve?: (query: string) => Promise<void>
+  retrieve?: (query: string, alreadyShown: Promise<string | null>) => Promise<void>
 ): Promise<void> {
   // Hard self-timeout: race against HOOK_TIMEOUT_MS so a hung ollama never blocks a prompt
   const timeoutPromise = new Promise<void>((resolve) => {
@@ -194,14 +201,14 @@ export async function execute(
       }
 
       let query: string;
+      let transcriptPath: string | undefined;
       const gate = featureEnabled("search-gate");
 
       if (useStdin) {
         // Read ALL of stdin, parse JSON, use .prompt as query.
         // Any failure (empty, bad JSON, missing .prompt) → no-op.
         try {
-          const raw = await readStdin();
-          query = parsePromptFromStdin(raw);
+          ({ prompt: query, transcriptPath } = parseHookStdin(await readStdin()));
         } catch {
           return;
         }
@@ -216,6 +223,11 @@ export async function execute(
       }
 
       if (!query.trim()) return;
+
+      // Read while the query embeds; only the hook path has a conversation to dedup against.
+      const alreadyShown = useStdin
+        ? import("../hooks/injected.js").then((m) => m.liveHookOutput(transcriptPath), () => null)
+        : Promise.resolve(null);
 
       const searchPart = async (): Promise<void> => {
         // Resolve projectId from cwd config if not supplied
@@ -279,12 +291,12 @@ export async function execute(
         const maxHits = envNumber("PROJECT_BRAIN_SEARCH_MAX_HITS", HOOK_MAX_HITS, (n) => Number.isInteger(n) && n > 0);
         const hookGate = useStdin && gate ? { minScore, maxHits } : {};
 
-        await runSearch({ query, project, limit, ...hookGate }, { store, embeddings, dbPath: DB_PATH, reranker });
+        await runSearch({ query, project, limit, ...hookGate }, { store, embeddings, dbPath: DB_PATH, reranker, alreadyShown });
       };
 
       // Skill/tool suggestions are not made here: `project-brain suggest --stdin` owns them,
       // as a global hook that also reaches projects without an index.
-      await (retrieve ? retrieve(query) : searchPart());
+      await (retrieve ? retrieve(query, alreadyShown) : searchPart());
     } catch (err) {
       // Any setup error → print nothing
       if (project) {
