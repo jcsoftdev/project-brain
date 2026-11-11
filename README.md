@@ -334,7 +334,7 @@ Every context-economy feature is its own unit in the `setup` checklist, ticked b
 | `config:context-slim` | moves large user sections of CLAUDE.md into skills | nothing |
 
 `setup` asks which parts to install — one checklist per group (Hosts, Guidance,
-Skills, Other), asked in order, so each question is about one kind of thing — and
+Skills, Claude TUI, Other), asked in order, so each question is about one kind of thing — and
 remembers the answer in `~/.project-brain/setup-selection.json`. Re-running it
 shows what is currently on disk beside what you are selecting, then a diff of
 what will change before anything is written. A part you deselect is removed and
@@ -354,6 +354,17 @@ project-brain setup --none
 ```
 
 Run `project-brain setup --with=nope` to print the list of valid ids.
+
+#### Claude TUI
+
+The "Claude TUI" checklist sets up Claude Code's terminal. Both units change files under `~/.claude`, so an upgrade never installs them on its own: they show up marked `NEW` and unchecked. Untick a unit to undo exactly what it wrote.
+
+| Unit | What it changes | Undo (untick) |
+|---|---|---|
+| `tui:activity-pane` | Writes the `project-brain-activity` mod into a local marketplace at `~/.project-brain/claude-plugins/`, registers it in `~/.claude/settings.json` (`extraKnownMarketplaces["project-brain"]`, `enabledPlugins["project-brain-activity@project-brain"]`) and, on first install, sets `tui` to `"fullscreen"`, remembering the value it replaced; a renderer you pick later is kept on updates | Deletes both entries and the files it wrote, and puts your previous `tui` value back unless you changed it since |
+| `tui:readable-replies` | Adds a marked block to `~/.claude/CLAUDE.md`: result first, full sentences, evidence at the end, no narration between tool calls | Deletes the block; the rest of the file stays as it was |
+
+The activity pane is a side pane named "Actividad" with tabs for todos, commands and uncommitted changes; each changed file expands to its diff against HEAD, with line numbers, and Enter on a file name opens it in one reused nvim split (Supacode, tmux, or a Terminal window) with its diff. When subagents run, a selector shows each one with its own summary, commands and diff; the header and footer stay fixed while the body scrolls. It docks on the right only in the fullscreen renderer (`/tui fullscreen`), which is why the unit switches it on. `/activity` reopens the pane after you close it, and ctrl+o still expands tool rows in the chat. The cost it shows is Claude Code's own estimate for the session, not a bill. If another marketplace is already registered under the name `project-brain`, setup reports the unit as foreign and leaves it alone; other plugins' settings are never touched. Mods need Claude Code 2.1.287 or later, and do not load when `disableAllHooks` is set.
 
 #### Worktree lifecycle
 

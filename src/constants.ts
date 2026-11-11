@@ -347,6 +347,9 @@ export const MODEL_ROUTING: ReadonlyArray<{
  */
 export const ROUTING_CONTENT_VERSION = 5;
 
+/** Bumped whenever the readable-replies block written into ~/.claude/CLAUDE.md changes, so setup reports it stale. */
+export const READABLE_REPLIES_VERSION = 1;
+
 /** Concrete model id per tier for one host. `null` = no verifiable stable name. */
 export type HostRoutingModels = Record<RoutingTier, string | null>;
 
