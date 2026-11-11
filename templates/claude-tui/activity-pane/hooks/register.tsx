@@ -122,10 +122,26 @@ const autoOpen = atom({ plugin: 'project-brain-activity', key: 'autoOpen' } as c
 const editor = atom({ plugin: 'project-brain-activity', key: 'editor' } as const, { dir: '', tab: '' } as EditorState, { shape: 'editor-1' })
 const accentColor = atom({ plugin: 'project-brain-activity', key: 'accent' } as const, 'claude' as string, { shape: 'accent-1' })
 
-/** Claude Code's session colours (/color) in the default theme; 'default' and unknown names keep the claude tone. */
+/** Claude Code's session colours (/color) as their Dracula counterparts; 'default' and unknown names keep the claude tone. */
 const SESSION_COLORS: Record<string, string> = {
-  red: 'rgb(220,38,38)', blue: 'rgb(106,155,204)', green: 'rgb(22,163,74)', yellow: 'rgb(202,138,4)',
-  purple: 'rgb(130,125,189)', orange: 'rgb(217,119,87)', pink: 'rgb(196,102,134)', cyan: 'rgb(8,145,178)',
+  red: '#FF5555', blue: '#6272A4', green: '#50FA7B', yellow: '#F1FA8C',
+  purple: '#BD93F9', orange: '#FFB86C', pink: '#FF79C6', cyan: '#8BE9FD',
+}
+
+/** The pane's palette (Dracula): each tone the rows name, painted as the owner's chosen hex. */
+export const PALETTE: Record<Tone, string> = {
+  success: '#50FA7B', error: '#FF5555', warning: '#FFB86C', subtle: '#6272A4', permission: '#BD93F9',
+  claude: '#FF79C6', suggestion: '#8BE9FD', diffAdded: '#50FA7B', diffRemoved: '#FF5555',
+}
+const COMMENT = '#6272A4'
+/** The pane's own background, darker than the terminal's so the palette stands out. */
+export const PANE_BG = '#181320'
+
+/** A span's colour as the surface draws it: palette tones become hex, a dim span without colour takes the comment grey. */
+export const paint = (one: Pick<Span, 'color' | 'dim'>): { color?: string; dimColor?: boolean } => {
+  if (one.color === undefined) return one.dim ? { color: COMMENT } : {}
+  const color = (PALETTE as Record<string, string>)[one.color] ?? one.color
+  return { color, ...(one.dim ? { dimColor: true } : {}) }
 }
 
 /** The last `"agentColor":"<name>"` grep match in the transcript, as a colour the pane can paint. */
@@ -1948,7 +1964,7 @@ export const register: Register = on => {
 
     const spansOf = (spans: Span[]) =>
       spans.map(one => (
-        <Text color={one.color} dimColor={one.dim} bold={one.bold} inverse={one.inverse}>{one.text}</Text>
+        <Text {...paint(one)} backgroundColor={one.inverse ? undefined : PANE_BG} bold={one.bold} inverse={one.inverse}>{one.text}</Text>
       ))
     const cellOf = (rowKey: string, cell: Cell, index: number) => {
       const action = cell.action
@@ -1977,6 +1993,6 @@ export const register: Register = on => {
       )
     }
 
-    return <Box flexDirection="column" width={width}>{frame.rows.map(rowOf)}</Box>
+    return <Box flexDirection="column" width={width} height={Math.max(1, e.props.scroll.bodyRows)} backgroundColor={PANE_BG}>{frame.rows.map(rowOf)}</Box>
   })
 }
