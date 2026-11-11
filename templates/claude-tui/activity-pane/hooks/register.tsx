@@ -134,6 +134,8 @@ export const PALETTE: Record<Tone, string> = {
   claude: '#FF79C6', suggestion: '#8BE9FD', diffAdded: '#50FA7B', diffRemoved: '#FF5555',
 }
 const COMMENT = '#6272A4'
+/** The pane's own background, darker than the terminal's so the palette stands out. */
+export const PANE_BG = '#181320'
 
 /** A span's colour as the surface draws it: palette tones become hex, a dim span without colour takes the comment grey. */
 export const paint = (one: Pick<Span, 'color' | 'dim'>): { color?: string; dimColor?: boolean } => {
@@ -1962,7 +1964,7 @@ export const register: Register = on => {
 
     const spansOf = (spans: Span[]) =>
       spans.map(one => (
-        <Text {...paint(one)} bold={one.bold} inverse={one.inverse}>{one.text}</Text>
+        <Text {...paint(one)} backgroundColor={one.inverse ? undefined : PANE_BG} bold={one.bold} inverse={one.inverse}>{one.text}</Text>
       ))
     const cellOf = (rowKey: string, cell: Cell, index: number) => {
       const action = cell.action
@@ -1991,6 +1993,6 @@ export const register: Register = on => {
       )
     }
 
-    return <Box flexDirection="column" width={width}>{frame.rows.map(rowOf)}</Box>
+    return <Box flexDirection="column" width={width} height={Math.max(1, e.props.scroll.bodyRows)} backgroundColor={PANE_BG}>{frame.rows.map(rowOf)}</Box>
   })
 }
