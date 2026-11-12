@@ -4,9 +4,12 @@ import { join, relative } from "node:path";
 import {
   ACTIVITY_PANE_FILES,
   ACTIVITY_PLUGIN_NAME,
+  CONTEXT_GATE_FILES,
+  CONTEXT_GATE_PLUGIN_NAME,
   SKILL_LISTING_FILES,
   SKILL_LISTING_PLUGIN_NAME,
 } from "../../src/setup/claude-tui.js";
+import { GATE_FENCE_BEGIN, GATE_FENCE_END } from "../../src/hooks/gate-fence.js";
 
 const templates = join(import.meta.dir, "../../templates/claude-tui");
 
@@ -23,6 +26,7 @@ async function filesUnder(root: string, dir = root): Promise<string[]> {
 const MODS = [
   { dir: "activity-pane", name: ACTIVITY_PLUGIN_NAME, files: ACTIVITY_PANE_FILES },
   { dir: "skill-listing", name: SKILL_LISTING_PLUGIN_NAME, files: SKILL_LISTING_FILES },
+  { dir: "context-gate", name: CONTEXT_GATE_PLUGIN_NAME, files: CONTEXT_GATE_FILES },
 ];
 
 for (const { dir, name, files } of MODS) {
@@ -56,8 +60,17 @@ describe("activity-pane names", () => {
   });
 });
 
-describe("skill-listing types", () => {
+describe("context-gate fences", () => {
+  it("are the ones project-brain's hooks write", () => {
+    const register = CONTEXT_GATE_FILES["hooks/register.tsx"]!;
+    expect(register).toContain(`export const FENCE_BEGIN = '${GATE_FENCE_BEGIN}'`);
+    expect(register).toContain(`export const FENCE_END = '${GATE_FENCE_END}'`);
+  });
+});
+
+describe("mod types", () => {
   it("are self-contained: no import() and no import statement", () => {
     expect(SKILL_LISTING_FILES["types/index.d.ts"]).not.toMatch(/\bimport\b/);
+    expect(CONTEXT_GATE_FILES["types/index.d.ts"]).not.toMatch(/\bimport\b/);
   });
 });

@@ -170,6 +170,7 @@ Commands:
   search "<query>"   Search indexed context (used by hooks); prints compact results
   suggest --stdin    Skill/tool suggestion hook (UserPromptSubmit, global; works in any directory)
                        --agent   read a delegation (prompt, description, cwd) and print the skills it needs
+                       --context read a prompt and hook-injected context pieces and print which the task needs
   update             Update project-brain to the latest published version, then re-apply your
                        saved setup selection with the new binary (no prompts)
                        --apply-only  skip the install (after brew/npm upgraded it for you)

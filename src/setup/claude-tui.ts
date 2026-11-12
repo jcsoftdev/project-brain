@@ -26,6 +26,12 @@ import listingHooksJson from "../../templates/claude-tui/skill-listing/hooks/hoo
 import listingRegisterTsx from "../../templates/claude-tui/skill-listing/hooks/register.tsx" with { type: "text" };
 // @ts-expect-error TypeScript refuses a value import of a .d.ts; Bun's text attribute embeds it as a string.
 import listingTypesDts from "../../templates/claude-tui/skill-listing/types/index.d.ts" with { type: "text" };
+import gatePluginJson from "../../templates/claude-tui/context-gate/.claude-plugin/plugin.json" with { type: "text" };
+import gateHooksJson from "../../templates/claude-tui/context-gate/hooks/hooks.json" with { type: "text" };
+// @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
+import gateRegisterTsx from "../../templates/claude-tui/context-gate/hooks/register.tsx" with { type: "text" };
+// @ts-expect-error TypeScript refuses a value import of a .d.ts; Bun's text attribute embeds it as a string.
+import gateTypesDts from "../../templates/claude-tui/context-gate/types/index.d.ts" with { type: "text" };
 
 export const MARKETPLACE_NAME = "project-brain";
 
@@ -78,7 +84,23 @@ export const SKILL_LISTING_MOD: Mod = {
   files: SKILL_LISTING_FILES,
 };
 
-const MODS: Mod[] = [ACTIVITY_MOD, SKILL_LISTING_MOD];
+export const CONTEXT_GATE_PLUGIN_NAME = "project-brain-context-gate";
+export const CONTEXT_GATE_PLUGIN_KEY = `${CONTEXT_GATE_PLUGIN_NAME}@${MARKETPLACE_NAME}`;
+
+export const CONTEXT_GATE_FILES: Record<string, string> = {
+  ".claude-plugin/plugin.json": gatePluginJson as unknown as string,
+  "hooks/hooks.json": gateHooksJson as unknown as string,
+  "hooks/register.tsx": gateRegisterTsx as string,
+  "types/index.d.ts": gateTypesDts as string,
+};
+
+export const CONTEXT_GATE_MOD: Mod = {
+  name: CONTEXT_GATE_PLUGIN_NAME,
+  description: "Jev gate for hook-injected context in Claude Code, installed by project-brain setup.",
+  files: CONTEXT_GATE_FILES,
+};
+
+const MODS: Mod[] = [ACTIVITY_MOD, SKILL_LISTING_MOD, CONTEXT_GATE_MOD];
 
 /**
  * Names only the mods that are installed: a plugin entry whose source directory is missing could

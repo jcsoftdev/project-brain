@@ -14,11 +14,12 @@
 
 import { worktreeStatus, pruneWorktrees } from "../commands/worktree.js";
 import { listLiveWorktrees } from "../git/worktree.js";
+import { fencedForGate } from "./gate-fence.js";
 
 /** SessionStart payload wrapper. */
 function payload(additionalContext: string): string {
   return JSON.stringify({
-    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext },
+    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: fencedForGate(additionalContext) },
   });
 }
 

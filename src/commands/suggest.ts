@@ -1,6 +1,8 @@
 import { isTrivialPrompt } from "./trivial-prompt.js";
 import { pickSkill, pickSuggestions } from "../skills/picker.js";
 import type { SharedQuery } from "../skills/semantic.js";
+import { judgeContext, parseContextInput, recordContextGateHealth, type ContextJudgeDeps } from "../skills/context-gate.js";
+import { fencedForGate } from "../hooks/gate-fence.js";
 
 /**
  * Self-timeout of the global suggest hook. The hook entry allows 10s; this stays
@@ -265,7 +267,7 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
         print(
           JSON.stringify({
             systemMessage,
-            ...(additionalContext ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } } : {}),
+            ...(additionalContext ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: fencedForGate(additionalContext) } } : {}),
           })
         );
       out.length = 0;
@@ -324,9 +326,28 @@ async function recordPickHealthInDataDir(ok: boolean): Promise<void> {
   await recordPickHealth(DATA_DIR, ok);
 }
 
+export async function runContextSuggest(raw: string, deps: { print?: (text: string) => void } & ContextJudgeDeps = {}): Promise<void> {
+  const { print = console.log, ...judgeDeps } = deps;
+  try {
+    const input = parseContextInput(raw);
+    if (!input) return;
+    const verdict = await judgeContext(input, judgeDeps);
+    if (verdict) print(JSON.stringify(verdict));
+  } catch {
+    return;
+  }
+}
+
+async function recordContextHealthInDataDir(ok: boolean): Promise<void> {
+  const { DATA_DIR } = await import("../constants.js");
+  await recordContextGateHealth(DATA_DIR, ok);
+}
+
+export const CONTEXT_TIMEOUT_MS = 2500;
+
 /**
- * CLI entry point: `project-brain suggest --stdin` (the prompt hook) or `suggest --agent --stdin`
- * (a delegation's skills). Without `--stdin` it does nothing.
+ * CLI entry point: `project-brain suggest --stdin` (the prompt hook), `suggest --agent --stdin`
+ * (a delegation's skills) or `suggest --context --stdin` (the context gate). Without `--stdin` it does nothing.
  */
 export async function execute(
   args: string[],
@@ -334,14 +355,17 @@ export async function execute(
   deps: SuggestDeps = {}
 ): Promise<void> {
   if (!args.includes("--stdin")) return;
+  const context = args.includes("--context");
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, SUGGEST_TIMEOUT_MS);
+    timer = setTimeout(resolve, context ? CONTEXT_TIMEOUT_MS : SUGGEST_TIMEOUT_MS);
   });
   const recordHealth = deps.recordHealth ?? recordPickHealthInDataDir;
-  const run = args.includes("--agent")
-    ? (raw: string) => runAgentSuggest(raw, { recordHealth })
-    : (raw: string) => runSuggest(raw, { ...deps, recordHealth });
+  const run = context
+    ? (raw: string) => runContextSuggest(raw, { recordHealth: deps.recordHealth ?? recordContextHealthInDataDir })
+    : args.includes("--agent")
+      ? (raw: string) => runAgentSuggest(raw, { recordHealth })
+      : (raw: string) => runSuggest(raw, { ...deps, recordHealth });
   const work = readStdin().then(run, () => {});
   await Promise.race([work, timeout]);
   clearTimeout(timer);

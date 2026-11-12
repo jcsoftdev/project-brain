@@ -8,6 +8,9 @@ import {
   ACTIVITY_PANE_FILES,
   ACTIVITY_PLUGIN_KEY,
   ACTIVITY_PLUGIN_NAME,
+  CONTEXT_GATE_FILES,
+  CONTEXT_GATE_PLUGIN_KEY,
+  CONTEXT_GATE_PLUGIN_NAME,
   MARKETPLACE_NAME,
   SKILL_LISTING_FILES,
   SKILL_LISTING_PLUGIN_KEY,
@@ -46,7 +49,8 @@ async function seedSettings(value: unknown) {
   await writeFile(settingsPath, JSON.stringify(value, null, 2));
 }
 
-const TUI_IDS = ["tui:activity-pane", "tui:readable-replies", "tui:skill-listing"];
+const TUI_IDS = ["tui:activity-pane", "tui:readable-replies", "tui:skill-listing", "tui:context-gate"];
+const UNCHECKED = new Set(["tui:skill-listing", "tui:context-gate"]);
 
 describe("Claude TUI units", () => {
   it("are grouped, never installed silently on upgrade, and only the skill listing ships unchecked", () => {
@@ -54,7 +58,7 @@ describe("Claude TUI units", () => {
       const unit = unitOf(id);
       expect(unit, id).toBeDefined();
       expect(unit.group).toBe("Claude TUI");
-      expect(unit.defaultSelected).toBe(id !== "tui:skill-listing");
+      expect(unit.defaultSelected).toBe(!UNCHECKED.has(id));
       expect(unit.autoOnUpgrade).toBeFalsy();
       expect(unit.description).toContain("untick");
     }
@@ -288,5 +292,32 @@ describe("tui:skill-listing", () => {
     await unitOf("tui:skill-listing").apply(listingCtx(async (_options, current) => (asked.push({ options: null, current }), null)));
     expect(asked[1]!.current).toEqual(["brain-style"]);
     expect(JSON.parse(await readFile(join(dataDir, "skills.json"), "utf8")).general).toEqual(["brain-style"]);
+  });
+});
+
+describe("tui:context-gate", () => {
+  const gateDir = () => join(marketplaceDir(dataDir), CONTEXT_GATE_PLUGIN_NAME);
+  const pluginNames = async () =>
+    JSON.parse(await readFile(join(marketplaceDir(dataDir), ".claude-plugin", "marketplace.json"), "utf8")).plugins.map((p: { name: string }) => p.name);
+
+  it("absent → apply → current → remove, other settings and the sibling mod preserved", async () => {
+    await seedSettings(USER_SETTINGS);
+    const unit = unitOf("tui:context-gate");
+    expect(await unit.inspect(ctxFor())).toBe("absent");
+
+    await unitOf("tui:activity-pane").apply(ctxFor());
+    await unit.apply(ctxFor());
+    expect(await unit.inspect(ctxFor())).toBe("current");
+    expect((await readSettings()).enabledPlugins[CONTEXT_GATE_PLUGIN_KEY]).toBe(true);
+    for (const [rel, text] of Object.entries(CONTEXT_GATE_FILES)) expect(await readFile(join(gateDir(), rel), "utf8"), rel).toBe(text);
+    expect(await pluginNames()).toEqual([ACTIVITY_PLUGIN_NAME, CONTEXT_GATE_PLUGIN_NAME]);
+
+    await unit.remove(ctxFor());
+    expect((await readSettings()).enabledPlugins[CONTEXT_GATE_PLUGIN_KEY]).toBeUndefined();
+    expect(await unitOf("tui:activity-pane").inspect(ctxFor())).toBe("current");
+    expect(existsSync(gateDir())).toBe(false);
+    await unitOf("tui:activity-pane").remove(ctxFor());
+    expect(await readSettings()).toEqual(USER_SETTINGS);
+    expect(await unit.inspect(ctxFor())).toBe("absent");
   });
 });

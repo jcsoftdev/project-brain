@@ -20,6 +20,7 @@
 
 import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fencedForGate } from "./gate-fence.js";
 
 /** A session name is a label, not a summary. Ten words is already generous. */
 export const MAX_TITLE_WORDS = 10;
@@ -251,7 +252,7 @@ export function buildTitleNotice(): string {
   ].join("\n");
 
   return JSON.stringify({
-    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext },
+    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: fencedForGate(additionalContext) },
   });
 }
 
