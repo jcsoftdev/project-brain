@@ -26,7 +26,7 @@ export async function handleHealth(
       deps.projectRoot ? readManifestChunks(deps.projectRoot) : Promise.resolve(undefined),
       deps.projectRoot ? readSyncStatus(deps.projectRoot) : Promise.resolve(null),
       deps.projectRoot ? readProjectRulesState(deps.projectRoot) : Promise.resolve(undefined),
-      deps.probeInteractiveLane ? deps.probeInteractiveLane() : Promise.resolve(undefined),
+      deps.probeInteractiveLane ? deps.probeInteractiveLane(emb.model ?? EMBEDDING_MODEL) : Promise.resolve(undefined),
     ]);
 
   const report = {
@@ -100,7 +100,11 @@ export function register(server: McpServer, deps: ToolDeps): void {
           .optional(),
         projectRules: z.enum(["current", "stale", "missing"]).optional(),
         interactiveLane: z
-          .object({ status: z.enum(["off", "up", "down"]), host: z.string().optional() })
+          .object({
+            status: z.enum(["off", "up", "down", "mismatch"]),
+            host: z.string().optional(),
+            reason: z.string().optional(),
+          })
           .optional(),
       },
       annotations: toolAnnotations("check_health"),

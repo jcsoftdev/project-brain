@@ -84,7 +84,7 @@ export async function createServer(options: ServerOptions = {}) {
   const queryEmbeddingsFor = makeEmbeddingResolver({
     dbPath,
     host: ollamaHost,
-    defaultClient: withLane(embeddings, { lane: queryLane }),
+    defaultClient: withLane(embeddings, { lane: queryLane, fallbackHost: ollamaHost }),
     lane: queryLane,
   });
 
@@ -170,7 +170,9 @@ export async function createServer(options: ServerOptions = {}) {
 
   const deps: ToolDeps = {
     store, embeddings, embeddingsFor, queryEmbeddingsFor, graph, confirmDestructive, projectRoot, dbPath,
-    ...(queryLane === "interactive" ? { probeInteractiveLane } : {}),
+    ...(queryLane === "interactive"
+      ? { probeInteractiveLane: (model: string) => probeInteractiveLane({ model, fallbackHost: ollamaHost }) }
+      : {}),
     projectId: ownProjectId, graphFor, reranker, rerankerTokenSource, rerankerTokenPath,
   };
 

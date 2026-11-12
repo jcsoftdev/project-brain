@@ -6,11 +6,15 @@ import {
   DEFAULT_INTERACTIVE_HOST,
   INTERACTIVE_HOST_ENV,
   InteractiveLaneClient,
-  fileDeadLaneMemo,
+  LANE_VERDICT_TTL_MS,
+  fileLaneMemo,
   probeInteractiveLane,
   resolveInteractiveHost,
+  verifyLane,
   withLane,
-  type DeadLaneMemo,
+  type LaneMemo,
+  type LaneState,
+  type LaneVerdict,
 } from "../../src/embeddings/lane.js";
 import { OllamaEmbeddingClient } from "../../src/embeddings/ollama.js";
 import { NullEmbeddingClient } from "../../src/embeddings/null.js";
@@ -34,44 +38,60 @@ async function tempDir(): Promise<string> {
 
 interface FakeOllama {
   host: string;
-  bodies: unknown[];
+  embedBodies: Array<{ model: string; input: string[] }>;
 }
 
-function vectorFor(model: string, text: string): number[] {
+interface FakeOptions {
+  delayMs?: number;
+  status?: number;
+  version?: string;
+  digest?: string;
+  skew?: number;
+  models?: string[];
+}
+
+function vectorFor(model: string, text: string, skew = 0): number[] {
   const seed = [...`${model}|${text}`].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) % 9973, 7);
-  return [seed / 9973, (seed % 97) / 97, (seed % 13) / 13, 1];
+  return [seed / 9973 + skew, (seed % 97) / 97, (seed % 13) / 13, 1];
 }
 
-function fakeOllama(opts: { delayMs?: number; status?: number } = {}): FakeOllama {
-  const bodies: unknown[] = [];
+function fakeOllama(opts: FakeOptions = {}): FakeOllama {
+  const embedBodies: FakeOllama["embedBodies"] = [];
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
-      if (new URL(req.url).pathname === "/api/tags") return Response.json({ models: [] });
+      const path = new URL(req.url).pathname;
+      if (path === "/api/version") return Response.json({ version: opts.version ?? "0.40.14" });
+      if (path === "/api/tags") {
+        const names = opts.models ?? ["m", "qwen3-embedding:0.6b"];
+        return Response.json({ models: names.map((name) => ({ name, digest: opts.digest ?? "sha-1" })) });
+      }
       const body = (await req.json()) as { model: string; input: string[] };
-      bodies.push(body);
+      embedBodies.push(body);
       if (opts.delayMs) await Bun.sleep(opts.delayMs);
       if (opts.status) return new Response("nope", { status: opts.status });
-      return Response.json({ embeddings: body.input.map((t) => vectorFor(body.model, t)) });
+      return Response.json({ embeddings: body.input.map((t) => vectorFor(body.model, t, opts.skew)) });
     },
   });
   servers.push(server);
-  return { host: `http://127.0.0.1:${server.port}`, bodies };
+  return { host: `http://127.0.0.1:${server.port}`, embedBodies };
 }
 
-function memoryMemo(): DeadLaneMemo & { dead: boolean } {
+function memoryMemo(state?: LaneState): LaneMemo & { verdict: LaneVerdict | null; writes: LaneState[] } {
   return {
-    dead: false,
-    isDead() {
-      return this.dead;
+    verdict: state ? { state, at: Date.now() } : null,
+    writes: [],
+    read() {
+      return this.verdict;
     },
-    markDead() {
-      this.dead = true;
+    write(next, reason) {
+      this.writes.push(next);
+      this.verdict = { state: next, at: Date.now(), ...(reason ? { reason } : {}) };
     },
   };
 }
 
-const noWarm = () => {};
+const noVerify = () => {};
 
 async function closedPortHost(): Promise<string> {
   const probe = Bun.serve({ port: 0, fetch: () => new Response("") });
@@ -81,22 +101,22 @@ async function closedPortHost(): Promise<string> {
 }
 
 describe("resolveInteractiveHost", () => {
-  it("defaults to port 11435", () => {
-    expect(resolveInteractiveHost({ env: {} })).toBe(DEFAULT_INTERACTIVE_HOST);
+  it("is off until setup or the env var turns it on", () => {
+    expect(resolveInteractiveHost({ env: {} })).toBeNull();
   });
 
   it("takes the env override and strips a trailing slash", () => {
-    expect(resolveInteractiveHost({ env: { [INTERACTIVE_HOST_ENV]: "http://10.0.0.5:9999/" } })).toBe(
-      "http://10.0.0.5:9999"
-    );
+    expect(resolveInteractiveHost({ env: { [INTERACTIVE_HOST_ENV]: "http://10.0.0.5:9999/" } })).toBe("http://10.0.0.5:9999");
   });
 
-  it("turns the lane off with `off` from env", () => {
-    expect(resolveInteractiveHost({ env: { [INTERACTIVE_HOST_ENV]: "off" } })).toBeNull();
-    expect(resolveInteractiveHost({ env: { [INTERACTIVE_HOST_ENV]: "OFF" } })).toBeNull();
+  it("turns the lane off with `off` from env, even when configured", async () => {
+    const dir = await tempDir();
+    const configPath = join(dir, "ollama.json");
+    await writeFile(configPath, JSON.stringify({ interactiveHost: DEFAULT_INTERACTIVE_HOST }));
+    expect(resolveInteractiveHost({ env: { [INTERACTIVE_HOST_ENV]: "OFF" }, configPath })).toBeNull();
   });
 
-  it("reads the config file, and env beats it", async () => {
+  it("reads the config file setup writes, and env beats it", async () => {
     const dir = await tempDir();
     const configPath = join(dir, "ollama.json");
     await writeFile(configPath, JSON.stringify({ interactiveHost: "http://127.0.0.1:12000" }));
@@ -104,47 +124,55 @@ describe("resolveInteractiveHost", () => {
     expect(resolveInteractiveHost({ env: { [INTERACTIVE_HOST_ENV]: "http://127.0.0.1:13000" }, configPath })).toBe(
       "http://127.0.0.1:13000"
     );
-
-    await writeFile(configPath, JSON.stringify({ interactiveHost: "off" }));
-    expect(resolveInteractiveHost({ env: {}, configPath })).toBeNull();
   });
 
-  it("ignores a blank env value and an unreadable config", async () => {
+  it("stays off with a blank env value and an unreadable config", async () => {
     const dir = await tempDir();
     const configPath = join(dir, "ollama.json");
     await writeFile(configPath, "{not json");
-    expect(resolveInteractiveHost({ env: { [INTERACTIVE_HOST_ENV]: "  " }, configPath })).toBe(DEFAULT_INTERACTIVE_HOST);
+    expect(resolveInteractiveHost({ env: { [INTERACTIVE_HOST_ENV]: "  " }, configPath })).toBeNull();
   });
 });
 
-describe("fileDeadLaneMemo", () => {
-  it("remembers a dead lane for the TTL, across memo instances", async () => {
+describe("fileLaneMemo", () => {
+  it("keeps each verdict for its own TTL, across memo instances", async () => {
     const dir = await tempDir();
     let now = 1_000_000;
-    const make = () => fileDeadLaneMemo("http://127.0.0.1:11435", { dir, ttlMs: 60_000, now: () => now });
+    const make = () => fileLaneMemo("http://127.0.0.1:11435", "m", { dir, now: () => now });
 
-    expect(make().isDead()).toBe(false);
-    make().markDead();
-    now += 59_000;
-    expect(make().isDead()).toBe(true);
-    now += 2_000;
-    expect(make().isDead()).toBe(false);
+    expect(make().read()).toBeNull();
+    make().write("dead");
+    now += LANE_VERDICT_TTL_MS.dead - 1;
+    expect(make().read()?.state).toBe("dead");
+    now += 2;
+    expect(make().read()).toBeNull();
+
+    make().write("ok");
+    now += LANE_VERDICT_TTL_MS.dead + 1;
+    expect(make().read()?.state).toBe("ok");
   });
 
-  it("keeps one memo per host", async () => {
+  it("ignores a verdict stamped in the future", async () => {
     const dir = await tempDir();
-    fileDeadLaneMemo("http://127.0.0.1:11435", { dir }).markDead();
-    expect(fileDeadLaneMemo("http://127.0.0.1:11436", { dir }).isDead()).toBe(false);
+    fileLaneMemo("h", "m", { dir, now: () => 5_000 }).write("ok");
+    expect(fileLaneMemo("h", "m", { dir, now: () => 1_000 }).read()).toBeNull();
+  });
+
+  it("keys verdicts by host and model", async () => {
+    const dir = await tempDir();
+    fileLaneMemo("http://127.0.0.1:11435", "a", { dir }).write("ok");
+    expect(fileLaneMemo("http://127.0.0.1:11435", "b", { dir }).read()).toBeNull();
+    expect(fileLaneMemo("http://127.0.0.1:11436", "a", { dir }).read()).toBeNull();
   });
 });
 
 describe("InteractiveLaneClient", () => {
-  function stub(model: string, result: number[][] | null, calls: string[], name: string): EmbeddingClient {
+  function stub(result: number[][] | null, calls: string[], name: string): EmbeddingClient {
     return {
-      model,
+      model: "m",
       dim: 4,
-      async embed() {
-        calls.push(name);
+      async embed(texts) {
+        calls.push(`${name}:${texts.length}`);
         return result;
       },
       async isAvailable() {
@@ -153,44 +181,100 @@ describe("InteractiveLaneClient", () => {
     };
   }
 
-  it("answers from the interactive client when it answers", async () => {
+  it("answers from a verified lane", async () => {
     const calls: string[] = [];
-    const memo = memoryMemo();
-    const lane = new InteractiveLaneClient(stub("m", [[1]], calls, "fast"), stub("m", [[2]], calls, "bulk"), memo);
+    const lane = new InteractiveLaneClient(stub([[1]], calls, "lane"), stub([[2]], calls, "bulk"), memoryMemo("ok"));
     expect(await lane.embed(["q"])).toEqual([[1]]);
-    expect(calls).toEqual(["fast"]);
-    expect(memo.dead).toBe(false);
+    expect(calls).toEqual(["lane:1"]);
   });
 
-  it("falls back once and marks the lane dead when the interactive client fails", async () => {
+  it("never sends a batch through the lane, nor touches the memo for one", async () => {
+    const calls: string[] = [];
+    const memo = memoryMemo("ok");
+    let verified = 0;
+    const lane = new InteractiveLaneClient(stub([[1]], calls, "lane"), stub([[2]], calls, "bulk"), memo, () => verified++);
+    await lane.embed(Array.from({ length: 16 }, (_, i) => `skill ${i}`));
+    expect(calls).toEqual(["bulk:16"]);
+    expect(memo.writes).toEqual([]);
+    expect(verified).toBe(0);
+
+    memo.verdict = null;
+    await lane.embed(["a", "b"]);
+    expect(memo.writes).toEqual([]);
+    expect(verified).toBe(0);
+  });
+
+  it("does not trust an unverified lane: falls back, marks pending, starts one verification", async () => {
     const calls: string[] = [];
     const memo = memoryMemo();
-    const lane = new InteractiveLaneClient(stub("m", null, calls, "fast"), stub("m", [[2]], calls, "bulk"), memo);
-    expect(await lane.embed(["q"])).toEqual([[2]]);
-    expect(calls).toEqual(["fast", "bulk"]);
-    expect(memo.dead).toBe(true);
+    let verified = 0;
+    const lane = new InteractiveLaneClient(stub([[1]], calls, "lane"), stub([[2]], calls, "bulk"), memo, () => verified++);
 
     expect(await lane.embed(["q"])).toEqual([[2]]);
-    expect(calls).toEqual(["fast", "bulk", "bulk"]);
+    expect(await lane.embed(["q"])).toEqual([[2]]);
+    expect(calls).toEqual(["bulk:1", "bulk:1"]);
+    expect(memo.writes).toEqual(["pending"]);
+    expect(verified).toBe(1);
   });
 
-  it("falls back when the interactive client throws", async () => {
-    const memo = memoryMemo();
-    const thrower: EmbeddingClient = {
-      model: "m",
-      dim: 4,
-      embed: () => Promise.reject(new Error("boom")),
-      isAvailable: async () => false,
-    };
-    const lane = new InteractiveLaneClient(thrower, stub("m", [[2]], [], "bulk"), memo);
-    expect(await lane.embed(["q"])).toEqual([[2]]);
-    expect(memo.dead).toBe(true);
+  it("skips a lane recorded as mismatched or dead", async () => {
+    for (const state of ["mismatch", "dead"] as const) {
+      const calls: string[] = [];
+      const lane = new InteractiveLaneClient(stub([[1]], calls, "lane"), stub([[2]], calls, "bulk"), memoryMemo(state), noVerify);
+      expect(await lane.embed(["q"])).toEqual([[2]]);
+      expect(calls).toEqual(["bulk:1"]);
+    }
   });
 
-  it("carries the fallback's model and width", () => {
-    const lane = new InteractiveLaneClient(stub("x", null, [], "a"), stub("qwen", null, [], "b"), memoryMemo());
-    expect(lane.model).toBe("qwen");
-    expect(lane.dim).toBe(4);
+  it("marks a verified lane dead when it stops answering, and falls back once", async () => {
+    const calls: string[] = [];
+    const memo = memoryMemo("ok");
+    const lane = new InteractiveLaneClient(stub(null, calls, "lane"), stub([[2]], calls, "bulk"), memo, noVerify);
+    expect(await lane.embed(["q"])).toEqual([[2]]);
+    expect(memo.verdict?.state).toBe("dead");
+    expect(await lane.embed(["q"])).toEqual([[2]]);
+    expect(calls).toEqual(["lane:1", "bulk:1", "bulk:1"]);
+  });
+
+  it("falls back when the lane throws", async () => {
+    const memo = memoryMemo("ok");
+    const thrower: EmbeddingClient = { model: "m", dim: 4, embed: () => Promise.reject(new Error("boom")), isAvailable: async () => false };
+    const lane = new InteractiveLaneClient(thrower, stub([[2]], [], "bulk"), memo, noVerify);
+    expect(await lane.embed(["q"])).toEqual([[2]]);
+    expect(memo.verdict?.state).toBe("dead");
+  });
+});
+
+describe("verifyLane", () => {
+  it("accepts a lane with the same version, digest and probe vector", async () => {
+    const lane = fakeOllama();
+    const def = fakeOllama();
+    expect(await verifyLane({ host: lane.host, fallbackHost: def.host, model: "m" })).toEqual({ state: "ok" });
+    expect(lane.embedBodies).toEqual(def.embedBodies);
+  });
+
+  it("rejects version skew, a different digest, a missing model and a different vector", async () => {
+    const def = fakeOllama();
+    const cases: Array<[FakeOptions, RegExp]> = [
+      [{ version: "0.41.0" }, /ollama 0\.41\.0 on the lane/],
+      [{ digest: "sha-2" }, /digest differs/],
+      [{ models: ["other"] }, /not installed on the lane/],
+      [{ skew: 1e-6 }, /probe embedding differs/],
+    ];
+    for (const [opts, reason] of cases) {
+      const lane = fakeOllama(opts);
+      const verdict = await verifyLane({ host: lane.host, fallbackHost: def.host, model: "m" });
+      expect(verdict.state).toBe("mismatch");
+      expect(verdict.reason).toMatch(reason);
+    }
+  });
+
+  it("calls a lane nobody answers on dead, and a foreign process that is not Ollama dead too", async () => {
+    const def = fakeOllama();
+    expect((await verifyLane({ host: await closedPortHost(), fallbackHost: def.host, model: "m" })).state).toBe("dead");
+    const foreign = Bun.serve({ port: 0, fetch: () => new Response("hello", { status: 404 }) });
+    servers.push(foreign);
+    expect((await verifyLane({ host: `http://127.0.0.1:${foreign.port}`, fallbackHost: def.host, model: "m" })).state).toBe("dead");
   });
 });
 
@@ -203,7 +287,7 @@ describe("withLane", () => {
   });
 
   it("puts interactive work behind the interactive host", () => {
-    const client = withLane(bulk, { lane: "interactive", interactiveHost: DEFAULT_INTERACTIVE_HOST, memo: memoryMemo(), warm: noWarm });
+    const client = withLane(bulk, { lane: "interactive", interactiveHost: DEFAULT_INTERACTIVE_HOST, memo: memoryMemo(), verify: noVerify });
     expect(client).toBeInstanceOf(InteractiveLaneClient);
     expect(client.model).toBe(bulk.model);
     expect(client.dim).toBe(1024);
@@ -214,6 +298,20 @@ describe("withLane", () => {
     const none = new NullEmbeddingClient();
     expect(withLane(none, { lane: "interactive", interactiveHost: DEFAULT_INTERACTIVE_HOST })).toBe(none);
   });
+
+  it("verifies against the caller's own host and model", async () => {
+    const seen: string[][] = [];
+    const slow = fakeOllama();
+    const lane = withLane(new OllamaEmbeddingClient(slow.host, undefined, "m", 4), {
+      lane: "interactive",
+      interactiveHost: "http://127.0.0.1:1",
+      fallbackHost: slow.host,
+      memo: memoryMemo(),
+      verify: (...args) => seen.push(args),
+    });
+    await lane.embed(["q"]);
+    expect(seen).toEqual([["http://127.0.0.1:1", slow.host, "m"]]);
+  });
 });
 
 describe("interactive lane against fake Ollama servers", () => {
@@ -222,83 +320,54 @@ describe("interactive lane against fake Ollama servers", () => {
     const slow = fakeOllama();
     const model = "qwen3-embedding:0.6b";
     const bulk = new OllamaEmbeddingClient(slow.host, undefined, model, 4);
-    const lane = withLane(bulk, { lane: "interactive", interactiveHost: fast.host, memo: memoryMemo(), warm: noWarm });
+    const lane = withLane(bulk, { lane: "interactive", interactiveHost: fast.host, memo: memoryMemo("ok"), verify: noVerify });
 
-    const texts = ["how does sync batch embeds", "second query"];
-    const fromLane = await lane.embed(texts);
-    const fromBulk = await bulk.embed(texts);
+    const fromLane = await lane.embed(["how does sync batch embeds"]);
+    const fromBulk = await bulk.embed(["how does sync batch embeds"]);
 
     expect(fromLane).toEqual(fromBulk);
-    expect(fast.bodies).toEqual(slow.bodies);
-    expect((fast.bodies[0] as { model: string }).model).toBe(model);
+    expect(fast.embedBodies).toEqual(slow.embedBodies);
+    expect(fast.embedBodies[0]!.model).toBe(model);
   });
 
   it("falls back to the default host when the interactive port refuses", async () => {
     const slow = fakeOllama();
-    const memo = memoryMemo();
+    const memo = memoryMemo("ok");
     const bulk = new OllamaEmbeddingClient(slow.host, undefined, "m", 4);
-    const lane = withLane(bulk, { lane: "interactive", interactiveHost: await closedPortHost(), memo, warm: noWarm });
+    const lane = withLane(bulk, { lane: "interactive", interactiveHost: await closedPortHost(), memo, verify: noVerify });
 
     expect(await lane.embed(["q"])).toEqual([vectorFor("m", "q")]);
-    expect(slow.bodies).toHaveLength(1);
-    expect(memo.dead).toBe(true);
-  });
-
-  it("asks a cold interactive host to load the model when it does not answer, and not when it does", async () => {
-    const warmed: Array<[string, string]> = [];
-    const warm = (host: string, model: string) => warmed.push([host, model]);
-    const slow = fakeOllama();
-    const bulk = new OllamaEmbeddingClient(slow.host, undefined, "m", 4);
-    const closed = await closedPortHost();
-
-    await withLane(bulk, { lane: "interactive", interactiveHost: closed, memo: memoryMemo(), warm }).embed(["q"]);
-    expect(warmed).toEqual([[closed, "m"]]);
-
-    const fast = fakeOllama();
-    await withLane(bulk, { lane: "interactive", interactiveHost: fast.host, memo: memoryMemo(), warm }).embed(["q"]);
-    expect(warmed).toHaveLength(1);
+    expect(slow.embedBodies).toHaveLength(1);
+    expect(memo.verdict?.state).toBe("dead");
   });
 
   it("falls back within the budget when the interactive host hangs", async () => {
     const hung = fakeOllama({ delayMs: 3_000 });
     const slow = fakeOllama();
-    const memo = memoryMemo();
+    const memo = memoryMemo("ok");
     const bulk = new OllamaEmbeddingClient(slow.host, undefined, "m", 4);
-    const lane = withLane(bulk, { lane: "interactive", interactiveHost: hung.host, memo, warm: noWarm });
+    const lane = withLane(bulk, { lane: "interactive", interactiveHost: hung.host, memo, verify: noVerify });
 
     const start = performance.now();
     expect(await lane.embed(["q"])).toEqual([vectorFor("m", "q")]);
     expect(performance.now() - start).toBeLessThan(800);
-    expect(memo.dead).toBe(true);
+    expect(memo.verdict?.state).toBe("dead");
   });
 
-  it("skips a host the memo says is dead without contacting it", async () => {
+  it("sends a 16-text skill batch to the default host only", async () => {
     const fast = fakeOllama();
     const slow = fakeOllama();
-    const memo = memoryMemo();
-    memo.dead = true;
+    const memo = memoryMemo("ok");
     const lane = withLane(new OllamaEmbeddingClient(slow.host, undefined, "m", 4), {
       lane: "interactive",
       interactiveHost: fast.host,
       memo,
-      warm: noWarm,
+      verify: noVerify,
     });
-
-    await lane.embed(["q"]);
-    expect(fast.bodies).toHaveLength(0);
-    expect(slow.bodies).toHaveLength(1);
-  });
-
-  it("uses the default host when the interactive one rejects the model", async () => {
-    const fast = fakeOllama({ status: 404 });
-    const slow = fakeOllama();
-    const lane = withLane(new OllamaEmbeddingClient(slow.host, undefined, "m", 4), {
-      lane: "interactive",
-      interactiveHost: fast.host,
-      memo: memoryMemo(),
-      warm: noWarm,
-    });
-    expect(await lane.embed(["q"])).toEqual([vectorFor("m", "q")]);
+    await lane.embed(Array.from({ length: 16 }, (_, i) => `skill ${i}`));
+    expect(fast.embedBodies).toHaveLength(0);
+    expect(slow.embedBodies).toHaveLength(1);
+    expect(memo.writes).toEqual([]);
   });
 });
 
@@ -310,7 +379,7 @@ describe("createEmbeddingClient lane option", () => {
       lane: "interactive",
       interactiveHost: DEFAULT_INTERACTIVE_HOST,
       memo: memoryMemo(),
-      warm: noWarm,
+      verify: noVerify,
     });
     const bulk = await createEmbeddingClient("qwen3-embedding", { host: "http://127.0.0.1:11434", recordedDim: 1024 });
 
@@ -326,10 +395,17 @@ describe("makeEmbeddingResolver lane option", () => {
   const readMeta = async () => ({ model: "other-model", dim: 8 }) as never;
 
   it("puts per-project clients behind the lane for an interactive resolver", async () => {
-    const resolve = makeEmbeddingResolver({ dbPath: "/x", host: "http://127.0.0.1:11434", defaultClient, readMeta, lane: "interactive" });
-    const client = await resolve("p");
-    expect(client).toBeInstanceOf(InteractiveLaneClient);
-    expect(client.model).toBe("other-model");
+    const previous = process.env[INTERACTIVE_HOST_ENV];
+    process.env[INTERACTIVE_HOST_ENV] = DEFAULT_INTERACTIVE_HOST;
+    try {
+      const resolve = makeEmbeddingResolver({ dbPath: "/x", host: "http://127.0.0.1:11434", defaultClient, readMeta, lane: "interactive" });
+      const client = await resolve("p");
+      expect(client).toBeInstanceOf(InteractiveLaneClient);
+      expect(client.model).toBe("other-model");
+    } finally {
+      if (previous === undefined) delete process.env[INTERACTIVE_HOST_ENV];
+      else process.env[INTERACTIVE_HOST_ENV] = previous;
+    }
   });
 
   it("leaves per-project clients bare for a bulk resolver", async () => {
@@ -339,12 +415,25 @@ describe("makeEmbeddingResolver lane option", () => {
 });
 
 describe("probeInteractiveLane", () => {
-  it("reports off, up and down", async () => {
-    expect(await probeInteractiveLane({ host: null })).toEqual({ status: "off" });
-    const fake = fakeOllama();
-    expect(await probeInteractiveLane({ host: fake.host })).toEqual({ status: "up", host: fake.host });
+  it("reports off, up, down and mismatch, and records the verdict", async () => {
+    const def = fakeOllama();
+    expect(await probeInteractiveLane({ model: "m", host: null })).toEqual({ status: "off" });
+
+    const same = fakeOllama();
+    const memo = memoryMemo();
+    expect(await probeInteractiveLane({ model: "m", host: same.host, fallbackHost: def.host, memo })).toEqual({
+      status: "up",
+      host: same.host,
+    });
+    expect(memo.verdict?.state).toBe("ok");
+
     const closed = await closedPortHost();
-    expect(await probeInteractiveLane({ host: closed })).toEqual({ status: "down", host: closed });
+    expect((await probeInteractiveLane({ model: "m", host: closed, fallbackHost: def.host, memo: memoryMemo() })).status).toBe("down");
+
+    const skewed = fakeOllama({ skew: 0.001 });
+    const mismatch = await probeInteractiveLane({ model: "m", host: skewed.host, fallbackHost: def.host, memo: memoryMemo() });
+    expect(mismatch.status).toBe("mismatch");
+    expect(mismatch.reason).toMatch(/probe embedding differs/);
   });
 });
 

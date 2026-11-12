@@ -158,7 +158,7 @@ export interface ToolDeps extends GraphDeps {
    */
   embeddingsFor?: (project: string) => Promise<EmbeddingClient>;
   queryEmbeddingsFor?: (project: string) => Promise<EmbeddingClient>;
-  probeInteractiveLane?: () => Promise<import("./embeddings/lane.js").InteractiveLaneStatus>;
+  probeInteractiveLane?: (model: string) => Promise<import("./embeddings/lane.js").InteractiveLaneStatus>;
   /**
    * Capability-gated destructive-action confirmation. Wired by server.ts to
    * MCP elicitation when the client declares the capability; absent otherwise

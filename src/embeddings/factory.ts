@@ -163,7 +163,9 @@ export async function createEmbeddingClient(
   if (modelKey === "none") {
     return new NullEmbeddingClient();
   }
-  return withLane(await createLaneless(modelKey, options), options);
+  const { OLLAMA_HOST } = await import("../constants.js");
+  const fallbackHost = parseOllamaHosts(process.env.BRAIN_OLLAMA_HOSTS)[0] ?? options.host ?? OLLAMA_HOST;
+  return withLane(await createLaneless(modelKey, options), { ...options, fallbackHost: options.fallbackHost ?? fallbackHost });
 }
 
 async function createLaneless(modelKey: string | undefined, options: FactoryOptions): Promise<EmbeddingClient> {

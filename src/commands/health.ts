@@ -136,13 +136,18 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
   };
 }
 
+const INTERACTIVE_LANE_LINES: Record<InteractiveLaneStatus["status"], (lane: InteractiveLaneStatus) => string> = {
+  off: () =>
+    `Interactive lane: off — queries share Ollama with indexing; enable with project-brain setup --with=service:ollama-interactive or ${INTERACTIVE_HOST_ENV}`,
+  up: (lane) => `Interactive lane: up (${lane.host})`,
+  down: (lane) =>
+    `Interactive lane: down (${lane.host}${lane.reason ? `: ${lane.reason}` : ""}) — queries fall back to the default Ollama and wait behind indexing`,
+  mismatch: (lane) =>
+    `Interactive lane: mismatch (${lane.host}: ${lane.reason ?? "differs from the default Ollama"}) — skipped; re-run project-brain setup --with=service:ollama-interactive`,
+};
+
 export function formatInteractiveLaneLine(lane: InteractiveLaneStatus): string {
-  if (lane.status === "off") return `Interactive lane: off (${INTERACTIVE_HOST_ENV}=off) — queries share Ollama with indexing`;
-  if (lane.status === "up") return `Interactive lane: up (${lane.host})`;
-  return (
-    `Interactive lane: down (${lane.host}) — queries fall back to the default Ollama and wait behind indexing; ` +
-    `run project-brain setup --with=service:ollama-interactive`
-  );
+  return INTERACTIVE_LANE_LINES[lane.status](lane);
 }
 
 /**
@@ -251,7 +256,7 @@ export async function execute(args: string[]): Promise<void> {
     rerankerTokenPath: resolvedReranker?.path,
     rerankerClient: resolvedReranker?.reranker,
     projectRules: await readProjectRulesState(root),
-    interactiveLane: await probeInteractiveLane(),
+    interactiveLane: await probeInteractiveLane({ model: embeddings.model ?? EMBEDDING_MODEL, fallbackHost: OLLAMA_HOST }),
   });
 
   const storeIcon = result.store === "connected" ? "✓" : "✗";

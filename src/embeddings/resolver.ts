@@ -80,7 +80,7 @@ export function makeEmbeddingResolver(opts: EmbeddingResolverOptions): (project:
 
     const construct = await getConstruct();
     const { withLane } = await import("./lane.js");
-    const client = withLane(construct(meta.model, meta.dim), { lane: opts.lane });
+    const client = withLane(construct(meta.model, meta.dim), { lane: opts.lane, fallbackHost: host });
     cache.set(cacheKey, client);
     return client;
   };
