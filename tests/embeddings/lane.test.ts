@@ -71,6 +71,8 @@ function memoryMemo(): DeadLaneMemo & { dead: boolean } {
   };
 }
 
+const noWarm = () => {};
+
 async function closedPortHost(): Promise<string> {
   const probe = Bun.serve({ port: 0, fetch: () => new Response("") });
   const host = `http://127.0.0.1:${probe.port}`;
@@ -201,7 +203,7 @@ describe("withLane", () => {
   });
 
   it("puts interactive work behind the interactive host", () => {
-    const client = withLane(bulk, { lane: "interactive", interactiveHost: DEFAULT_INTERACTIVE_HOST, memo: memoryMemo() });
+    const client = withLane(bulk, { lane: "interactive", interactiveHost: DEFAULT_INTERACTIVE_HOST, memo: memoryMemo(), warm: noWarm });
     expect(client).toBeInstanceOf(InteractiveLaneClient);
     expect(client.model).toBe(bulk.model);
     expect(client.dim).toBe(1024);
@@ -220,7 +222,7 @@ describe("interactive lane against fake Ollama servers", () => {
     const slow = fakeOllama();
     const model = "qwen3-embedding:0.6b";
     const bulk = new OllamaEmbeddingClient(slow.host, undefined, model, 4);
-    const lane = withLane(bulk, { lane: "interactive", interactiveHost: fast.host, memo: memoryMemo() });
+    const lane = withLane(bulk, { lane: "interactive", interactiveHost: fast.host, memo: memoryMemo(), warm: noWarm });
 
     const texts = ["how does sync batch embeds", "second query"];
     const fromLane = await lane.embed(texts);
@@ -235,11 +237,26 @@ describe("interactive lane against fake Ollama servers", () => {
     const slow = fakeOllama();
     const memo = memoryMemo();
     const bulk = new OllamaEmbeddingClient(slow.host, undefined, "m", 4);
-    const lane = withLane(bulk, { lane: "interactive", interactiveHost: await closedPortHost(), memo });
+    const lane = withLane(bulk, { lane: "interactive", interactiveHost: await closedPortHost(), memo, warm: noWarm });
 
     expect(await lane.embed(["q"])).toEqual([vectorFor("m", "q")]);
     expect(slow.bodies).toHaveLength(1);
     expect(memo.dead).toBe(true);
+  });
+
+  it("asks a cold interactive host to load the model when it does not answer, and not when it does", async () => {
+    const warmed: Array<[string, string]> = [];
+    const warm = (host: string, model: string) => warmed.push([host, model]);
+    const slow = fakeOllama();
+    const bulk = new OllamaEmbeddingClient(slow.host, undefined, "m", 4);
+    const closed = await closedPortHost();
+
+    await withLane(bulk, { lane: "interactive", interactiveHost: closed, memo: memoryMemo(), warm }).embed(["q"]);
+    expect(warmed).toEqual([[closed, "m"]]);
+
+    const fast = fakeOllama();
+    await withLane(bulk, { lane: "interactive", interactiveHost: fast.host, memo: memoryMemo(), warm }).embed(["q"]);
+    expect(warmed).toHaveLength(1);
   });
 
   it("falls back within the budget when the interactive host hangs", async () => {
@@ -247,7 +264,7 @@ describe("interactive lane against fake Ollama servers", () => {
     const slow = fakeOllama();
     const memo = memoryMemo();
     const bulk = new OllamaEmbeddingClient(slow.host, undefined, "m", 4);
-    const lane = withLane(bulk, { lane: "interactive", interactiveHost: hung.host, memo });
+    const lane = withLane(bulk, { lane: "interactive", interactiveHost: hung.host, memo, warm: noWarm });
 
     const start = performance.now();
     expect(await lane.embed(["q"])).toEqual([vectorFor("m", "q")]);
@@ -264,6 +281,7 @@ describe("interactive lane against fake Ollama servers", () => {
       lane: "interactive",
       interactiveHost: fast.host,
       memo,
+      warm: noWarm,
     });
 
     await lane.embed(["q"]);
@@ -278,6 +296,7 @@ describe("interactive lane against fake Ollama servers", () => {
       lane: "interactive",
       interactiveHost: fast.host,
       memo: memoryMemo(),
+      warm: noWarm,
     });
     expect(await lane.embed(["q"])).toEqual([vectorFor("m", "q")]);
   });
@@ -291,6 +310,7 @@ describe("createEmbeddingClient lane option", () => {
       lane: "interactive",
       interactiveHost: DEFAULT_INTERACTIVE_HOST,
       memo: memoryMemo(),
+      warm: noWarm,
     });
     const bulk = await createEmbeddingClient("qwen3-embedding", { host: "http://127.0.0.1:11434", recordedDim: 1024 });
 

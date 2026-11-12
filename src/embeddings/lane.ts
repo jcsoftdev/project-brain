@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { EmbeddingClient } from "../types.js";
 import { DATA_DIR } from "../constants.js";
-import { OllamaEmbeddingClient } from "./ollama.js";
+import { OllamaEmbeddingClient, embedRequestBody } from "./ollama.js";
 
 export type EmbedLane = "interactive" | "bulk";
 
@@ -15,6 +15,8 @@ export const INTERACTIVE_HOST_ENV = "BRAIN_OLLAMA_INTERACTIVE_HOST";
 export const INTERACTIVE_TIMEOUT_MS = 400;
 
 export const DEAD_LANE_TTL_MS = 60_000;
+
+const WARM_MAX_SECONDS = 60;
 
 const OFF_VALUES = new Set(["off", "none", "false", "0", "disabled"]);
 
@@ -78,7 +80,8 @@ export class InteractiveLaneClient implements EmbeddingClient {
   constructor(
     private readonly interactive: EmbeddingClient,
     private readonly fallback: EmbeddingClient,
-    private readonly memo: DeadLaneMemo
+    private readonly memo: DeadLaneMemo,
+    private readonly warm: () => void = () => {}
   ) {
     this.model = fallback.model;
     this.dim = fallback.dim;
@@ -89,6 +92,7 @@ export class InteractiveLaneClient implements EmbeddingClient {
       const vectors = await this.interactive.embed(texts).catch(() => null);
       if (vectors) return vectors;
       this.memo.markDead();
+      this.warm();
     }
     return this.fallback.embed(texts);
   }
@@ -105,9 +109,25 @@ export class InteractiveLaneClient implements EmbeddingClient {
 
 export interface LaneOptions {
   lane?: EmbedLane;
-  
   interactiveHost?: string | null;
   memo?: DeadLaneMemo;
+  warm?: (host: string, model: string) => void;
+}
+
+export function spawnDetachedWarm(host: string, model: string): void {
+  try {
+    Bun.spawn(
+      [
+        "curl", "-s", "-m", String(WARM_MAX_SECONDS), "-o", "/dev/null",
+        "-H", "Content-Type: application/json",
+        "-d", JSON.stringify(embedRequestBody(model, ["warm"])),
+        `${host}/api/embed`,
+      ],
+      { stdin: "ignore", stdout: "ignore", stderr: "ignore" }
+    ).unref();
+  } catch {
+    return;
+  }
 }
 
 export function withLane(client: EmbeddingClient, opts: LaneOptions = {}): EmbeddingClient {
@@ -122,7 +142,9 @@ export function withLane(client: EmbeddingClient, opts: LaneOptions = {}): Embed
     timeoutMs: INTERACTIVE_TIMEOUT_MS,
     quiet: true,
   });
-  return new InteractiveLaneClient(interactive, client, opts.memo ?? fileDeadLaneMemo(host));
+  const warm = opts.warm ?? spawnDetachedWarm;
+  const model = client.model;
+  return new InteractiveLaneClient(interactive, client, opts.memo ?? fileDeadLaneMemo(host), () => warm(host, model));
 }
 
 function defaultConfigPath(): string {
