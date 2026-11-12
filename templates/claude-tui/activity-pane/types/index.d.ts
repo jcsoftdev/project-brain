@@ -113,6 +113,76 @@ declare module 'claude-code' {
       history: Shaped<HistoryView>
       accent: Shaped<string>
       historyFiles: Shaped<Record<string, HistoryFiles>>
+      // feat:ci:start
+      ciStatus: Shaped<{
+        state: 'idle' | 'ready' | 'unavailable'
+        reason?: string
+        upstream?: string
+        ahead?: number
+        behind?: number
+        sha?: string
+        runs: {
+          id: number
+          workflow: string
+          title: string
+          status: string
+          conclusion: string
+          branch: string
+          createdAt: string
+          url: string
+          jobs?: { name: string; status: string; conclusion: string; failedStep?: string }[]
+        }[]
+        checkedAt: number
+      }>
+      // feat:ci:end
+      // feat:running:start
+      runningTasks: Shaped<{
+        id: string
+        kind: 'bash' | 'monitor' | 'agent' | 'workflow'
+        label: string
+        status: 'running' | 'completed' | 'failed' | 'killed'
+        startedAt: number
+        endedAt?: number
+        agentId?: string
+        agentLabel?: string
+        toolUseId?: string
+        outputFile?: string
+        lastLine?: string
+        exitCode?: number
+        deadline?: number
+        isInferred?: boolean
+      }[]>
+      runningTick: Shaped<number>
+      // feat:running:end
+      // feat:progress:start
+      progress: Shaped<{
+        path: string
+        mtimeMs: number
+        doc?: {
+          feature: string
+          path: string
+          title: string
+          objective?: string
+          tasks: { id: string; title: string; done: boolean; route?: string; commit?: string }[]
+          done: number
+          total: number
+          current?: { id: string; title: string; done: boolean; route?: string; commit?: string }
+          pending: string[]
+        }
+      }>
+      // feat:progress:end
+      // feat:agents:start
+      agentsExpanded: Shaped<boolean>
+      agentsReports: Shaped<Record<string, string>>
+      // feat:agents:end
+      // feat:context:start
+      contextBreakdown: Shaped<{ rows: { name: string; tokens: number; kind: 'used' | 'free' | 'buffer' }[]; window: number; total: number; autoCompactAt?: number; at: number }>
+      contextCompactions: Shaped<{ count: number; lastAt: number; before?: number; after?: number }>
+      // feat:context:end
+      // feat:blocked:start
+      blockedList: Shaped<{ id: string; at: number; tool: string; summary: string; category: 'user' | 'classifier' | 'rule' | 'hook'; reason: string; label?: string; agentId?: string; agent?: string }[]>
+      blockedTurn: Shaped<number>
+      // feat:blocked:end
     }
   }
 }

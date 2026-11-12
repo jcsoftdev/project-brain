@@ -6,6 +6,18 @@ import pluginJson from "../../templates/claude-tui/activity-pane/.claude-plugin/
 import hooksJson from "../../templates/claude-tui/activity-pane/hooks/hooks.json" with { type: "text" };
 // @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
 import registerTsx from "../../templates/claude-tui/activity-pane/hooks/register.tsx" with { type: "text" };
+// @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
+import featAgents from "../../templates/claude-tui/activity-pane/hooks/feat-agents.tsx" with { type: "text" };
+// @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
+import featBlocked from "../../templates/claude-tui/activity-pane/hooks/feat-blocked.tsx" with { type: "text" };
+// @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
+import featCi from "../../templates/claude-tui/activity-pane/hooks/feat-ci.tsx" with { type: "text" };
+// @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
+import featContext from "../../templates/claude-tui/activity-pane/hooks/feat-context.tsx" with { type: "text" };
+// @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
+import featProgress from "../../templates/claude-tui/activity-pane/hooks/feat-progress.tsx" with { type: "text" };
+// @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
+import featRunning from "../../templates/claude-tui/activity-pane/hooks/feat-running.tsx" with { type: "text" };
 // @ts-expect-error TypeScript refuses a value import of a .d.ts; Bun's text attribute embeds it as a string.
 import typesDts from "../../templates/claude-tui/activity-pane/types/index.d.ts" with { type: "text" };
 
@@ -18,6 +30,12 @@ export const ACTIVITY_PANE_FILES: Record<string, string> = {
   ".claude-plugin/plugin.json": pluginJson as unknown as string,
   "hooks/hooks.json": hooksJson as unknown as string,
   "hooks/register.tsx": registerTsx as string,
+  "hooks/feat-agents.tsx": featAgents as string,
+  "hooks/feat-blocked.tsx": featBlocked as string,
+  "hooks/feat-ci.tsx": featCi as string,
+  "hooks/feat-context.tsx": featContext as string,
+  "hooks/feat-progress.tsx": featProgress as string,
+  "hooks/feat-running.tsx": featRunning as string,
   "types/index.d.ts": typesDts as string,
 };
 
