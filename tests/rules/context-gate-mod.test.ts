@@ -265,6 +265,14 @@ describe("the gate", () => {
     expect(mod.assemble(framed, new Set())).toBe(text);
   });
 
+  it("keeps the whole body when the fences do not balance", () => {
+    const table = ["| Task | Tier |", ...Array.from({ length: 30 }, (_, i) => `| task ${i} | deep |`)].join("\n");
+    for (const body of [`${table}\n${mod.FENCE_END}\n${ACME}`, `${mod.FENCE_BEGIN}\n${table}\n${ACME}`, `${mod.FENCE_END}\n${table}\n${mod.FENCE_BEGIN}\n${ACME}`]) {
+      const framed = mod.splitAttachment("hook_additional_context", `${FRAME}${body}`, mod.DEFAULT_ALLOW);
+      expect(framed.pieces).toEqual([{ text: body, allowed: true }]);
+    }
+  });
+
   it("asks again after the health cooldown", () => {
     expect(mod.gateHealthy(JSON.stringify({ failures: 3, lastFailure: NOW - 1000 }), NOW)).toBe(false);
     expect(mod.gateHealthy(JSON.stringify({ failures: 5, lastFailure: NOW - mod.HEALTH_RETRY_MS }), NOW)).toBe(true);

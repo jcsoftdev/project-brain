@@ -56,10 +56,22 @@ export const allowed = (text: string, allow: readonly string[]): boolean => {
   return allow.some(signature => lower.includes(signature.toLowerCase()))
 }
 
+/** A stray or missing fence leaves no line provably outside project-brain's block, so the whole body is kept. */
+const fencesBalanced = (body: string): boolean => {
+  let depth = 0
+  for (const line of body.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed === FENCE_BEGIN) depth++
+    if (trimmed === FENCE_END && --depth < 0) return false
+  }
+  return depth === 0
+}
+
 export function splitAttachment(type: string, text: string, allow: readonly string[]): Framed {
   const frame = HOOK_FRAME.exec(text)?.[0] ?? ''
   const body = text.slice(frame.length)
   if (type === 'hook_success') return { frame, pieces: [{ text: body, allowed: allowed(body, allow) }] }
+  if (!fencesBalanced(body)) return { frame, pieces: [{ text: body, allowed: true }] }
   const pieces: Piece[] = []
   let depth = 0
   for (const line of body.split('\n')) {
