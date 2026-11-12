@@ -1720,7 +1720,8 @@ async function generalSkillOptions(ctx: SetupContext): Promise<import("../intera
   const { discoverSkills } = await import("../skills/discovery.js");
   const { readSkillUsage } = await import("../skills/usage.js");
   const home = dirname(dirname(ctx.claudeSettingsPath));
-  const skills = await discoverSkills({ home, projectDir: process.cwd(), cacheDir: ctx.dataDir }).catch(() => []);
+  // The list applies to every session, so a skill local to the directory setup runs in is no candidate.
+  const skills = await discoverSkills({ home, projectDir: home, cacheDir: ctx.dataDir }).catch(() => []);
   const usage = (await readSkillUsage(ctx.dataDir))?.skills ?? {};
   return skills
     .map((skill) => ({ name: skill.name, uses: usage[skill.name]?.count }))
