@@ -8,6 +8,8 @@ import type { ToolEntry } from "../toolcatalog/live.js";
 import { rankToolsSemantic } from "../toolcatalog/shortlist.js";
 import { taskSwitchQuestion } from "../hooks/task-switch.js";
 import { readSkillsConfig, type SkillsConfig } from "./config.js";
+import { readListedSkills, withListedSkills } from "./listed.js";
+import { DATA_DIR } from "../constants.js";
 
 /**
  * Candidates sent to Jev. Every one adds a description to the request body
@@ -15,6 +17,28 @@ import { readSkillsConfig, type SkillsConfig } from "./config.js";
  * dozen keyword-ranked skills covers the realistic shortlist for one prompt.
  */
 export const MAX_SKILL_CANDIDATES = 12;
+
+/**
+ * Process skills are always judged, on top of the nearest {@link MAX_SKILL_CANDIDATES}: a task
+ * prompt names the work, not the process, so embeddings rank them far down. Measured on 135
+ * installed skills, "construye una feature nueva de login" put superpowers:brainstorming at #58.
+ */
+export const MAX_PROCESS_CANDIDATES = 16;
+
+/** A skill that says when to use it rather than what it covers: "Use when …", "You MUST use this before …". */
+const PROCESS_DESCRIPTION = /^(use (this )?(when|before|after)\b|you must use\b)/i;
+
+export const isProcessSkill = (skill: { description: string }): boolean => PROCESS_DESCRIPTION.test(skill.description.trim());
+
+async function discoverWithListed(deps: SkillPickDeps & { projectDir: string }): Promise<SkillInfo[]> {
+  const discovered = await discoverSkills(deps.discoverOptions ?? { projectDir: deps.projectDir });
+  return withListedSkills(discovered, await readListedSkills(deps.discoverOptions?.cacheDir ?? DATA_DIR));
+}
+
+function uniqueByName<T extends { name: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => !seen.has(item.name) && (seen.add(item.name), true));
+}
 
 /**
  * The tool shortlist must not hold up the skill question: once the prompt
@@ -111,6 +135,8 @@ export interface SkillPickDeps {
   taskSwitch?: { recent: string[]; assistant?: { text: string; tools: string[] } };
   /** Receives Jev's probabilities for the task-switch question. Not called when it was not asked or Jev failed. */
   onTaskSwitch?: (probabilities: Record<string, number>) => void;
+  /** Told whether a Jev request that asked about skills got an answer. The CLI records it for the listing mod; absent, nothing is recorded. */
+  recordHealth?: (ok: boolean) => Promise<unknown>;
   /** `~/.project-brain/skills.json` with its env overrides. Injectable for tests. */
   skillsConfig?: SkillsConfig;
   /**
@@ -234,11 +260,14 @@ async function pickLines(
   const shortlistSkills = async (): Promise<SkillInfo[]> => {
     if (!wantSkills) return [];
     const general = new Set(config.general);
-    const discovered = await (deps.discover ?? (() => discoverSkills(deps.discoverOptions ?? { projectDir: deps.projectDir })))();
+    const discovered = await (deps.discover ?? (() => discoverWithListed(deps)))();
     // A general-use skill keeps its full line in the listing, so a pick would only repeat it.
     const skills = discovered.filter((s) => !general.has(s.name));
     const semantic = shared ? await rankSkillsSemantic(skills, shared, MAX_SKILL_CANDIDATES, deps.vectorCacheDir) : null;
-    return semantic ?? prefilterSkills(prompt, skills);
+    const nearest = semantic && semantic.length > 0 ? semantic : prefilterSkills(prompt, skills);
+    const processSkills = skills.filter(isProcessSkill);
+    const process = shared ? await rankSkillsSemantic(processSkills, shared, MAX_PROCESS_CANDIDATES, deps.vectorCacheDir) : null;
+    return uniqueByName([...nearest, ...(process ?? processSkills.slice(0, MAX_PROCESS_CANDIDATES))]);
   };
   const shortlistTools = async (): Promise<ToolEntry[]> => {
     const tools = await catalog;
@@ -282,6 +311,7 @@ async function pickLines(
     fetchFn: deps.fetchFn,
     timeoutMs: deps.jevTimeoutMs ?? SKILL_JEV_TIMEOUT_MS,
   });
+  if (skills.length > 0) await deps.recordHealth?.(answers !== null).catch(() => undefined);
   if (!answers) return none;
 
   const picked = pickedSkills(

@@ -93,6 +93,8 @@ export interface SuggestDeps {
   claimNotice?: (sessionId: string, kind: "clear" | "compact") => Promise<boolean>;
   /** The one-time "project-brain updated" block for this session, or null. Injectable for tests. */
   upgradeNotice?: (input: HookInput) => Promise<{ text: string; commit: () => Promise<void> } | null>;
+  /** Records whether a Jev skill request was answered. Only the CLI entry passes one, so a test never writes the real file. */
+  recordHealth?: (ok: boolean) => Promise<unknown>;
 }
 
 /**
@@ -203,6 +205,7 @@ export interface AgentSuggestDeps {
   pick?: typeof pickSkill;
   queryEmbedding?: (prompt: string, projectDir: string) => Promise<SharedQuery | null>;
   embedBudgetMs?: number;
+  recordHealth?: (ok: boolean) => Promise<unknown>;
 }
 
 export const DELEGATION_SKILLS_HEADING = "Skills for this task, picked for it (load one with the Skill tool when you reach the part it covers):";
@@ -230,7 +233,11 @@ export async function runAgentSuggest(raw: string, deps: AgentSuggestDeps = {}):
     const { text, cwd } = parseAgentInput(raw);
     if (!text.trim() || isTrivialPrompt(text)) return;
     const projectDir = cwd ?? process.cwd();
-    const lines = await pick(text, { projectDir, queryEmbedding: budgetedVector(text, projectDir, queryEmbedding, embedBudgetMs) });
+    const lines = await pick(text, {
+      projectDir,
+      queryEmbedding: budgetedVector(text, projectDir, queryEmbedding, embedBudgetMs),
+      ...(deps.recordHealth ? { recordHealth: deps.recordHealth } : {}),
+    });
     if (lines) print(`${DELEGATION_SKILLS_HEADING}\n${lines}`);
   } catch {
     // A delegation must never wait on, or break over, a suggestion.
@@ -291,6 +298,7 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
     const lines = await pick(prompt, {
       projectDir,
       queryEmbedding: vector,
+      ...(deps.recordHealth ? { recordHealth: deps.recordHealth } : {}),
       ...(task ? { taskSwitch: { recent: task.recent, ...(task.assistant ? { assistant: task.assistant } : {}) }, onTaskSwitch: (p: Record<string, number>) => (switchProbabilities = p) } : {}),
     });
     const shown = await alreadyShown;
@@ -310,6 +318,12 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
   }
 }
 
+async function recordPickHealthInDataDir(ok: boolean): Promise<void> {
+  const { DATA_DIR } = await import("../constants.js");
+  const { recordPickHealth } = await import("../skills/listed.js");
+  await recordPickHealth(DATA_DIR, ok);
+}
+
 /**
  * CLI entry point: `project-brain suggest --stdin` (the prompt hook) or `suggest --agent --stdin`
  * (a delegation's skills). Without `--stdin` it does nothing.
@@ -324,7 +338,10 @@ export async function execute(
   const timeout = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, SUGGEST_TIMEOUT_MS);
   });
-  const run = args.includes("--agent") ? (raw: string) => runAgentSuggest(raw) : (raw: string) => runSuggest(raw, deps);
+  const recordHealth = deps.recordHealth ?? recordPickHealthInDataDir;
+  const run = args.includes("--agent")
+    ? (raw: string) => runAgentSuggest(raw, { recordHealth })
+    : (raw: string) => runSuggest(raw, { ...deps, recordHealth });
   const work = readStdin().then(run, () => {});
   await Promise.race([work, timeout]);
   clearTimeout(timer);
