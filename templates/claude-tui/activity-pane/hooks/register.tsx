@@ -4,10 +4,10 @@ import { actAgents, agentChipsGrouped, readAgents, registerAgents, rowsAgentRepo
 import { agentsTurnComplete } from './feat-agents'
 import type { AgentsAction, AgentsPart } from './feat-agents'
 import { footerCi, readCi, registerCi, rowsCi } from './feat-ci'
-import { ciSessionStart } from './feat-ci'
+import { ciKick, ciSessionStart, ciTurnComplete } from './feat-ci'
 import type { CiPart } from './feat-ci'
 import { footerContext, readContext, registerContext, rowsContext } from './feat-context'
-import { contextSessionStart, contextTurnComplete } from './feat-context'
+import { contextKick, contextMeasured, contextSessionStart, contextTurnComplete } from './feat-context'
 import type { ContextPart } from './feat-context'
 import { footerProgress, readProgress, registerProgress, rowsProgress } from './feat-progress'
 import { progressSessionStart, progressToolCall, progressTurnComplete } from './feat-progress'
@@ -18,6 +18,8 @@ import type { RunningPart } from './feat-running'
 import { headerBlocked, readBlocked, registerBlocked, rowsBlocked } from './feat-blocked'
 import { blockedToolCall, blockedTurnStart } from './feat-blocked'
 import type { BlockedPart } from './feat-blocked'
+import { footerSavings, readSavings, rowsSavings, savingsSessionStart, savingsTurnComplete } from './feat-savings'
+import type { SavingsPart } from './feat-savings'
 
 import type {
   AgentRecord,
@@ -1084,6 +1086,7 @@ export type Snapshot = {
   progress: ProgressPart
   running: RunningPart
   blocked: BlockedPart
+  savings: SavingsPart
 }
 
 export type PaneModel = { header: Row[]; body: Row[]; footer: Row[]; scope: string; cambios: CambiosScope; tab: Tab }
@@ -1454,7 +1457,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     const ctx = { width, accent, isOpen }
     const live = scope === MAIN ? [...rowsProgress(snap.progress, ctx), ...rowsRunning(snap.running, ctx), ...rowsBlocked(snap.blocked, ctx)] : rowsRunning(snap.running, ctx)
     const lead = live.length > 0 ? [...live, blank('gap-live')] : []
-    const contextRows = scope === MAIN ? rowsContext(snap.contextPart, ctx) : []
+    const contextRows = scope === MAIN ? [...rowsContext(snap.contextPart, ctx), ...rowsSavings(snap.savings, ctx)] : []
     const tail = contextRows.length > 0 ? [blank('gap-context'), ...contextRows] : []
     if (steps.length === 0) return [...lead, line('empty', 'Sin actividad todavía.', { dim: true }), ...tail]
     return [
@@ -1565,10 +1568,36 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     ),
     contextRow('footer-context', ''),
   ]
-  const extra = [...footerProgress(snap.progress), ...footerCi(snap.ci), ...footerContext(snap.contextPart)]
+  const extra = [...footerProgress(snap.progress), ...footerCi(snap.ci), ...footerContext(snap.contextPart), ...footerSavings(snap.savings)]
   if (extra.length > 0) footer.push({ key: 'footer-extra', cells: [{ spans: extra.flatMap((one, index) => (index === 0 ? [one] : [span('  '), one])) }] })
 
   return { header, body, footer, scope, cambios, tab: current }
+}
+
+const spansWidth = (spans: readonly Span[]): number => spans.reduce((total, one) => total + one.text.length, 0)
+
+/**
+ * The last guard against a row wider than the pane: the right-hand spans go
+ * first, then the left is cut to the width. A row that fits passes untouched.
+ */
+export const clampRow = (row: Row, width: number): Row => {
+  const room = Math.max(1, width)
+  const left = row.cells.reduce((total, cell) => total + spansWidth(cell.spans), 0)
+  // The renderer draws an empty right side as one space.
+  const right = row.right === undefined ? 0 : Math.max(1, spansWidth(row.right))
+  if (left + right <= room) return row
+  const { right: _dropped, ...rest } = row
+  if (left <= room) return rest
+  let budget = room
+  const cut = (one: Span): Span => {
+    const text = budget <= 0 ? '' : one.text.length <= budget ? one.text : fit(one.text, budget)
+    budget -= text.length
+    return { ...one, text }
+  }
+  const cells = row.cells
+    .map(cell => ({ ...cell, spans: cell.spans.map(cut).filter(one => one.text !== '') }))
+    .filter(cell => cell.spans.length > 0)
+  return { ...rest, cells }
 }
 
 export type PaneFrame = { rows: Row[]; isWindowed: boolean; total: number; room: number }
@@ -1597,13 +1626,13 @@ export const paneFrame = (model: PaneModel, bodyRows: number, view: PaneScroll, 
 export const runOf = ($: Api): Run => (argv, init) => $.process.run(argv, init)
 
 const readSnapshot = async ($: Api): Promise<Snapshot> => {
-  const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps, historyView, historyFilesBySha, accent, agentsPart, ci, contextPart, progress, running, blocked] = await Promise.all([
+  const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps, historyView, historyFilesBySha, accent, agentsPart, ci, contextPart, progress, running, blocked, savings] = await Promise.all([
     read($, entries), read($, tabs), read($, toggled), read($, changes), read($, costUsd), read($, contextUsage), read($, openFiles), read($, diffs),
     read($, agents), read($, pickedAgent), read($, working), read($, scroll), read($, commits), read($, scopes), read($, branch), read($, stepContext),
     read($, history), read($, historyFiles), read($, accentColor),
-    readAgents($), readCi($), readContext($), readProgress($), readRunning($), readBlocked($),
+    readAgents($), readCi($), readContext($), readProgress($), readRunning($), readBlocked($), readSavings($),
   ])
-  return { accent, list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view, historyView, historyFiles: historyFilesBySha, agentsPart, ci, contextPart, progress, running, blocked }
+  return { accent, list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view, historyView, historyFiles: historyFilesBySha, agentsPart, ci, contextPart, progress, running, blocked, savings }
 }
 
 /** Fills in the line counts and files of up to ten commits that have none yet. */
@@ -1824,6 +1853,11 @@ async function mainToolCall($: Api, e: Parameters<Hook<'tool.call'>>[1], next: P
   return ran
 }
 
+/** What a draw would otherwise ask for: the CI check and the live context figures, once the pane is up. */
+async function paneOpened($: Api): Promise<void> {
+  await Promise.all([ciKick($).catch(() => undefined), contextKick($).catch(() => undefined)])
+}
+
 /** A `next` that runs at most once: later calls get the first call's settled result. */
 const onceNext = <T,>(next: (input: T) => unknown): ((input: T) => Promise<unknown>) => {
   let first: Promise<unknown> | undefined
@@ -1850,6 +1884,7 @@ export const register: Register = on => {
       if (e.context.tokens !== undefined) usage.tokens = e.context.tokens
       if (e.context.percent !== undefined) usage.percent = e.context.percent
       await update($, contextUsage, () => usage)
+      await contextMeasured($ as Api, e.context)
     }
     return next(e)
   })
@@ -1884,7 +1919,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
     if (e.viewport?.isFullscreen === true && !autoOpenSent && (await read($, autoOpen))) {
       autoOpenSent = true
-      void $.ui.open(PANE_ARGS).catch(() => undefined)
+      void $.ui.open(PANE_ARGS).then(() => paneOpened($ as Api)).catch(() => undefined)
     }
     const usd = await read($, costUsd)
     if (usd <= 0) return next(e)
@@ -1893,6 +1928,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'activity' }, async $ => {
     const opened = await $.ui.open(PANE_ARGS).catch(() => undefined)
+    if (opened?.isPlaced !== false) void paneOpened($ as Api).catch(() => undefined)
     return { text: opened?.isPlaced === false ? 'El panel de actividad espera a que haya espacio.' : 'Panel de actividad abierto.' }
   })
 
@@ -2081,11 +2117,11 @@ export const register: Register = on => {
       )
     }
 
-    return <Box flexDirection="column" width={width} height={Math.max(1, e.props.scroll.bodyRows)} backgroundColor={PANE_BG}>{frame.rows.map(rowOf)}</Box>
+    return <Box flexDirection="column" width={width} height={Math.max(1, e.props.scroll.bodyRows)} backgroundColor={PANE_BG}>{frame.rows.map(row => rowOf(clampRow(row, width)))}</Box>
   })
   on('session.start', async ($, e, next) => {
     const once = onceNext(next as never)
-    return ciSessionStart($, e, ((e1: typeof e) => contextSessionStart($, e1, ((e2: typeof e) => progressSessionStart($, e2, ((e3: typeof e) => runningSessionStart($, e3, ((e4: typeof e) => mainSessionStart($, e4, once as never).catch(() => once(e4))) as never)) as never)) as never)) as never)
+    return savingsSessionStart($, e, ((e0: typeof e) => ciSessionStart($, e0, ((e1: typeof e) => contextSessionStart($, e1, ((e2: typeof e) => progressSessionStart($, e2, ((e3: typeof e) => runningSessionStart($, e3, ((e4: typeof e) => mainSessionStart($, e4, once as never).catch(() => once(e4))) as never)) as never)) as never)) as never)) as never)
   })
   on('turn.start', async ($, e, next) => {
     const once = onceNext(next as never)
@@ -2093,7 +2129,7 @@ export const register: Register = on => {
   })
   on('turn.complete', async ($, e, next) => {
     const once = onceNext(next as never)
-    return agentsTurnComplete($, e, ((e1: typeof e) => contextTurnComplete($, e1, ((e2: typeof e) => progressTurnComplete($, e2, ((e3: typeof e) => mainTurnComplete($, e3, once as never).catch(() => once(e3))) as never)) as never)) as never)
+    return savingsTurnComplete($, e, ((s0: typeof e) => agentsTurnComplete($, s0, ((e0: typeof e) => ciTurnComplete($, e0, ((e1: typeof e) => contextTurnComplete($, e1, ((e2: typeof e) => progressTurnComplete($, e2, ((e3: typeof e) => mainTurnComplete($, e3, once as never).catch(() => once(e3))) as never)) as never)) as never)) as never)) as never)
   })
   on('tool.call', async ($, e, next) => {
     const once = onceNext(next as never)

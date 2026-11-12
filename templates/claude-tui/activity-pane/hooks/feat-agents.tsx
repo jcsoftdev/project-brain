@@ -106,11 +106,11 @@ export const agentChipsGrouped = ({ records, scope, expanded, width }: GroupedIn
   return windowed(pinned, chips, visible.findIndex(one => one.id === scope), visible.map(one => one.id), Math.max(1, width))
 }
 
-const VERDICT_LINE = /^[\s#>*_`-]*(?:verdict|veredicto)[*_`]*\s*[:：]\s*[*_`]*\s*([A-Za-z][A-Za-z_-]*)/im
+const VERDICT_LINE = /^[\s#>*_`-]*(?:\d+[.)]\s*)?[*_`]*(?:(?:final|overall)\s+)?(?:verdict|veredicto)(?:\s+final)?[*_`]*\s*[:：]\s*[*_`]*\s*([A-Za-z][A-Za-z_-]*)/im
 
 const VERDICT_TONES: Record<string, Tone> = {
   PASS: 'success', PASSED: 'success', OK: 'success', APPROVED: 'success', APPROVE: 'success', SUCCESS: 'success', DONE: 'success',
-  FAIL: 'error', FAILED: 'error', REJECTED: 'error', REJECT: 'error', ERROR: 'error',
+  FAIL: 'error', FAILED: 'error', REJECTED: 'error', REJECT: 'error', ERROR: 'error', BLOCKERS: 'error', BLOCKER: 'error',
   PARTIAL: 'warning', BLOCKED: 'warning', WARN: 'warning', WARNING: 'warning', INCONCLUSIVE: 'warning',
 }
 

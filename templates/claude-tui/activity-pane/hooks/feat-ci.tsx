@@ -129,7 +129,16 @@ export const ghReason = (stderr: string): string => {
 export const finishedRuns = (before: CiRun[], after: CiRun[]): CiRun[] =>
   after.filter(run => !isRunActive(run) && before.some(prev => prev.id === run.id && isRunActive(prev)))
 
-export const verdictOfRun = (run: Pick<CiRun, 'conclusion'>): 'PASS' | 'FAIL' => (run.conclusion === 'success' ? 'PASS' : 'FAIL')
+/** Conclusions that are neither a pass nor a failure: drawn as a dash, toasted by name. */
+const NEUTRAL_LABEL: Record<string, string> = { cancelled: 'cancelado', skipped: 'omitido', neutral: 'neutral' }
+
+export const verdictOfRun = (run: Pick<CiRun, 'conclusion'>): 'PASS' | 'FAIL' | 'NEUTRAL' =>
+  run.conclusion === 'success' ? 'PASS' : Object.hasOwn(NEUTRAL_LABEL, run.conclusion) ? 'NEUTRAL' : 'FAIL'
+
+export const toastOfRun = (run: Pick<CiRun, 'conclusion' | 'workflow'>): string => {
+  const verdict = verdictOfRun(run)
+  return `CI ${verdict === 'NEUTRAL' ? NEUTRAL_LABEL[run.conclusion] : verdict} · ${run.workflow}`
+}
 
 // ---------------------------------------------------------------- loading
 
@@ -179,7 +188,7 @@ function refresh($: Api): Promise<void> {
     const [previous, now] = await Promise.all([read($, ciView), $.clock.now()])
     const next = await loadCi((argv, init) => $.process.run(argv, init), previous, now)
     await update($, ciView, () => next)
-    for (const run of finishedRuns(previous.runs, next.runs)) $.ui.toast(`CI ${verdictOfRun(run)} · ${run.workflow}`)
+    for (const run of finishedRuns(previous.runs, next.runs)) $.ui.toast(toastOfRun(run))
   })()
     .catch(() => undefined)
     .finally(() => {
@@ -200,6 +209,23 @@ async function tick($: Api): Promise<void> {
   if (isDirty || now - view.checkedAt >= pollEvery(view) - 1000) await refresh($)
 }
 
+function startTicker($: Api): void {
+  ticker?.cancel()
+  ticker = $.clock.every(ACTIVE_MS, () => {
+    void tick($).catch(() => undefined)
+  })
+}
+
+/** A check outside the timer, when one is due: the pane was just opened, a session started, a turn ended. */
+export async function ciKick($: Api): Promise<void> {
+  try {
+    if (ticker === undefined) startTicker($)
+  } catch {
+    // No timer: kicks still check.
+  }
+  await tick($).catch(() => undefined)
+}
+
 const PUSHES = /\bgit\b[^;&|]*\bpush\b|\bgh\s+(?:pr\s+merge|workflow\s+run|run\s+rerun)\b/
 
 export const registerCi = (on: Parameters<Register>[0]): void => {
@@ -216,10 +242,9 @@ export const registerCi = (on: Parameters<Register>[0]): void => {
   })
 }
 
-/** Reads the view; drawing a stale one starts a check, so an open pane needs no timer to start. */
+/** Atoms only: checks start from the timer and from `ciKick`, never from a draw. */
 export async function readCi($: Api): Promise<CiPart> {
   const [view, now] = await Promise.all([read($, ciView), $.clock.now()])
-  if (checking === undefined && (view.checkedAt === 0 || now - view.checkedAt >= pollEvery(view))) void refresh($)
   return { view, now }
 }
 
@@ -230,7 +255,7 @@ type Look = { glyph: string; color: string }
 export const runLook = (run: Pick<CiRun, 'status' | 'conclusion'>): Look => {
   if (isRunActive(run)) return { glyph: '◷', color: 'warning' }
   if (run.conclusion === 'success') return { glyph: '✓', color: 'success' }
-  if (run.conclusion === 'cancelled' || run.conclusion === 'skipped' || run.conclusion === 'neutral') return { glyph: '–', color: 'subtle' }
+  if (verdictOfRun(run) === 'NEUTRAL') return { glyph: '–', color: 'subtle' }
   return { glyph: '✗', color: 'error' }
 }
 
@@ -253,6 +278,17 @@ const agoText = (iso: string, now: number): string => {
   if (minutes < 60) return `hace ${minutes} min`
   const hours = Math.round(minutes / 60)
   return hours < 48 ? `hace ${hours} h` : `hace ${Math.round(hours / 24)} d`
+}
+
+/** The fold arrow, the workflow and a letter of it before the age shows: below that the age goes first. */
+const LABEL_MIN = 4
+const JOB_INDENT_FROM = 8
+
+/** How a run row splits its width: the label, one glyph column, then a space and the age when both fit. */
+export const runRowLayout = (width: number, ago: string): { labelWidth: number; ago: string } => {
+  const room = Math.max(1, width) - 1
+  if (ago !== '' && room - ago.length - 1 >= LABEL_MIN) return { labelWidth: room - ago.length - 1, ago }
+  return { labelWidth: room, ago: '' }
 }
 
 export const rowsCi = (
@@ -283,17 +319,21 @@ export const rowsCi = (
     const key = `ci-run-${run.id}`
     const open = ctx.isOpen(key, look.glyph !== '✓')
     const label = `CI · ${run.workflow} `
+    const layout = runRowLayout(width, agoText(run.createdAt, now))
     rows.push({
       key,
       cells: [
         {
-          spans: [span(fit(`${open ? '▼' : '▶'} ${label}`, Math.max(1, width - 2))), span(look.glyph, { color: look.color, bold: true })],
+          spans: [
+            ...(layout.labelWidth > 0 ? [span(fit(`${open ? '▼' : '▶'} ${label}`, layout.labelWidth))] : []),
+            span(look.glyph, { color: look.color, bold: true }),
+          ],
           action: { kind: 'toggle', key },
           label: open ? 'Ocultar jobs' : 'Ver jobs',
           key: `btn-${key}`,
         },
       ],
-      right: [span(agoText(run.createdAt, now), { dim: true })],
+      ...(layout.ago === '' ? {} : { right: [span(layout.ago, { dim: true })] }),
     })
     if (!open) continue
     rows.push(line(`${key}-meta`, `   ${run.branch || '—'} · ${short}${ahead > 0 ? ' (último commit subido)' : ''}`, { dim: true }))
@@ -303,7 +343,12 @@ export const rowsCi = (
     }
     run.jobs.forEach((job, index) => {
       const jl = jobLook(job)
-      rows.push({ key: `${key}-job-${index}`, cells: [{ spans: [span('   '), span(jl.glyph, { color: jl.color }), span(fit(` ${job.name}`, Math.max(1, width - 4)))] }] })
+      const indent = width >= JOB_INDENT_FROM ? '   ' : ''
+      const nameWidth = width - indent.length - 1
+      rows.push({
+        key: `${key}-job-${index}`,
+        cells: [{ spans: [span(indent), span(jl.glyph, { color: jl.color }), ...(nameWidth >= 2 ? [span(fit(` ${job.name}`, nameWidth))] : [])] }],
+      })
       if (job.failedStep) rows.push(line(`${key}-job-${index}-step`, `     falló en: ${job.failedStep}`, { color: 'error' }))
     })
   }
@@ -326,12 +371,17 @@ export const footerCi = (part: CiPart): Span[] => {
 
 export async function ciSessionStart($: Api, e: Parameters<Hook<'session.start'>>[1], next: Parameters<Hook<'session.start'>>[2]): Promise<Awaited<ReturnType<Hook<'session.start'>>>> {
   try {
-    ticker?.cancel()
-    ticker = $.clock.every(ACTIVE_MS, () => {
-      void tick($ as Api).catch(() => undefined)
-    })
+    startTicker($)
   } catch {
-    // No timer: the pane still checks when it draws.
+    // No timer: turn ends and pane opens still check.
   }
-  return next(e)
+  const result = await next(e)
+  void ciKick($).catch(() => undefined)
+  return result
+}
+
+export async function ciTurnComplete($: Api, e: Parameters<Hook<'turn.complete'>>[1], next: Parameters<Hook<'turn.complete'>>[2]): Promise<Awaited<ReturnType<Hook<'turn.complete'>>>> {
+  const result = await next(e)
+  if (e.agentId === undefined) void ciKick($).catch(() => undefined)
+  return result
 }

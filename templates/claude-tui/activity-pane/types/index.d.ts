@@ -178,11 +178,21 @@ declare module 'claude-code' {
       // feat:context:start
       contextBreakdown: Shaped<{ rows: { name: string; tokens: number; kind: 'used' | 'free' | 'buffer' }[]; window: number; total: number; autoCompactAt?: number; at: number }>
       contextCompactions: Shaped<{ count: number; lastAt: number; before?: number; after?: number }>
+      contextLive: Shaped<{ tokens?: number; window: number; percent?: number }>
       // feat:context:end
       // feat:blocked:start
       blockedList: Shaped<{ id: string; at: number; tool: string; summary: string; category: 'user' | 'classifier' | 'rule' | 'hook'; reason: string; label?: string; agentId?: string; agent?: string }[]>
       blockedTurn: Shaped<number>
       // feat:blocked:end
+      // feat:savings:start
+      savings: Shaped<{
+        at: number
+        gate?: { count: number; chars: number; last: { at: number; event: string; chars: number; score?: number; head: string }[] }
+        picks?: { prompts: { at: number; skills: string[] }[]; delegations: { agentId: string; description: string; skills: string[] }[] }
+        listing?: 'jev' | 'stats' | 'passthrough'
+        lane?: { state: 'up' | 'mismatch' | 'dead' | 'pending' | 'off'; reason?: string; at?: number }
+      }>
+      // feat:savings:end
     }
   }
 }

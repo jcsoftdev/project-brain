@@ -49,7 +49,21 @@ const ROUTE = /\b(?:route|ruta)\s*:?\s*\**\s*(inline|delegated|delegada|delegado
 const ROUTE_PAREN = /\((inline|delegated|delegada|delegado)\b/i
 const DONE_STATUS = /^\W*(?:done|hecho|hecha|completed?|completad[oa]|ok|x)\b|^[✓✔✅]/i
 const DROPPED_STATUS = /^\W*(?:dropped|descartad[oa]|cancel)/i
-const DONE_WORD = /\b(?:done|hecho|hecha|completad[oa])\b|✅/i
+const DONE_WORD = /\b(?:done|hecho|hecha|completad[oa])\b|✅/gi
+const NEGATED = /\b(?:not(?:\s+yet)?|no|pending|todo|sin|falta(?:n)?)\s+(?:\w+\s+)?$/i
+const TRAILING_SHAS = /\s+((?:[0-9a-f]{7,12})(?:\s*,\s*[0-9a-f]{7,12})*)\s*[.;]?\s*$/i
+
+/** A plain line counts as done when one of its done words carries no negation right before it. */
+export const saysDone = (text: string): boolean =>
+  [...text.matchAll(DONE_WORD)].some(match => !NEGATED.test(text.slice(0, match.index)))
+
+/** The SHAs a done line ends with, such as `T1 (S1-S3) c64a223, 78e3bfd.` */
+const trailingShas = (text: string): { shas: string[]; at: number } | undefined => {
+  const match = TRAILING_SHAS.exec(text)
+  if (!match) return undefined
+  const shas = (match[1] ?? '').split(/\s*,\s*/).filter(one => /\d/.test(one))
+  return shas.length > 0 ? { shas, at: match.index } : undefined
+}
 
 /** Skipped, pending or not-run checks, Spanish and English. */
 const PENDING = new RegExp(
@@ -103,10 +117,13 @@ const taskFrom = (body: string, index: number, done: boolean): ProgressTask => {
   const text = unbold(body).trim()
   const idMatch = ID.exec(text)
   const id = idMatch?.[1] ?? `#${index + 1}`
-  const rest = idMatch ? text.slice(idMatch[0].length) : text
+  const tagged = COMMIT.exec(text)?.[1]
+  const bare = done && tagged === undefined ? trailingShas(text) : undefined
+  const described = bare === undefined ? text : text.slice(0, bare.at)
+  const rest = idMatch ? described.slice(idMatch[0].length) : described
   const title = clip(rest.replace(/^[\s:.)—–-]+/, '').replace(/\s*(?:[.;]\s*)?\b(?:route|ruta)\s*:.*$/i, '')) || id
   const route = ROUTE.exec(text)?.[1] ?? ROUTE_PAREN.exec(text)?.[1]
-  const commit = COMMIT.exec(text)?.[1]
+  const commit = tagged ?? bare?.shas[0]
   const task: ProgressTask = { id, title, done }
   if (route !== undefined) task.route = route.toLowerCase().startsWith('deleg') ? 'delegated' : 'inline'
   if (commit !== undefined && /\d/.test(commit)) task.commit = commit
@@ -133,7 +150,9 @@ const tableTasks = (lines: string[]): ProgressTask[] | undefined => {
     const status = cells[statusAt] ?? ''
     if (DROPPED_STATUS.test(status)) continue
     const id = unbold(cells[idAt >= 0 ? idAt : 0] ?? '').trim() || `#${tasks.length + 1}`
-    const title = clip(unbold(cells[titleAt >= 0 && titleAt !== idAt ? titleAt : idAt >= 0 ? idAt + 1 : 1] ?? '')) || id
+    const fallbackAt = idAt >= 0 ? idAt + 1 : 1
+    const titleCell = titleAt >= 0 && titleAt !== idAt ? titleAt : [statusAt, routeAt, commitAt].includes(fallbackAt) ? -1 : fallbackAt
+    const title = (titleCell >= 0 ? clip(unbold(cells[titleCell] ?? '')) : '') || clip(id)
     const task: ProgressTask = { id: clip(id), title, done: DONE_STATUS.test(status) }
     const route = routeAt >= 0 ? cells[routeAt] ?? '' : ''
     if (/deleg/i.test(route)) task.route = 'delegated'
@@ -166,7 +185,7 @@ const bulletTasks = (lines: string[]): ProgressTask[] | undefined => {
     const bullet = BULLET_ID.exec(line)
     if (!bullet || (bullet[1] ?? '').length > 0) continue
     if (!ID.test(unbold(bullet[2] ?? ''))) continue
-    tasks.push(taskFrom(bullet[2] ?? '', tasks.length, DONE_WORD.test(bullet[2] ?? '')))
+    tasks.push(taskFrom(bullet[2] ?? '', tasks.length, saysDone(bullet[2] ?? '')))
   }
   return tasks.length > 0 ? tasks : undefined
 }

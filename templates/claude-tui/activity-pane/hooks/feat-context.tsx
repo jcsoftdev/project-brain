@@ -40,9 +40,11 @@ const SECTION_KEY = 'ctxb-section'
 
 const EMPTY_BREAKDOWN: ContextBreakdownState = { rows: [], window: 0, total: 0, at: 0 }
 const EMPTY_COMPACTIONS: CompactionRecord = { count: 0, lastAt: 0 }
+const EMPTY_LIVE: ContextPart['usage'] = { window: 0 }
 
 const breakdownAtom = atom({ plugin: 'project-brain-activity', key: 'contextBreakdown' } as const, EMPTY_BREAKDOWN, { shape: 'context-breakdown-1' })
 const compactionsAtom = atom({ plugin: 'project-brain-activity', key: 'contextCompactions' } as const, EMPTY_COMPACTIONS, { shape: 'context-compactions-1' })
+const liveAtom = atom({ plugin: 'project-brain-activity', key: 'contextLive' } as const, EMPTY_LIVE, { shape: 'context-live-1' })
 
 const LABELS: Record<string, string> = {
   'System prompt': 'Sistema',
@@ -124,11 +126,24 @@ const miniBar = (percent: number): string => {
 
 const ROW_TONE: Record<ContextRowKind, Tone | undefined> = { used: undefined, free: 'subtle', buffer: 'subtle' }
 
+/** Below these widths a breakdown row sheds its bar, then its percent. */
+const BAR_FROM = 29
+const PERCENT_FROM = 20
+const INDENT_FROM = 12
+
+/** Which parts of a breakdown row fit, and how wide its name is; the whole row is never wider than `width`. */
+export const breakdownLayout = (width: number): { indent: string; nameWidth: number; hasPercent: boolean; hasBar: boolean } => {
+  if (width >= BAR_FROM) return { indent: '  ', nameWidth: Math.max(6, Math.min(26, width - (BAR_CELLS + 16))), hasPercent: true, hasBar: true }
+  if (width >= PERCENT_FROM) return { indent: '  ', nameWidth: Math.min(26, width - 14), hasPercent: true, hasBar: false }
+  const indent = width >= INDENT_FROM ? '  ' : ''
+  return { indent, nameWidth: Math.max(1, width - indent.length - 5), hasPercent: false, hasBar: false }
+}
+
 export const rowsContext = (
   part: ContextPart,
   ctx: { width: number; accent: string; isOpen: (key: string, byDefault: boolean) => boolean },
 ): Row[] => {
-  const width = Math.max(20, ctx.width)
+  const width = Math.max(1, ctx.width)
   const { breakdown, compactions } = part
   const percent = livePercent(part)
   const headParts = ['Contexto']
@@ -153,21 +168,22 @@ export const rowsContext = (
       ...breakdown.rows.filter(row => row.kind === 'free'),
       ...breakdown.rows.filter(row => row.kind === 'buffer'),
     ]
-    const tail = BAR_CELLS + 16
-    const nameWidth = Math.max(6, Math.min(26, width - tail))
+    const layout = breakdownLayout(width)
     ordered.forEach((row, index) => {
       const share = (row.tokens / breakdown.window) * 100
-      const name = fit(contextLabelOf(row.name), nameWidth).padEnd(nameWidth)
-      const figures = `${compact(row.tokens).padStart(6)} ${`${Math.round(share)} %`.padStart(5)} `
+      const name = fit(contextLabelOf(row.name), layout.nameWidth).padEnd(layout.nameWidth)
+      const tokens = compact(row.tokens).padStart(layout.hasPercent ? 6 : 5)
+      const percent = layout.hasPercent ? ` ${`${Math.round(share)} %`.padStart(5)}` : ''
+      const figures = `${tokens}${percent}${layout.hasBar ? ' ' : ''}`
       const dim = row.kind !== 'used'
       const tone = ROW_TONE[row.kind]
       body.push({
         key: `ctxb-row-${index}`,
         cells: [{
           spans: [
-            span(`  ${name}`, { dim }),
+            span(`${layout.indent}${name}`, { dim }),
             span(figures, { dim }),
-            span(miniBar(share), dim ? { dim, ...(tone ? { color: tone } : {}) } : { color: ctx.accent }),
+            ...(layout.hasBar ? [span(miniBar(share), dim ? { dim, ...(tone ? { color: tone } : {}) } : { color: ctx.accent })] : []),
           ],
         }],
       })
@@ -181,39 +197,60 @@ export const rowsContext = (
 }
 
 export const footerContext = (part: Pick<ContextPart, 'usage' | 'breakdown'>): Span[] => {
-  const percent = livePercent(part)
-  if (percent === undefined || percent < WARN_PERCENT) return []
-  const tone: Tone = percent >= ERROR_PERCENT ? 'error' : 'warning'
-  return [span(`⚠ ${Math.round(percent)} % · se compactará pronto`, { color: tone, bold: percent >= ERROR_PERCENT })]
+  const measured = livePercent(part)
+  if (measured === undefined) return []
+  const percent = Math.round(measured)
+  if (percent < WARN_PERCENT) return []
+  const isError = percent >= ERROR_PERCENT
+  return [span(`⚠ ${percent} % · se compactará pronto`, { color: isError ? 'error' : 'warning', bold: isError })]
 }
 
+/** The session's live figures as the pane stores them: numbers only, no breakdown. */
+export const liveOf = (usage: SessionContextUsage): ContextPart['usage'] => {
+  const live: ContextPart['usage'] = { window: usage.window }
+  if (usage.tokens !== undefined) live.tokens = usage.tokens
+  if (usage.percent !== undefined) live.percent = usage.percent
+  return live
+}
+
+/** Atoms only: the live figures arrive through `session.measure` and the refreshes below, never from a draw. */
 export async function readContext($: Api): Promise<ContextPart> {
   const [breakdown, compactions, usage, now] = await Promise.all([
     read($, breakdownAtom).catch(() => EMPTY_BREAKDOWN),
     read($, compactionsAtom).catch(() => EMPTY_COMPACTIONS),
-    $.session.usage().then(found => found.context).catch((): SessionContextUsage => ({ window: 0 })),
+    read($, liveAtom).catch(() => EMPTY_LIVE),
     $.clock.now().catch(() => 0),
   ])
-  const live: ContextPart['usage'] = { window: usage.window }
-  if (usage.tokens !== undefined) live.tokens = usage.tokens
-  if (usage.percent !== undefined) live.percent = usage.percent
-  return { breakdown, compactions, usage: live, now }
+  return { breakdown, compactions, usage, now }
 }
 
-async function refreshBreakdown($: Api, force: boolean): Promise<void> {
+/** `session.measure` pushes what `$.session.usage()` would answer: kept so a draw never asks. */
+export async function contextMeasured($: Api, usage: SessionContextUsage): Promise<void> {
+  await update($, liveAtom, () => liveOf(usage))
+}
+
+/** One `$.session.usage` read per event: the live figures always, the breakdown when forced or due. */
+async function refreshContext($: Api, force: boolean): Promise<void> {
   const now = await $.clock.now()
-  if (refreshing || (!force && now - lastRefreshAt < REFRESH_MS)) return
-  lastRefreshAt = now
+  if (refreshing) return
+  const isDue = force || now - lastRefreshAt >= REFRESH_MS
+  if (isDue) lastRefreshAt = now
   refreshing = (async () => {
-    const found = await $.session.usage({ breakdown: 'summary' })
+    const found = await $.session.usage(isDue ? { breakdown: 'summary' } : undefined)
+    await update($, liveAtom, () => liveOf(found.context))
     const raw = found.context.breakdown
-    if (raw) await update($, breakdownAtom, () => breakdownOf(raw, now))
+    if (isDue && raw) await update($, breakdownAtom, () => breakdownOf(raw, now))
   })()
     .catch(() => undefined)
     .finally(() => {
       refreshing = undefined
     })
   await refreshing
+}
+
+/** The live figures now, the breakdown when due: for a pane opened before any event filled them. */
+export async function contextKick($: Api): Promise<void> {
+  await refreshContext($, false)
 }
 
 export const registerContext = (on: On): void => {
@@ -225,7 +262,7 @@ export const registerContext = (on: On): void => {
     try {
       const at = await $.clock.now()
       await update($, compactionsAtom, record => recordCompaction(record, result, e.trigger, at))
-      if (result.skip === undefined && e.trigger !== 'precompute') void refreshBreakdown($ as Api, true).catch(() => undefined)
+      if (result.skip === undefined && e.trigger !== 'precompute') void refreshContext($ as Api, true).catch(() => undefined)
     } catch {
       // Bookkeeping only: the compaction stands either way.
     }
@@ -235,12 +272,12 @@ export const registerContext = (on: On): void => {
 
 export async function contextSessionStart($: Api, e: Parameters<Hook<'session.start'>>[1], next: Parameters<Hook<'session.start'>>[2]): Promise<Awaited<ReturnType<Hook<'session.start'>>>> {
   const result = await next(e)
-  void refreshBreakdown($ as Api, true).catch(() => undefined)
+  void refreshContext($ as Api, true).catch(() => undefined)
   return result
 }
 
 export async function contextTurnComplete($: Api, e: Parameters<Hook<'turn.complete'>>[1], next: Parameters<Hook<'turn.complete'>>[2]): Promise<Awaited<ReturnType<Hook<'turn.complete'>>>> {
   const result = await next(e)
-  if (e.agentId === undefined) void refreshBreakdown($, false).catch(() => undefined)
+  if (e.agentId === undefined) void refreshContext($, false).catch(() => undefined)
   return result
 }

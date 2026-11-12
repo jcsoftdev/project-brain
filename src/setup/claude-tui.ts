@@ -18,6 +18,8 @@ import featContext from "../../templates/claude-tui/activity-pane/hooks/feat-con
 import featProgress from "../../templates/claude-tui/activity-pane/hooks/feat-progress.tsx" with { type: "text" };
 // @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
 import featRunning from "../../templates/claude-tui/activity-pane/hooks/feat-running.tsx" with { type: "text" };
+// @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
+import featSavings from "../../templates/claude-tui/activity-pane/hooks/feat-savings.tsx" with { type: "text" };
 // @ts-expect-error TypeScript refuses a value import of a .d.ts; Bun's text attribute embeds it as a string.
 import typesDts from "../../templates/claude-tui/activity-pane/types/index.d.ts" with { type: "text" };
 import listingPluginJson from "../../templates/claude-tui/skill-listing/.claude-plugin/plugin.json" with { type: "text" };
@@ -58,6 +60,7 @@ export const ACTIVITY_PANE_FILES: Record<string, string> = {
   "hooks/feat-context.tsx": featContext as string,
   "hooks/feat-progress.tsx": featProgress as string,
   "hooks/feat-running.tsx": featRunning as string,
+  "hooks/feat-savings.tsx": featSavings as string,
   "types/index.d.ts": typesDts as string,
 };
 
