@@ -39,6 +39,14 @@ export function parseContextInput(raw: string): ContextInput | null {
 
 const clip = (text: string, max: number): string => (text.length <= max ? text : `${text.slice(0, max)}…`);
 
+export const SEGMENT_TAIL_CHARS = 400;
+
+export function headAndTail(text: string, max: number = MAX_SEGMENT_CHARS): string {
+  if (text.length <= max) return text;
+  const head = max - SEGMENT_TAIL_CHARS;
+  return `${text.slice(0, head)}\n…\n${text.slice(-SEGMENT_TAIL_CHARS)}`;
+}
+
 export const contextQuestionKey = (index: number): string => `context_${index}`;
 
 function contextQuestion(index: number): NoulQuestion {
@@ -66,7 +74,7 @@ export async function judgeContext(input: ContextInput, deps: ContextJudgeDeps =
 
   const questions: Record<string, NoulQuestion> = {};
   asked.forEach((_, index) => (questions[contextQuestionKey(index)] = contextQuestion(index)));
-  const state = { prompt: clip(input.prompt, MAX_PROMPT_CHARS), contexts: asked.map((s) => clip(s, MAX_SEGMENT_CHARS)) };
+  const state = { prompt: clip(input.prompt, MAX_PROMPT_CHARS), contexts: asked.map((s) => headAndTail(s)) };
   const answers = await ask(token, state, questions, { fetchFn: deps.fetchFn, timeoutMs: deps.timeoutMs ?? CONTEXT_JEV_TIMEOUT_MS });
   await deps.recordHealth?.(answers !== null).catch(() => undefined);
   if (!answers) return null;

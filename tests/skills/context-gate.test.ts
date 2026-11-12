@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   CONTEXT_GATE_HEALTH_FILE,
   MAX_SEGMENTS,
+  headAndTail,
   judgeContext,
   parseContextInput,
   recordContextGateHealth,
@@ -53,6 +54,15 @@ describe("judgeContext", () => {
     const down = async () => new Response("down", { status: 503 });
     expect(await judgeContext({ prompt: "p", segments: ["a"] }, { getToken: token, fetchFn: down, recordHealth })).toBeNull();
     expect(health).toEqual([false]);
+  });
+});
+
+describe("headAndTail", () => {
+  it("keeps a long piece's start and its end", () => {
+    const clipped = headAndTail(`${"a".repeat(2000)}${"z".repeat(500)}`, 1200);
+    expect(clipped.startsWith("a".repeat(800))).toBe(true);
+    expect(clipped.endsWith("z".repeat(400))).toBe(true);
+    expect(headAndTail("short", 1200)).toBe("short");
   });
 });
 

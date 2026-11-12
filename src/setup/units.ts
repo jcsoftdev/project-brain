@@ -1793,7 +1793,7 @@ function contextGateUnit(): SetupUnit {
       "installs the project-brain-context-gate mod: before context another hook injects reaches the model, Jev judges whether this prompt needs it, " +
       "and what it does not need is left out (~/.project-brain/context-gate-log.json lists what was dropped). " +
       "engram, project-brain and the signatures you list under contextAllow in ~/.project-brain/skills.json are never filtered; " +
-      "every answer is replayed on resume so the prompt cache holds. Needs a Jev token; untick to remove the mod",
+      "every answer is replayed on resume so the prompt cache holds. Needs a Jev token: your prompt and the injected text it judges are sent to api.typesafe.ai; untick to remove the mod",
     defaultSelected: false,
 
     async inspect(ctx): Promise<UnitState> {

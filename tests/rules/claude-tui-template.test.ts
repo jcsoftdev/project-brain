@@ -9,6 +9,7 @@ import {
   SKILL_LISTING_FILES,
   SKILL_LISTING_PLUGIN_NAME,
 } from "../../src/setup/claude-tui.js";
+import { GATE_FENCE_BEGIN, GATE_FENCE_END } from "../../src/hooks/gate-fence.js";
 
 const templates = join(import.meta.dir, "../../templates/claude-tui");
 
@@ -56,6 +57,14 @@ describe("activity-pane names", () => {
     const register = ACTIVITY_PANE_FILES["hooks/register.tsx"]!;
     expect(register).toContain(`plugin: '${ACTIVITY_PLUGIN_NAME}'`);
     expect(register).toContain("name: 'activity'");
+  });
+});
+
+describe("context-gate fences", () => {
+  it("are the ones project-brain's hooks write", () => {
+    const register = CONTEXT_GATE_FILES["hooks/register.tsx"]!;
+    expect(register).toContain(`export const FENCE_BEGIN = '${GATE_FENCE_BEGIN}'`);
+    expect(register).toContain(`export const FENCE_END = '${GATE_FENCE_END}'`);
   });
 });
 

@@ -9,6 +9,10 @@ type Handler = (...args: any[]) => Promise<any>;
 interface ModModule {
   DEFAULT_ALLOW: string[];
   MIN_PIECE_CHARS: number;
+  FENCE_BEGIN: string;
+  FENCE_END: string;
+  HEALTH_RETRY_MS: number;
+  gateHealthy(text: string, now: number): boolean;
   splitAttachment(type: string, text: string, allow: readonly string[]): Framed;
   assemble(framed: Framed, dropped: ReadonlySet<number>): string | null;
   parseConfig(text: string): { enabled: boolean; allow: string[] };
@@ -53,6 +57,7 @@ function harness(opts: {
   store?: Map<string, unknown>;
   process?: Process;
   storeFails?: boolean;
+  storeReadFails?: boolean;
 }) {
   const handlers = new Map<string, Handler>();
   const runs: Array<{ argv: string[]; stdin?: string }> = [];
@@ -72,7 +77,10 @@ function harness(opts: {
     clock: { now: async () => NOW },
     session: { id: async () => proc.sessionId!, turns: async () => proc.turns },
     store: {
-      get: async (key: string) => (store.has(key) ? JSON.parse(JSON.stringify(store.get(key))) : undefined),
+      get: async (key: string) => {
+        if (opts.storeReadFails) throw new Error("store unreadable");
+        return store.has(key) ? JSON.parse(JSON.stringify(store.get(key))) : undefined;
+      },
       set: async (key: string, value: unknown) => {
         if (opts.storeFails) throw new Error("store full");
         store.set(key, JSON.parse(JSON.stringify(value)));
@@ -193,21 +201,75 @@ describe("the gate", () => {
     expect(resumed.runs).toHaveLength(1);
   });
 
-  it("decides again after a compaction that stands, and not after a precompute or a skip", async () => {
+  it("bumps the epoch only for a compaction that stands, and judges new text after it", async () => {
     const store = new Map<string, unknown>();
     const run = firstRun(DROP_ALL, store);
     await run.start();
     await run.submit("summarise math.ts");
-    const e = hookAttachment(SESSION_START);
-    await run.attach(e);
+    await run.attach(hookAttachment(SESSION_START));
     await run.call("session.compact", { trigger: "precompute", messages: [] }, async () => ({ messages: [] }));
     await run.call("session.compact", { trigger: "manual", messages: [] }, async () => ({ skip: "no" }));
-    await run.attach(e);
-    expect(run.runs).toHaveLength(1);
+    expect((store.get("session:s1") as { epoch: number }).epoch).toBe(0);
 
     await run.call("session.compact", { trigger: "auto", messages: [] }, async () => ({ messages: [] }));
-    await run.attach(e);
+    expect((store.get("session:s1") as { epoch: number }).epoch).toBe(1);
+    await run.attach(hookAttachment(`PostToolUse:Read hook additional context: ${ACME}`, "PostToolUse"));
     expect(run.runs).toHaveLength(2);
+  });
+
+  it("on a resume after compactions, replays answers given under any earlier epoch, newest first", async () => {
+    const store = new Map<string, unknown>();
+    const first = firstRun(DROP_ALL, store);
+    await first.start();
+    await first.submit("summarise math.ts");
+    const preserved = hookAttachment(SESSION_START);
+    const sent = await first.attach(preserved);
+    await first.call("session.compact", { trigger: "auto", messages: [] }, async () => ({ messages: [] }));
+    const afterFirst = hookAttachment(`PostToolUse:Read hook additional context: ${ACME}`, "PostToolUse");
+    const sentAfter = await first.attach(afterFirst);
+    await first.call("session.compact", { trigger: "manual", messages: [] }, async () => ({ messages: [] }));
+    expect((store.get("session:s1") as { epoch: number }).epoch).toBe(2);
+
+    const resumed = harness({ store, process: { turns: 4 }, cli: () => ({ exitCode: 0, stdout: '{"keep":[true]}', stderr: "" }) });
+    await resumed.start();
+    await resumed.submit("now summarise greet.py");
+    expect(await resumed.attach(preserved)).toEqual(sent);
+    expect(await resumed.attach(afterFirst)).toEqual(sentAfter);
+    expect(resumed.runs).toEqual([]);
+  });
+
+  it("gates only additional context and plain hook output, never a block, a stop, a permission note or a PreToolUse guard", async () => {
+    const run = harness({ cli: DROP_ALL });
+    await run.start();
+    await run.submit("summarise math.ts");
+    const notes = [
+      hookAttachment(`Stop hook blocking error: ${ACME}`, "Stop", "hook_blocking_error"),
+      hookAttachment(`PostToolUse hook blocking error: ${ACME}`, "PostToolUse", "hook_blocking_error"),
+      hookAttachment(ACME, "Stop", "hook_stopped_continuation"),
+      hookAttachment(ACME, "PreToolUse", "hook_permission_decision"),
+      hookAttachment(ACME, "SessionStart", "hook_system_message"),
+      hookAttachment(ACME, "PostToolUse", "async_hook_response"),
+      hookAttachment(`PreToolUse:Bash hook additional context: ${ACME}`, "PreToolUse"),
+    ];
+    for (const e of notes) expect((await run.attach(e)).text).toBe(e.text);
+    expect(run.runs).toEqual([]);
+  });
+
+  it("keeps everything between project-brain's fences whole, nested ones too", () => {
+    const table = ["| Task | Tier |", "| --- | --- |", ...Array.from({ length: 30 }, (_, i) => `| task ${i} | deep |`)].join("\n");
+    const fenced = (text: string) => `${mod.FENCE_BEGIN}\n${text}\n${mod.FENCE_END}`;
+    const text = `${FRAME}${fenced(`Upgrade notice\n${fenced(table)}\nafter the inner fence`)}\n${ACME}`;
+    const framed = mod.splitAttachment("hook_additional_context", text, mod.DEFAULT_ALLOW);
+    expect(framed.pieces.map((p) => p.allowed)).toEqual([true, false]);
+    expect(framed.pieces[1]!.text).toBe(ACME);
+    expect(mod.assemble(framed, new Set())).toBe(text);
+  });
+
+  it("asks again after the health cooldown", () => {
+    expect(mod.gateHealthy(JSON.stringify({ failures: 3, lastFailure: NOW - 1000 }), NOW)).toBe(false);
+    expect(mod.gateHealthy(JSON.stringify({ failures: 5, lastFailure: NOW - mod.HEALTH_RETRY_MS }), NOW)).toBe(true);
+    expect(mod.gateHealthy('{"failures":3}', NOW)).toBe(false);
+    expect(mod.gateHealthy('{"failures":2}', NOW)).toBe(true);
   });
 
   it("never filters the allowlist, engine text or a subagent's attachments", async () => {
@@ -257,11 +319,34 @@ describe("the gate", () => {
     expect((await noPrompt.attach(e)).text).toBe(SESSION_START);
   });
 
-  it("sends the text unchanged when its answer cannot be persisted", async () => {
+  it("sends the text unchanged when its answer cannot be persisted, and gives that same answer if asked again", async () => {
     const run = harness({ cli: DROP_ALL, storeFails: true });
     await run.start();
     await run.submit("summarise math.ts");
     expect((await run.attach(hookAttachment(SESSION_START))).text).toBe(SESSION_START);
+    expect((await run.attach(hookAttachment(SESSION_START))).text).toBe(SESSION_START);
+    expect(run.runs).toHaveLength(1);
+  });
+
+  it("an unreadable store is not an empty one: the text goes out unchanged and nothing is written", async () => {
+    const store = new Map<string, unknown>([["session:s1", { epoch: 3, touched: NOW, sent: {} }]]);
+    const run = harness({ cli: DROP_ALL, store, storeReadFails: true });
+    await run.start();
+    await run.submit("summarise math.ts");
+    expect((await run.attach(hookAttachment(SESSION_START))).text).toBe(SESSION_START);
+    await run.call("session.compact", { trigger: "auto", messages: [] }, async () => ({ messages: [] }));
+    expect(run.runs).toEqual([]);
+    expect(store.get("session:s1")).toEqual({ epoch: 3, touched: NOW, sent: {} });
+  });
+
+  it("a resumed process stays replay-only until a turn it started itself completes", async () => {
+    const resumed = harness({ cli: DROP_ALL, process: { turns: 2 } });
+    await resumed.start();
+    await resumed.call("turn.complete", { reason: "done", text: "" });
+    await resumed.submit("now summarise greet.py");
+    const later = hookAttachment(`PostToolUse:Read hook additional context: ${ACME}`, "PostToolUse");
+    expect((await resumed.attach(later)).text).toBe(later.text);
+    expect(resumed.runs).toEqual([]);
   });
 
   it("judges against the latest typed prompt, not a slash command or a meta prompt", async () => {
