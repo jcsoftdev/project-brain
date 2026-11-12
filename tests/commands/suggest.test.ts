@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execute, parseHookInput, runSuggest } from "../../src/commands/suggest.js";
 import { pickSuggestions } from "../../src/skills/picker.js";
+import { fencedForGate } from "../../src/hooks/gate-fence.js";
 
 const PROMPT = "haz el commit de estos cambios";
 const hook = (over: Record<string, unknown> = {}) =>
@@ -43,7 +44,7 @@ describe("runSuggest task switch", () => {
     expect(printed).toHaveLength(1);
     const out = JSON.parse(printed[0]!);
     expect(out.systemMessage).toContain("/clear");
-    expect(out.hookSpecificOutput).toEqual({ hookEventName: "UserPromptSubmit", additionalContext: "Suggested skill: x" });
+    expect(out.hookSpecificOutput).toEqual({ hookEventName: "UserPromptSubmit", additionalContext: fencedForGate("Suggested skill: x") });
   });
 
   it("prints plain lines and asks nothing extra without task context", async () => {

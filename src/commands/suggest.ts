@@ -2,6 +2,7 @@ import { isTrivialPrompt } from "./trivial-prompt.js";
 import { pickSkill, pickSuggestions } from "../skills/picker.js";
 import type { SharedQuery } from "../skills/semantic.js";
 import { judgeContext, parseContextInput, recordContextGateHealth, type ContextJudgeDeps } from "../skills/context-gate.js";
+import { fencedForGate } from "../hooks/gate-fence.js";
 
 /**
  * Self-timeout of the global suggest hook. The hook entry allows 10s; this stays
@@ -266,7 +267,7 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
         print(
           JSON.stringify({
             systemMessage,
-            ...(additionalContext ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } } : {}),
+            ...(additionalContext ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: fencedForGate(additionalContext) } } : {}),
           })
         );
       out.length = 0;
