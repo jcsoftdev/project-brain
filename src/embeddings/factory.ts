@@ -2,6 +2,7 @@ import { resolveModel, DEFAULT_MODEL_KEY } from "./registry.js";
 import { OllamaEmbeddingClient, embedRequestBody } from "./ollama.js";
 import { NullEmbeddingClient } from "./null.js";
 import { EmbeddingPool } from "./pool.js";
+import { withLane, type LaneOptions } from "./lane.js";
 import type { EmbeddingClient } from "../types.js";
 
 // ── Injectable dependency types ────────────────────────────────────────────
@@ -31,7 +32,7 @@ export interface DetectDimOptions {
   embed?: EmbedFn;
 }
 
-export interface FactoryOptions {
+export interface FactoryOptions extends LaneOptions {
   /** Override the Ollama host (defaults to OLLAMA_HOST constant). */
   host?: string;
   /**
@@ -162,6 +163,12 @@ export async function createEmbeddingClient(
   if (modelKey === "none") {
     return new NullEmbeddingClient();
   }
+  const { OLLAMA_HOST } = await import("../constants.js");
+  const fallbackHost = parseOllamaHosts(process.env.BRAIN_OLLAMA_HOSTS)[0] ?? options.host ?? OLLAMA_HOST;
+  return withLane(await createLaneless(modelKey, options), { ...options, fallbackHost: options.fallbackHost ?? fallbackHost });
+}
+
+async function createLaneless(modelKey: string | undefined, options: FactoryOptions): Promise<EmbeddingClient> {
 
   const { OLLAMA_HOST } = await import("../constants.js");
   const pooledHosts = parseOllamaHosts(process.env.BRAIN_OLLAMA_HOSTS);

@@ -7,6 +7,7 @@ import { readLastError, type LastError } from "../store/error-state.js";
 import { HOOK_TIMEOUT_MS } from "./search.js";
 import { formatRerankerProbeLine, probeReranker, type RerankerProbe } from "../rerank/probe.js";
 import type { Reranker } from "../rerank/jev.js";
+import { INTERACTIVE_HOST_ENV, probeInteractiveLane, type InteractiveLaneStatus } from "../embeddings/lane.js";
 import { formatLastSyncLine, readSyncStatus, type SyncStatusReport } from "./sync-status.js";
 
 /** Whether <root>/CLAUDE.md's project-brain block matches the current template; "missing" when there is no `.project-brain/project.json` to compare it against. */
@@ -44,6 +45,7 @@ export interface HealthOptions {
    * itself performs no filesystem scanning, the caller already has `root`.
    */
   projectRules?: ProjectRulesState;
+  interactiveLane?: InteractiveLaneStatus;
 }
 
 export interface HealthResult {
@@ -76,6 +78,7 @@ export interface HealthResult {
   rerankerProbe?: RerankerProbe;
   /** Omitted when the caller did not resolve it (no root available). */
   projectRules?: ProjectRulesState;
+  interactiveLane?: InteractiveLaneStatus;
 }
 
 /**
@@ -129,7 +132,22 @@ export async function runHealth(options: HealthOptions): Promise<HealthResult> {
     ...(rerankerProbe ? { rerankerProbe } : {}),
     ...(lastSync ? { lastSync } : {}),
     ...(options.projectRules !== undefined ? { projectRules: options.projectRules } : {}),
+    ...(options.interactiveLane ? { interactiveLane: options.interactiveLane } : {}),
   };
+}
+
+const INTERACTIVE_LANE_LINES: Record<InteractiveLaneStatus["status"], (lane: InteractiveLaneStatus) => string> = {
+  off: () =>
+    `Interactive lane: off — queries share Ollama with indexing; enable with project-brain setup --with=service:ollama-interactive or ${INTERACTIVE_HOST_ENV}`,
+  up: (lane) => `Interactive lane: up (${lane.host})`,
+  down: (lane) =>
+    `Interactive lane: down (${lane.host}${lane.reason ? `: ${lane.reason}` : ""}) — queries fall back to the default Ollama and wait behind indexing`,
+  mismatch: (lane) =>
+    `Interactive lane: mismatch (${lane.host}: ${lane.reason ?? "differs from the default Ollama"}) — skipped; re-run project-brain setup --with=service:ollama-interactive`,
+};
+
+export function formatInteractiveLaneLine(lane: InteractiveLaneStatus): string {
+  return INTERACTIVE_LANE_LINES[lane.status](lane);
 }
 
 /**
@@ -238,6 +256,7 @@ export async function execute(args: string[]): Promise<void> {
     rerankerTokenPath: resolvedReranker?.path,
     rerankerClient: resolvedReranker?.reranker,
     projectRules: await readProjectRulesState(root),
+    interactiveLane: await probeInteractiveLane({ model: embeddings.model ?? EMBEDDING_MODEL, fallbackHost: OLLAMA_HOST }),
   });
 
   const storeIcon = result.store === "connected" ? "✓" : "✗";
@@ -258,6 +277,7 @@ export async function execute(args: string[]): Promise<void> {
       `  ⚠ Embedding latency (${Math.round(result.embedLatencyMs ?? 0)}ms) exceeds the prompt hook's ${HOOK_TIMEOUT_MS}ms budget — the hook will inject nothing while this persists. Check system load or Ollama.`
     );
   }
+  if (result.interactiveLane) console.log(`  ${formatInteractiveLaneLine(result.interactiveLane)}`);
   console.log(`  ${formatRerankerLine(result)}`);
   const probeLine = result.rerankerProbe && formatRerankerProbeLine(result.rerankerProbe);
   if (probeLine) console.log(`  ${probeLine}`);

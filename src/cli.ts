@@ -512,6 +512,18 @@ switch (command) {
     process.exit(0);
     break;
   }
+  case "lane-verify": {
+    const [host, fallbackHost, model] = args;
+    if (!host || !fallbackHost || !model) {
+      console.error("usage: project-brain lane-verify <interactive-host> <default-host> <model>");
+      process.exit(1);
+    }
+    const { verifyAndRecord } = await import("./embeddings/lane.js");
+    const verdict = await verifyAndRecord({ host, fallbackHost, model });
+    console.log(JSON.stringify(verdict));
+    process.exit(0);
+    break;
+  }
   case "skill-usage": {
     const { execute } = await import("./commands/skill-usage.js");
     await execute(args);

@@ -1,5 +1,5 @@
 import { basename, dirname, join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import type { AIToolRegistrar } from "../registrars/types.js";
 import { resolveRerankerToken } from "../rerank/token.js";
@@ -42,6 +42,11 @@ export interface SetupContext {
    * write the real one.
    */
   serviceDir?: string;
+  runService?: (argv: string[]) => Promise<number>;
+  ollamaBin?: string | null;
+  defaultOllamaServiceFiles?: string[];
+  portAnswers?: (port: number) => Promise<boolean>;
+  platform?: string;
   /**
    * Non-interactive token for `config:reranker`, from `--reranker-token`.
    * When absent, `apply()` falls back to `TYPESAFE_API_KEY`, then an
@@ -784,6 +789,7 @@ export function otherUnits(): SetupUnit[] {
         // Intentionally empty. See the unit's description.
       },
     },
+    ollamaInteractiveUnit(),
     {
       id: "config:record-connection",
       group: "Other",
@@ -1176,6 +1182,138 @@ export function otherUnits(): SetupUnit[] {
       },
     },
   ];
+}
+
+function ollamaInteractiveUnit(): SetupUnit {
+  const resolve = async (ctx: SetupContext) => {
+    const mod = await import("./ollama-interactive.js");
+    const { serviceKindFor } = await import("./chrome-shared-server.js");
+    const kind = serviceKindFor(ctx.platform ?? process.platform);
+    const ollamaBin = ctx.ollamaBin !== undefined ? ctx.ollamaBin : mod.findOllamaBin();
+    if (!kind || !ollamaBin || ctx.skipOllama) return null;
+    const runnerEnv = mod.defaultInstanceEnv(ctx.defaultOllamaServiceFiles ?? mod.defaultOllamaServiceFiles(), serviceFileReader);
+    const spec = {
+      ollamaBin,
+      modelsDir: runnerEnv.OLLAMA_MODELS ?? mod.sharedModelsDir(),
+      logPath: join(ctx.dataDir, "ollama-interactive.log"),
+      runnerEnv,
+    };
+    return {
+      mod,
+      kind,
+      file: mod.interactiveServiceFile(kind, serviceDir(kind, ctx)),
+      text: mod.interactiveServiceText(kind, spec),
+      uid: process.getuid?.() ?? 0,
+      run: ctx.runService ?? runServiceCommand,
+      portAnswers: ctx.portAnswers ?? mod.portAnswers,
+    };
+  };
+
+  return {
+    id: "service:ollama-interactive",
+    group: "Other",
+    label: "Ollama interactive lane",
+    description:
+      "a second Ollama on port 11435 that only answers prompt-time searches, so they never wait behind indexing; installs a login service",
+    defaultSelected: false,
+
+    async inspect(ctx): Promise<UnitState> {
+      const service = await resolve(ctx);
+      if (!service) return "unavailable";
+      if (!existsSync(service.file)) return "absent";
+      const { DEFAULT_INTERACTIVE_HOST } = await import("../embeddings/lane.js");
+      const configured = (await readOllamaConfig(ctx)).interactiveHost === DEFAULT_INTERACTIVE_HOST;
+      const written = (await Bun.file(service.file).text()) === service.text;
+      const loaded = (await service.run(service.mod.loadedCheckCommand(service.kind, service.uid))) === 0;
+      return configured && written && loaded ? "current" : "stale";
+    },
+
+    async apply(ctx): Promise<void> {
+      const service = await resolve(ctx);
+      if (!service) return;
+      const { DEFAULT_INTERACTIVE_HOST, INTERACTIVE_PORT } = await import("../embeddings/lane.js");
+
+      for (const argv of service.mod.stopCommands(service.kind, service.uid)) await service.run(argv);
+      if (await service.portAnswers(INTERACTIVE_PORT)) {
+        throw new Error(
+          `port ${INTERACTIVE_PORT} is already in use by another process; stop it or point BRAIN_OLLAMA_INTERACTIVE_HOST at an instance of your own`
+        );
+      }
+
+      await mkdir(dirname(service.file), { recursive: true });
+      await mkdir(ctx.dataDir, { recursive: true });
+      await Bun.write(service.file, service.text);
+      for (const argv of service.mod.startCommands(service.kind, service.file, service.uid)) {
+        const code = await service.run(argv);
+        if (code !== 0) {
+          await rm(service.file, { force: true });
+          throw new Error(`${argv.join(" ")} exited with ${code}; the interactive Ollama service was not installed`);
+        }
+      }
+      await writeOllamaConfig(ctx, { interactiveHost: DEFAULT_INTERACTIVE_HOST });
+    },
+
+    async remove(ctx): Promise<void> {
+      const mod = await import("./ollama-interactive.js");
+      const { serviceKindFor } = await import("./chrome-shared-server.js");
+      await writeOllamaConfig(ctx, { interactiveHost: undefined });
+      const kind = serviceKindFor(ctx.platform ?? process.platform);
+      if (!kind) return;
+      const file = mod.interactiveServiceFile(kind, serviceDir(kind, ctx));
+      if (!existsSync(file)) return;
+      for (const argv of mod.uninstallCommands(kind, process.getuid?.() ?? 0)) {
+        await (ctx.runService ?? runServiceCommand)(argv);
+      }
+      await rm(file, { force: true });
+    },
+  };
+}
+
+async function readOllamaConfig(ctx: SetupContext): Promise<Record<string, unknown>> {
+  const { ollamaConfigPath } = await import("../embeddings/lane.js");
+  try {
+    return JSON.parse(await Bun.file(ollamaConfigPath(ctx.dataDir)).text());
+  } catch {
+    return {};
+  }
+}
+
+async function writeOllamaConfig(ctx: SetupContext, patch: { interactiveHost: string | undefined }): Promise<void> {
+  const { ollamaConfigPath } = await import("../embeddings/lane.js");
+  const next = { ...(await readOllamaConfig(ctx)), ...patch };
+  const path = ollamaConfigPath(ctx.dataDir);
+  if (next.interactiveHost === undefined) delete next.interactiveHost;
+  if (Object.keys(next).length === 0) {
+    await rm(path, { force: true });
+    return;
+  }
+  await mkdir(ctx.dataDir, { recursive: true });
+  await Bun.write(path, `${JSON.stringify(next, null, 2)}\n`);
+}
+
+const serviceFileReader = {
+  readText(path: string): string | null {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch {
+      return null;
+    }
+  },
+  listDir(path: string): string[] {
+    try {
+      return readdirSync(path);
+    } catch {
+      return [];
+    }
+  },
+};
+
+async function runServiceCommand(argv: string[]): Promise<number> {
+  try {
+    return await Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" }).exited;
+  } catch {
+    return -1;
+  }
 }
 
 /** The port the bridge listens on, from the recorded state or the default. */

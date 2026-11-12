@@ -157,6 +157,8 @@ export interface ToolDeps extends GraphDeps {
    * When absent, handlers fall back to `embeddings` (backward-compatible).
    */
   embeddingsFor?: (project: string) => Promise<EmbeddingClient>;
+  queryEmbeddingsFor?: (project: string) => Promise<EmbeddingClient>;
+  probeInteractiveLane?: (model: string) => Promise<import("./embeddings/lane.js").InteractiveLaneStatus>;
   /**
    * Capability-gated destructive-action confirmation. Wired by server.ts to
    * MCP elicitation when the client declares the capability; absent otherwise

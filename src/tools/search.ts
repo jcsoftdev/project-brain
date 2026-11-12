@@ -33,7 +33,8 @@ export async function handleSearch(args: SearchArgs, deps: ToolDeps): Promise<To
   const { project, query } = args;
   const limit = Math.min(Math.max(args.limit ?? 10, 1), 50);
 
-  const emb = deps.embeddingsFor ? await deps.embeddingsFor(project) : deps.embeddings;
+  const resolve = deps.queryEmbeddingsFor ?? deps.embeddingsFor;
+  const emb = resolve ? await resolve(project) : deps.embeddings;
 
   const modelKey = emb.model ?? "";
   const cached = args.queryVector ?? queryCache.get(modelKey, query);

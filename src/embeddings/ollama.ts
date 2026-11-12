@@ -32,6 +32,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export interface OllamaRequestPolicy {
+  attempts?: number;
+  timeoutMs?: number;
+  quiet?: boolean;
+}
+
 /** Ollama-backed embedding client with circuit breaker cooldown. */
 export class OllamaEmbeddingClient implements EmbeddingClient {
   private readonly host: string;
@@ -46,8 +52,21 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
   private static readonly BREAKER_THRESHOLD = 2;
   private consecutiveFailures = 0;
 
-  constructor(host: string, cooldownMs: number = HEALTH_COOLDOWN_MS, model: string = EMBEDDING_MODEL, dim: number = VECTOR_DIM) {
+  private readonly attempts: number;
+  private readonly timeoutMs: number | undefined;
+  private readonly quiet: boolean;
+
+  constructor(
+    host: string,
+    cooldownMs: number = HEALTH_COOLDOWN_MS,
+    model: string = EMBEDDING_MODEL,
+    dim: number = VECTOR_DIM,
+    policy: OllamaRequestPolicy = {}
+  ) {
     this.host = host;
+    this.attempts = policy.attempts ?? TRANSIENT_RETRY_ATTEMPTS;
+    this.timeoutMs = policy.timeoutMs;
+    this.quiet = policy.quiet ?? false;
     this.model = model;
     this.cooldownMs = cooldownMs;
     this.dim = dim;
@@ -63,6 +82,10 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
    * fails loudly instead. A narrower response is always a failure: dimensions
    * cannot be invented.
    */
+  private warn(message: string): void {
+    if (!this.quiet) console.warn(message);
+  }
+
   private fitToDim(vectors: number[][]): number[][] | null {
     const width = vectors[0]?.length;
     if (width === undefined || width === this.dim) return vectors;
@@ -94,14 +117,14 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
       }
     }
 
-    for (let attempt = 1; attempt <= TRANSIENT_RETRY_ATTEMPTS; attempt++) {
+    for (let attempt = 1; attempt <= this.attempts; attempt++) {
       let response: Response;
       try {
         response = await fetch(`${this.host}/api/embed`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(embedRequestBody(this.model, texts)),
-          signal: AbortSignal.timeout(embedTimeoutMs(texts.length)),
+          signal: AbortSignal.timeout(this.timeoutMs ?? embedTimeoutMs(texts.length)),
         });
       } catch (err) {
         // Thrown errors (ECONNRESET, socket hang up, fetch failure, abort)
@@ -110,10 +133,10 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
         // with backoff before giving up and tripping the breaker. Log the
         // real cause either way — a bare `null` return gives the caller no
         // way to tell a timeout from a DNS failure from a refused connection.
-        console.warn(
-          `[project-brain] embed request errored (attempt ${attempt}/${TRANSIENT_RETRY_ATTEMPTS}): ${err instanceof Error ? err.message : String(err)}`
+        this.warn(
+          `[project-brain] embed request errored (attempt ${attempt}/${this.attempts}): ${err instanceof Error ? err.message : String(err)}`
         );
-        if (attempt < TRANSIENT_RETRY_ATTEMPTS) {
+        if (attempt < this.attempts) {
           await sleep(TRANSIENT_RETRY_BASE_MS * 2 ** (attempt - 1));
           continue;
         }
@@ -128,9 +151,9 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
         // status + body in both cases — e.g. Ollama's 400 on an
         // over-length input (context window exceeded) was previously
         // indistinguishable from any other failure.
-        if (response.status >= 500 && attempt < TRANSIENT_RETRY_ATTEMPTS) {
-          console.warn(
-            `[project-brain] embed request got ${response.status} (attempt ${attempt}/${TRANSIENT_RETRY_ATTEMPTS}), retrying: ${body.slice(0, 300)}`
+        if (response.status >= 500 && attempt < this.attempts) {
+          this.warn(
+            `[project-brain] embed request got ${response.status} (attempt ${attempt}/${this.attempts}), retrying: ${body.slice(0, 300)}`
           );
           await sleep(TRANSIENT_RETRY_BASE_MS * 2 ** (attempt - 1));
           continue;
@@ -139,17 +162,17 @@ export class OllamaEmbeddingClient implements EmbeddingClient {
           // 4xx is input-specific (bad request/model for THIS payload) —
           // terminal for this call but says nothing about server health.
           // Do not count it toward the breaker.
-          console.warn(`[project-brain] embed request rejected with ${response.status}: ${body.slice(0, 300)}`);
+          this.warn(`[project-brain] embed request rejected with ${response.status}: ${body.slice(0, 300)}`);
           return null;
         }
-        console.warn(`[project-brain] embed request failed with ${response.status} (retries exhausted): ${body.slice(0, 300)}`);
+        this.warn(`[project-brain] embed request failed with ${response.status} (retries exhausted): ${body.slice(0, 300)}`);
         this.recordFailure();
         return null;
       }
 
       const data = (await response.json()) as { embeddings: number[][] };
       if (!Array.isArray(data.embeddings) || data.embeddings.length !== texts.length) {
-        console.warn(
+        this.warn(
           `[project-brain] embed response length mismatch: expected ${texts.length}, received ${
             Array.isArray(data.embeddings) ? data.embeddings.length : "non-array"
           }`
