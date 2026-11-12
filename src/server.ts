@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { LanceDbStore } from "./store/lancedb.js";
 import { createEmbeddingClient } from "./embeddings/factory.js";
 import { makeEmbeddingResolver } from "./embeddings/resolver.js";
+import { probeInteractiveLane, withLane } from "./embeddings/lane.js";
 import { DB_PATH, DATA_DIR, OLLAMA_HOST, VERSION, SERVER_INSTRUCTIONS, GRAPH_DB_FILE } from "./constants.js";
 import { resolveProjectId, openProjectGraph } from "./commands/resolve-project.js";
 import { lookupProjectRoot } from "./store/project-registry.js";
@@ -78,6 +79,13 @@ export async function createServer(options: ServerOptions = {}) {
     dbPath,
     host: ollamaHost,
     defaultClient: embeddings,
+  });
+  const queryLane = options.embeddings ? "bulk" : "interactive";
+  const queryEmbeddingsFor = makeEmbeddingResolver({
+    dbPath,
+    host: ollamaHost,
+    defaultClient: withLane(embeddings, { lane: queryLane }),
+    lane: queryLane,
   });
 
   // Opt-in: resolves to undefined (no network, ever) unless a token is
@@ -161,7 +169,8 @@ export async function createServer(options: ServerOptions = {}) {
   };
 
   const deps: ToolDeps = {
-    store, embeddings, embeddingsFor, graph, confirmDestructive, projectRoot, dbPath,
+    store, embeddings, embeddingsFor, queryEmbeddingsFor, graph, confirmDestructive, projectRoot, dbPath,
+    ...(queryLane === "interactive" ? { probeInteractiveLane } : {}),
     projectId: ownProjectId, graphFor, reranker, rerankerTokenSource, rerankerTokenPath,
   };
 

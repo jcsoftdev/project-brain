@@ -264,6 +264,7 @@ export async function execute(
         const embeddings = await createEmbeddingClient(storedMeta?.model, {
           host: OLLAMA_HOST,
           autoPull: false, // Never download models in hook path
+          lane: "interactive",
           // The meta we just read carries the width too, and passing it skips
           // both discovery round-trips. That matters here specifically: this
           // command IS the UserPromptSubmit hook, a fresh process per prompt,

@@ -16,7 +16,7 @@ export async function handleHealth(
 ): Promise<ToolResult> {
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(args.project) : deps.embeddings;
 
-  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, rerankerProbe, manifestChunks, lastSync, projectRules] =
+  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, rerankerProbe, manifestChunks, lastSync, projectRules, interactiveLane] =
     await Promise.all([
       emb.isAvailable(),
       deps.store.countChunks(args.project),
@@ -26,6 +26,7 @@ export async function handleHealth(
       deps.projectRoot ? readManifestChunks(deps.projectRoot) : Promise.resolve(undefined),
       deps.projectRoot ? readSyncStatus(deps.projectRoot) : Promise.resolve(null),
       deps.projectRoot ? readProjectRulesState(deps.projectRoot) : Promise.resolve(undefined),
+      deps.probeInteractiveLane ? deps.probeInteractiveLane() : Promise.resolve(undefined),
     ]);
 
   const report = {
@@ -48,6 +49,7 @@ export async function handleHealth(
       : {}),
     ...(lastSync ? { lastSync } : {}),
     ...(projectRules !== undefined ? { projectRules } : {}),
+    ...(interactiveLane ? { interactiveLane } : {}),
   };
 
   return jsonResult(report);
@@ -97,6 +99,9 @@ export function register(server: McpServer, deps: ToolDeps): void {
           })
           .optional(),
         projectRules: z.enum(["current", "stale", "missing"]).optional(),
+        interactiveLane: z
+          .object({ status: z.enum(["off", "up", "down"]), host: z.string().optional() })
+          .optional(),
       },
       annotations: toolAnnotations("check_health"),
     },

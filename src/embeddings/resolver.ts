@@ -1,4 +1,5 @@
 import type { EmbeddingClient, TableMeta } from "../types.js";
+import type { EmbedLane } from "./lane.js";
 
 /** Signature for reading table metadata (injectable for testing). */
 type ReadMetaFn = (dbPath: string, project: string) => Promise<TableMeta | null>;
@@ -14,6 +15,7 @@ export interface EmbeddingResolverOptions {
   readMeta?: ReadMetaFn;
   /** Injectable for tests. Defaults to constructing a new OllamaEmbeddingClient. */
   construct?: ConstructFn;
+  lane?: EmbedLane;
 }
 
 /**
@@ -77,7 +79,8 @@ export function makeEmbeddingResolver(opts: EmbeddingResolverOptions): (project:
     if (cached) return cached;
 
     const construct = await getConstruct();
-    const client = construct(meta.model, meta.dim);
+    const { withLane } = await import("./lane.js");
+    const client = withLane(construct(meta.model, meta.dim), { lane: opts.lane });
     cache.set(cacheKey, client);
     return client;
   };

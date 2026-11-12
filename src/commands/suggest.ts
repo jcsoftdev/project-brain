@@ -73,6 +73,7 @@ async function sharedQueryFor(prompt: string, projectDir: string): Promise<Share
     const embeddings = await createEmbeddingClient(model, {
       host: OLLAMA_HOST,
       autoPull: false,
+      lane: "interactive",
       recordedDim: dim ?? (model === undefined ? resolveModel(undefined).dim : undefined),
     });
     const vector = (await embeddings.embed([prompt]))?.[0];
