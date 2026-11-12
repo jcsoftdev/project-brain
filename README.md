@@ -471,7 +471,7 @@ If that multiplication is the problem rather than the flag itself, the next unit
 
 `service:chrome-shared-server` replaces one server per session with one server for every session. It takes the command a detected host already runs, puts it behind an HTTP bridge held open by a login service, and rewrites each host entry to point at `http://127.0.0.1:39100/mcp`. Sessions then cost a client connection each; the machine carries one process and one CDP attachment.
 
-It is **unchecked** by default, and it is the only unit that installs an OS service (launchd on macOS, a systemd user unit on Linux; elsewhere it does not appear) and a Python tool. Both are answers to give on purpose.
+It is **unchecked** by default, and it installs an OS service (launchd on macOS, a systemd user unit on Linux; elsewhere it does not appear) and a Python tool. Both are answers to give on purpose.
 
 The bridge is [`mcp-proxy`](https://github.com/sparfenyuk/mcp-proxy), installed with `uv` if it is missing. It calls `stdio_client` once at startup and reuses that session for every client, so all clients genuinely share one child, and its JSON-RPC ids cannot collide because it proxies at the MCP semantic layer rather than relaying bytes. Setup pins its SDK below 2: installed without that constraint, the tool resolves an SDK where `request_ctx` no longer exists and every invocation dies at import.
 
@@ -490,6 +490,16 @@ If a host already points at a bridge you set up yourself, under any service name
 - `browser prune-pages --older-than <90s|30m|2h|1d> [--yes]` lists, and with `--yes` closes, pages the shared browser has held longer than that. `list_pages` reports no page age, owner or isolatedContext, so "age" is how long this tool has seen the page (recorded between runs; a lower bound), and the selected and newest pages are never listed. It is a dry run without `--yes`, and it refuses on a server that is not the headless-profile one, because there the pages can be your own tabs.
 
 Two limits worth knowing. Sharing the server shares its state: one page list visible to every session, one profile, and process-level flags (`--headless`, `--autoConnect`, `--viewport`, `--blockedUrlPattern`) that can no longer differ per session; `--pageIdRouting`, on by default, is what stops sessions from acting on each other's tabs. And collapsing N attachments to one does not bound how large that one grows — a single attached server was the 1.6 GB measurement — so setup prints the restart command for your platform when it finishes.
+
+#### Ollama interactive lane
+
+One Ollama answers embeds one at a time, so while `sync` sends its 64-chunk batches (about 5.5 s each on an M3 Max), the prompt hook's one-line query waits behind them: measured at 5.4 s p50 against the hook's 800 ms budget. `OLLAMA_NUM_PARALLEL` does not help. A second Ollama that only ever sees queries answers the same query in about 50 ms under that load.
+
+`service:ollama-interactive` runs that second instance as a login service (launchd on macOS, a systemd user unit on Linux; not offered on Windows): `ollama serve` on `127.0.0.1:11435`, with `OLLAMA_KEEP_ALIVE=-1` so the embedding model stays warm, `OLLAMA_MAX_LOADED_MODELS=1`, and `OLLAMA_MODELS` pointing at the default models directory, so nothing is downloaded twice. It is **unchecked** by default: it installs an OS service and keeps one embedding model resident in memory for good.
+
+Prompt-time embeds — the `suggest` and `search --stdin` hooks (skill, tool and context picks) and the MCP `search_context` query — go to 11435 first. Indexing (`sync`, `init`, `reindex`, the watcher, `sync_project`) and the skill and tool vector caches stay on the default instance. When 11435 refuses or does not answer within 400 ms, the query is retried once on the default instance and the lane is skipped for the next 60 s, so a machine without the service pays about a millisecond once a minute. Both instances run the same model with the same request, so their vectors are identical. `project-brain health` and `check_health` report the lane as `up`, `down` or `off`.
+
+`BRAIN_OLLAMA_INTERACTIVE_HOST` overrides the host (`off` disables the lane); `~/.project-brain/ollama.json` with `{ "interactiveHost": "<url>|off" }` does the same when the env var is unset.
 
 #### Model routing for sub-agents
 
@@ -784,6 +794,7 @@ BRAIN_HTTP_TOKEN=your-secret project-brain serve --http [--port 3000]
 | `BRAIN_EMBED_BATCH_SIZE` | `64` | `1`–`512` | Texts per Ollama embed request. Lower it if Ollama times out under load. |
 | `BRAIN_EMBED_CONCURRENCY` | `1` | `1`–`16` | Concurrent embed requests. Defaults to `1` — a single local Ollama instance is GPU-compute-bound, so concurrency>1 adds no throughput, only false-timeout risk. Raise it only against a genuine multi-host pool (`BRAIN_OLLAMA_HOSTS`) or remote inference API where separate hardware actually runs requests in parallel. |
 | `BRAIN_OLLAMA_HOSTS` | — | comma-separated URLs | Pool of Ollama hosts for round-robin embedding (e.g. `http://127.0.0.1:11434,http://127.0.0.1:11435`). Falls through to the next host on failure; only `null`s when every host fails. |
+| `BRAIN_OLLAMA_INTERACTIVE_HOST` | `http://127.0.0.1:11435` | URL or `off` | Ollama host for prompt-time query embeds (hooks, `search_context`). Falls back to the default host when it does not answer, then skips it for 60 s. See [Ollama interactive lane](#ollama-interactive-lane). |
 | `BRAIN_EMBED_MODEL` | `qwen3-embedding:0.6b` | model name | Override the embedding model (see table above). |
 | `BRAIN_SYNC_WINDOW_FILES` | `200` | `1`+ | Files held in memory at once during a sync. Their content, chunks and vectors are live together and released when the window is stored, so peak memory tracks this number rather than repository size. Lower it on a memory-constrained host; raising it buys nothing once a window already fills an embed batch. |
 

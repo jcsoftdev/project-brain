@@ -535,3 +535,93 @@ describe("a shared chrome-devtools service that is already running", () => {
     expect(await unit.inspect(ctx)).toBe("foreign");
   });
 });
+
+describe("service:ollama-interactive", () => {
+  async function laneContext(platform: string) {
+    const calls: string[][] = [];
+    const ctx: SetupContext = {
+      ...(await context()),
+      skipOllama: false,
+      platform,
+      ollamaBin: "/opt/homebrew/bin/ollama",
+      runService: async (argv) => {
+        calls.push(argv);
+        return 0;
+      },
+    };
+    return { ctx, calls };
+  }
+
+  async function laneUnit() {
+    const { otherUnits } = await import("../../src/setup/units.js");
+    return otherUnits().find((u) => u.id === "service:ollama-interactive")!;
+  }
+
+  it("is off by default", async () => {
+    expect((await laneUnit()).defaultSelected).toBe(false);
+  });
+
+  it("installs, inspects and removes a launchd agent idempotently", async () => {
+    const { ctx, calls } = await laneContext("darwin");
+    const unit = await laneUnit();
+    const plist = join(ctx.serviceDir!, "dev.projectbrain.ollama-interactive.plist");
+    const uid = process.getuid?.() ?? 0;
+
+    expect(await unit.inspect(ctx)).toBe("absent");
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("current");
+
+    const text = await Bun.file(plist).text();
+    expect(text).toContain("<string>/opt/homebrew/bin/ollama</string>");
+    expect(text).toContain("<string>serve</string>");
+    expect(text).toContain("<key>OLLAMA_HOST</key>\n    <string>127.0.0.1:11435</string>");
+    expect(text).toContain("<key>OLLAMA_KEEP_ALIVE</key>\n    <string>-1</string>");
+    expect(text).toContain("<key>OLLAMA_MAX_LOADED_MODELS</key>\n    <string>1</string>");
+    expect(text).toMatch(/<key>OLLAMA_MODELS<\/key>\n    <string>[^<]+<\/string>/);
+    expect(calls).toEqual([
+      ["launchctl", "bootout", `gui/${uid}/dev.projectbrain.ollama-interactive`],
+      ["launchctl", "bootstrap", `gui/${uid}`, plist],
+    ]);
+
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("current");
+    expect(calls).toHaveLength(4);
+
+    await Bun.write(plist, text.replace("-1", "5m"));
+    expect(await unit.inspect(ctx)).toBe("stale");
+
+    calls.length = 0;
+    await unit.remove(ctx);
+    expect(await unit.inspect(ctx)).toBe("absent");
+    expect(calls).toEqual([["launchctl", "bootout", `gui/${uid}/dev.projectbrain.ollama-interactive`]]);
+
+    await unit.remove(ctx);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("installs a systemd user unit on Linux", async () => {
+    const { ctx, calls } = await laneContext("linux");
+    const unit = await laneUnit();
+
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("current");
+    const text = await Bun.file(join(ctx.serviceDir!, "dev.projectbrain.ollama-interactive.service")).text();
+    expect(text).toContain("ExecStart=/opt/homebrew/bin/ollama serve");
+    expect(text).toContain("Environment=OLLAMA_HOST=127.0.0.1:11435");
+    expect(calls.map((c) => c.slice(0, 3))).toEqual([
+      ["systemctl", "--user", "daemon-reload"],
+      ["systemctl", "--user", "enable"],
+      ["systemctl", "--user", "restart"],
+    ]);
+
+    await unit.remove(ctx);
+    expect(await unit.inspect(ctx)).toBe("absent");
+  });
+
+  it("is unavailable on Windows, without ollama, or with --skip-ollama", async () => {
+    const unit = await laneUnit();
+    expect(await unit.inspect((await laneContext("win32")).ctx)).toBe("unavailable");
+    expect(await unit.inspect({ ...(await laneContext("darwin")).ctx, ollamaBin: null })).toBe("unavailable");
+    expect(await unit.inspect({ ...(await laneContext("darwin")).ctx, skipOllama: true })).toBe("unavailable");
+  });
+});

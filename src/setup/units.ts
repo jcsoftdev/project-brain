@@ -42,6 +42,9 @@ export interface SetupContext {
    * write the real one.
    */
   serviceDir?: string;
+  runService?: (argv: string[]) => Promise<number>;
+  ollamaBin?: string | null;
+  platform?: string;
   /**
    * Non-interactive token for `config:reranker`, from `--reranker-token`.
    * When absent, `apply()` falls back to `TYPESAFE_API_KEY`, then an
@@ -784,6 +787,7 @@ export function otherUnits(): SetupUnit[] {
         // Intentionally empty. See the unit's description.
       },
     },
+    ollamaInteractiveUnit(),
     {
       id: "config:record-connection",
       group: "Other",
@@ -1176,6 +1180,73 @@ export function otherUnits(): SetupUnit[] {
       },
     },
   ];
+}
+
+function ollamaInteractiveUnit(): SetupUnit {
+  const resolve = async (ctx: SetupContext) => {
+    const mod = await import("./ollama-interactive.js");
+    const { serviceKindFor } = await import("./chrome-shared-server.js");
+    const kind = serviceKindFor(ctx.platform ?? process.platform);
+    const ollamaBin = ctx.ollamaBin !== undefined ? ctx.ollamaBin : mod.findOllamaBin();
+    if (!kind || !ollamaBin || ctx.skipOllama) return null;
+    const spec = { ollamaBin, modelsDir: mod.sharedModelsDir(), logPath: join(ctx.dataDir, "ollama-interactive.log") };
+    return {
+      mod,
+      kind,
+      file: mod.interactiveServiceFile(kind, serviceDir(kind, ctx)),
+      text: mod.interactiveServiceText(kind, spec),
+      uid: process.getuid?.() ?? 0,
+      run: ctx.runService ?? runServiceCommand,
+    };
+  };
+
+  return {
+    id: "service:ollama-interactive",
+    group: "Other",
+    label: "Ollama interactive lane",
+    description:
+      "a second Ollama on port 11435 that only answers prompt-time searches, so they never wait behind indexing; installs a login service",
+    defaultSelected: false,
+
+    async inspect(ctx): Promise<UnitState> {
+      const service = await resolve(ctx);
+      if (!service) return "unavailable";
+      if (!existsSync(service.file)) return "absent";
+      return (await Bun.file(service.file).text()) === service.text ? "current" : "stale";
+    },
+
+    async apply(ctx): Promise<void> {
+      const service = await resolve(ctx);
+      if (!service) return;
+      await mkdir(dirname(service.file), { recursive: true });
+      await mkdir(ctx.dataDir, { recursive: true });
+      await Bun.write(service.file, service.text);
+      for (const argv of service.mod.installCommands(service.kind, service.file, service.uid)) {
+        await service.run(argv);
+      }
+    },
+
+    async remove(ctx): Promise<void> {
+      const mod = await import("./ollama-interactive.js");
+      const { serviceKindFor } = await import("./chrome-shared-server.js");
+      const kind = serviceKindFor(ctx.platform ?? process.platform);
+      if (!kind) return;
+      const file = mod.interactiveServiceFile(kind, serviceDir(kind, ctx));
+      if (!existsSync(file)) return;
+      for (const argv of mod.uninstallCommands(kind, process.getuid?.() ?? 0)) {
+        await (ctx.runService ?? runServiceCommand)(argv);
+      }
+      await rm(file, { force: true });
+    },
+  };
+}
+
+async function runServiceCommand(argv: string[]): Promise<number> {
+  try {
+    return await Bun.spawn(argv, { stdout: "ignore", stderr: "ignore" }).exited;
+  } catch {
+    return -1;
+  }
 }
 
 /** The port the bridge listens on, from the recorded state or the default. */
