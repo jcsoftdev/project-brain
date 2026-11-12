@@ -537,7 +537,7 @@ describe("a shared chrome-devtools service that is already running", () => {
 });
 
 describe("service:ollama-interactive", () => {
-  async function laneContext(platform: string) {
+  async function laneContext(platform: string, opts: { failOn?: string; loaded?: boolean; portTaken?: boolean } = {}) {
     const calls: string[][] = [];
     const ctx: SetupContext = {
       ...(await context()),
@@ -545,8 +545,11 @@ describe("service:ollama-interactive", () => {
       platform,
       ollamaBin: "/opt/homebrew/bin/ollama",
       defaultOllamaServiceFiles: [],
+      portAnswers: async () => opts.portTaken ?? false,
       runService: async (argv) => {
         calls.push(argv);
+        if (opts.failOn && argv.includes(opts.failOn)) return 5;
+        if (argv.includes("print") || argv.includes("is-active")) return opts.loaded === false ? 1 : 0;
         return 0;
       },
     };
@@ -558,35 +561,41 @@ describe("service:ollama-interactive", () => {
     return otherUnits().find((u) => u.id === "service:ollama-interactive")!;
   }
 
+  const configOf = async (ctx: SetupContext) => {
+    try {
+      return JSON.parse(await Bun.file(join(ctx.dataDir, "ollama.json")).text());
+    } catch {
+      return null;
+    }
+  };
+
   it("is off by default", async () => {
     expect((await laneUnit()).defaultSelected).toBe(false);
   });
 
-  it("installs, inspects and removes a launchd agent idempotently", async () => {
+  it("installs, inspects and removes a launchd agent idempotently, and turns the lane on and off", async () => {
     const { ctx, calls } = await laneContext("darwin");
     const unit = await laneUnit();
     const plist = join(ctx.serviceDir!, "dev.projectbrain.ollama-interactive.plist");
     const uid = process.getuid?.() ?? 0;
+    const bootout = ["launchctl", "bootout", `gui/${uid}/dev.projectbrain.ollama-interactive`];
 
     expect(await unit.inspect(ctx)).toBe("absent");
     await unit.apply(ctx);
     expect(await unit.inspect(ctx)).toBe("current");
+    expect(await configOf(ctx)).toEqual({ interactiveHost: "http://127.0.0.1:11435" });
 
     const text = await Bun.file(plist).text();
     expect(text).toContain("<string>/opt/homebrew/bin/ollama</string>");
     expect(text).toContain("<string>serve</string>");
     expect(text).toContain("<key>OLLAMA_HOST</key>\n    <string>127.0.0.1:11435</string>");
     expect(text).toContain("<key>OLLAMA_KEEP_ALIVE</key>\n    <string>-1</string>");
-    expect(text).toContain("<key>OLLAMA_MAX_LOADED_MODELS</key>\n    <string>1</string>");
+    expect(text).toContain("<key>OLLAMA_MAX_LOADED_MODELS</key>\n    <string>2</string>");
     expect(text).toMatch(/<key>OLLAMA_MODELS<\/key>\n    <string>[^<]+<\/string>/);
-    expect(calls).toEqual([
-      ["launchctl", "bootout", `gui/${uid}/dev.projectbrain.ollama-interactive`],
-      ["launchctl", "bootstrap", `gui/${uid}`, plist],
-    ]);
+    expect(calls.slice(0, 2)).toEqual([bootout, ["launchctl", "bootstrap", `gui/${uid}`, plist]]);
 
     await unit.apply(ctx);
     expect(await unit.inspect(ctx)).toBe("current");
-    expect(calls).toHaveLength(4);
 
     await Bun.write(plist, text.replace("-1", "5m"));
     expect(await unit.inspect(ctx)).toBe("stale");
@@ -594,10 +603,47 @@ describe("service:ollama-interactive", () => {
     calls.length = 0;
     await unit.remove(ctx);
     expect(await unit.inspect(ctx)).toBe("absent");
-    expect(calls).toEqual([["launchctl", "bootout", `gui/${uid}/dev.projectbrain.ollama-interactive`]]);
+    expect(calls).toEqual([bootout]);
+    expect(await configOf(ctx)).toBeNull();
 
     await unit.remove(ctx);
     expect(calls).toHaveLength(1);
+  });
+
+  it("keeps other keys in ollama.json when removing", async () => {
+    const { ctx } = await laneContext("darwin");
+    const unit = await laneUnit();
+    await unit.apply(ctx);
+    await Bun.write(join(ctx.dataDir, "ollama.json"), JSON.stringify({ interactiveHost: "x", other: 1 }));
+    await unit.remove(ctx);
+    expect(await configOf(ctx)).toEqual({ other: 1 });
+  });
+
+  it("reports a written but unloaded service as stale", async () => {
+    const { ctx } = await laneContext("darwin", { loaded: false });
+    const unit = await laneUnit();
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("stale");
+  });
+
+  it("refuses when another process holds the port, before writing anything", async () => {
+    const { ctx } = await laneContext("darwin", { portTaken: true });
+    const unit = await laneUnit();
+    await expect(unit.apply(ctx)).rejects.toThrow(/port 11435 is already in use/);
+    expect(await unit.inspect(ctx)).toBe("absent");
+    expect(await configOf(ctx)).toBeNull();
+  });
+
+  it("throws and removes the file when bootstrap fails, but tolerates a failing bootout", async () => {
+    const { ctx } = await laneContext("darwin", { failOn: "bootstrap" });
+    const unit = await laneUnit();
+    await expect(unit.apply(ctx)).rejects.toThrow(/bootstrap .* exited with 5/);
+    expect(await unit.inspect(ctx)).toBe("absent");
+    expect(await configOf(ctx)).toBeNull();
+
+    const tolerant = await laneContext("darwin", { failOn: "bootout" });
+    await unit.apply(tolerant.ctx);
+    expect(await unit.inspect(tolerant.ctx)).toBe("current");
   });
 
   it("copies the default instance's runner settings so both produce identical vectors", async () => {
@@ -611,7 +657,7 @@ describe("service:ollama-interactive", () => {
 		<key>OLLAMA_KV_CACHE_TYPE</key>
 		<string>q8_0</string>
 		<key>OLLAMA_MODELS</key>
-		<string>/Volumes/models</string>
+		<string>/Volumes/A &amp; B/models</string>
 		<key>OLLAMA_HOST</key>
 		<string>0.0.0.0:11434</string>
 	</dict>`
@@ -623,19 +669,47 @@ describe("service:ollama-interactive", () => {
     const text = await Bun.file(join(ctx.serviceDir!, "dev.projectbrain.ollama-interactive.plist")).text();
     expect(text).toContain("<key>OLLAMA_FLASH_ATTENTION</key>\n    <string>1</string>");
     expect(text).toContain("<key>OLLAMA_KV_CACHE_TYPE</key>\n    <string>q8_0</string>");
-    expect(text).toContain("<key>OLLAMA_MODELS</key>\n    <string>/Volumes/models</string>");
+    expect(text).toContain("<key>OLLAMA_MODELS</key>\n    <string>/Volumes/A &amp; B/models</string>");
     expect(text).toContain("<key>OLLAMA_HOST</key>\n    <string>127.0.0.1:11435</string>");
     expect(text).not.toContain("0.0.0.0:11434");
   });
 
-  it("reads runner settings from a systemd Environment line", async () => {
+  it("reads systemd Environment lines, including several per line", async () => {
     const { serviceDefinitionEnv } = await import("../../src/setup/ollama-interactive.js");
     expect(
-      serviceDefinitionEnv('[Service]\nEnvironment="OLLAMA_FLASH_ATTENTION=1"\nEnvironment=OLLAMA_KV_CACHE_TYPE=q8_0\n')
-    ).toEqual({ OLLAMA_FLASH_ATTENTION: "1", OLLAMA_KV_CACHE_TYPE: "q8_0" });
+      serviceDefinitionEnv(
+        '[Service]\nEnvironment="OLLAMA_FLASH_ATTENTION=1"\nEnvironment=OLLAMA_KV_CACHE_TYPE=q8_0 "OLLAMA_MODELS=/srv/my models" PATH=/bin\n'
+      )
+    ).toEqual({ OLLAMA_FLASH_ATTENTION: "1", OLLAMA_KV_CACHE_TYPE: "q8_0", OLLAMA_MODELS: "/srv/my models" });
   });
 
-  it("installs a systemd user unit on Linux", async () => {
+  it("lets drop-ins override the unit, and defaults a system install's models dir", async () => {
+    const { defaultInstanceEnv } = await import("../../src/setup/ollama-interactive.js");
+    const files: Record<string, string> = {
+      "/etc/systemd/system/ollama.service": '[Service]\nEnvironment="OLLAMA_FLASH_ATTENTION=0"\n',
+      "/etc/systemd/system/ollama.service.d/10-fa.conf": '[Service]\nEnvironment="OLLAMA_FLASH_ATTENTION=1"\n',
+      "/etc/systemd/system/ollama.service.d/20-kv.conf": '[Service]\nEnvironment="OLLAMA_KV_CACHE_TYPE=q8_0"\n',
+    };
+    const reader = {
+      readText: (p: string) => files[p] ?? null,
+      listDir: (d: string) => Object.keys(files).filter((p) => p.startsWith(`${d}/`)).map((p) => p.slice(d.length + 1)),
+    };
+    expect(defaultInstanceEnv(["/home/u/.config/systemd/user/ollama.service", "/etc/systemd/system/ollama.service"], reader, {})).toEqual({
+      OLLAMA_FLASH_ATTENTION: "1",
+      OLLAMA_KV_CACHE_TYPE: "q8_0",
+      OLLAMA_MODELS: "/usr/share/ollama/.ollama/models",
+    });
+  });
+
+  it("falls back to setup's own environment when no service file exists", async () => {
+    const { defaultInstanceEnv } = await import("../../src/setup/ollama-interactive.js");
+    const reader = { readText: () => null, listDir: () => [] };
+    expect(defaultInstanceEnv(["/nope"], reader, { OLLAMA_FLASH_ATTENTION: "1", HOME: "/h" })).toEqual({
+      OLLAMA_FLASH_ATTENTION: "1",
+    });
+  });
+
+  it("installs a systemd user unit on Linux and checks enable's exit code", async () => {
     const { ctx, calls } = await laneContext("linux");
     const unit = await laneUnit();
 
@@ -644,14 +718,18 @@ describe("service:ollama-interactive", () => {
     const text = await Bun.file(join(ctx.serviceDir!, "dev.projectbrain.ollama-interactive.service")).text();
     expect(text).toContain("ExecStart=/opt/homebrew/bin/ollama serve");
     expect(text).toContain("Environment=OLLAMA_HOST=127.0.0.1:11435");
-    expect(calls.map((c) => c.slice(0, 3))).toEqual([
+    expect(calls.slice(0, 3).map((c) => c.slice(0, 3))).toEqual([
+      ["systemctl", "--user", "stop"],
       ["systemctl", "--user", "daemon-reload"],
       ["systemctl", "--user", "enable"],
-      ["systemctl", "--user", "restart"],
     ]);
 
     await unit.remove(ctx);
     expect(await unit.inspect(ctx)).toBe("absent");
+
+    const failing = await laneContext("linux", { failOn: "enable" });
+    await expect(unit.apply(failing.ctx)).rejects.toThrow(/enable/);
+    expect(await unit.inspect(failing.ctx)).toBe("absent");
   });
 
   it("is unavailable on Windows, without ollama, or with --skip-ollama", async () => {

@@ -1,5 +1,5 @@
 import { basename, dirname, join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import type { AIToolRegistrar } from "../registrars/types.js";
 import { resolveRerankerToken } from "../rerank/token.js";
@@ -45,6 +45,7 @@ export interface SetupContext {
   runService?: (argv: string[]) => Promise<number>;
   ollamaBin?: string | null;
   defaultOllamaServiceFiles?: string[];
+  portAnswers?: (port: number) => Promise<boolean>;
   platform?: string;
   /**
    * Non-interactive token for `config:reranker`, from `--reranker-token`.
@@ -1190,7 +1191,7 @@ function ollamaInteractiveUnit(): SetupUnit {
     const kind = serviceKindFor(ctx.platform ?? process.platform);
     const ollamaBin = ctx.ollamaBin !== undefined ? ctx.ollamaBin : mod.findOllamaBin();
     if (!kind || !ollamaBin || ctx.skipOllama) return null;
-    const runnerEnv = mod.defaultInstanceEnv(ctx.defaultOllamaServiceFiles ?? mod.defaultOllamaServiceFiles(), readTextOrNull);
+    const runnerEnv = mod.defaultInstanceEnv(ctx.defaultOllamaServiceFiles ?? mod.defaultOllamaServiceFiles(), serviceFileReader);
     const spec = {
       ollamaBin,
       modelsDir: runnerEnv.OLLAMA_MODELS ?? mod.sharedModelsDir(),
@@ -1204,6 +1205,7 @@ function ollamaInteractiveUnit(): SetupUnit {
       text: mod.interactiveServiceText(kind, spec),
       uid: process.getuid?.() ?? 0,
       run: ctx.runService ?? runServiceCommand,
+      portAnswers: ctx.portAnswers ?? mod.portAnswers,
     };
   };
 
@@ -1219,23 +1221,42 @@ function ollamaInteractiveUnit(): SetupUnit {
       const service = await resolve(ctx);
       if (!service) return "unavailable";
       if (!existsSync(service.file)) return "absent";
-      return (await Bun.file(service.file).text()) === service.text ? "current" : "stale";
+      const { DEFAULT_INTERACTIVE_HOST } = await import("../embeddings/lane.js");
+      const configured = (await readOllamaConfig(ctx)).interactiveHost === DEFAULT_INTERACTIVE_HOST;
+      const written = (await Bun.file(service.file).text()) === service.text;
+      const loaded = (await service.run(service.mod.loadedCheckCommand(service.kind, service.uid))) === 0;
+      return configured && written && loaded ? "current" : "stale";
     },
 
     async apply(ctx): Promise<void> {
       const service = await resolve(ctx);
       if (!service) return;
+      const { DEFAULT_INTERACTIVE_HOST, INTERACTIVE_PORT } = await import("../embeddings/lane.js");
+
+      for (const argv of service.mod.stopCommands(service.kind, service.uid)) await service.run(argv);
+      if (await service.portAnswers(INTERACTIVE_PORT)) {
+        throw new Error(
+          `port ${INTERACTIVE_PORT} is already in use by another process; stop it or point BRAIN_OLLAMA_INTERACTIVE_HOST at an instance of your own`
+        );
+      }
+
       await mkdir(dirname(service.file), { recursive: true });
       await mkdir(ctx.dataDir, { recursive: true });
       await Bun.write(service.file, service.text);
-      for (const argv of service.mod.installCommands(service.kind, service.file, service.uid)) {
-        await service.run(argv);
+      for (const argv of service.mod.startCommands(service.kind, service.file, service.uid)) {
+        const code = await service.run(argv);
+        if (code !== 0) {
+          await rm(service.file, { force: true });
+          throw new Error(`${argv.join(" ")} exited with ${code}; the interactive Ollama service was not installed`);
+        }
       }
+      await writeOllamaConfig(ctx, { interactiveHost: DEFAULT_INTERACTIVE_HOST });
     },
 
     async remove(ctx): Promise<void> {
       const mod = await import("./ollama-interactive.js");
       const { serviceKindFor } = await import("./chrome-shared-server.js");
+      await writeOllamaConfig(ctx, { interactiveHost: undefined });
       const kind = serviceKindFor(ctx.platform ?? process.platform);
       if (!kind) return;
       const file = mod.interactiveServiceFile(kind, serviceDir(kind, ctx));
@@ -1248,13 +1269,44 @@ function ollamaInteractiveUnit(): SetupUnit {
   };
 }
 
-function readTextOrNull(path: string): string | null {
+async function readOllamaConfig(ctx: SetupContext): Promise<Record<string, unknown>> {
+  const { ollamaConfigPath } = await import("../embeddings/lane.js");
   try {
-    return readFileSync(path, "utf-8");
+    return JSON.parse(await Bun.file(ollamaConfigPath(ctx.dataDir)).text());
   } catch {
-    return null;
+    return {};
   }
 }
+
+async function writeOllamaConfig(ctx: SetupContext, patch: { interactiveHost: string | undefined }): Promise<void> {
+  const { ollamaConfigPath } = await import("../embeddings/lane.js");
+  const next = { ...(await readOllamaConfig(ctx)), ...patch };
+  const path = ollamaConfigPath(ctx.dataDir);
+  if (next.interactiveHost === undefined) delete next.interactiveHost;
+  if (Object.keys(next).length === 0) {
+    await rm(path, { force: true });
+    return;
+  }
+  await mkdir(ctx.dataDir, { recursive: true });
+  await Bun.write(path, `${JSON.stringify(next, null, 2)}\n`);
+}
+
+const serviceFileReader = {
+  readText(path: string): string | null {
+    try {
+      return readFileSync(path, "utf-8");
+    } catch {
+      return null;
+    }
+  },
+  listDir(path: string): string[] {
+    try {
+      return readdirSync(path);
+    } catch {
+      return [];
+    }
+  },
+};
 
 async function runServiceCommand(argv: string[]): Promise<number> {
   try {
