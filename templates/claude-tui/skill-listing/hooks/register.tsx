@@ -95,12 +95,57 @@ export function parseConfig(text: string): SkillsConfig {
   }
 }
 
+/** Fewer recorded invocations than this rank nothing: the listing passes through until there is history. */
+export const MIN_USAGE_INVOCATIONS = 10
+
 export function parseUsage(text: string): SkillUsage | null {
   try {
     const raw: unknown = JSON.parse(text)
-    return isObject(raw) && typeof raw.generatedAt === 'number' && isObject(raw.skills) ? (raw as SkillUsage) : null
+    if (!isObject(raw) || typeof raw.generatedAt !== 'number' || !isObject(raw.skills)) return null
+    const usage = raw as SkillUsage
+    const total = Object.values(usage.skills).reduce((sum, entry) => sum + (typeof entry?.count === 'number' ? entry.count : 0), 0)
+    return total >= MIN_USAGE_INVOCATIONS ? usage : null
   } catch {
     return null
+  }
+}
+
+/** After this many Jev failures in a row the listing keeps descriptions until a pick succeeds again. */
+export const MAX_PICK_FAILURES = 3
+
+/** `~/.project-brain/skill-pick-health.json`, written by the suggest CLI after every Jev request it makes. */
+export function picksHealthy(text: string): boolean {
+  try {
+    const raw: unknown = JSON.parse(text)
+    return !isObject(raw) || typeof raw.failures !== 'number' || raw.failures < MAX_PICK_FAILURES
+  } catch {
+    return true
+  }
+}
+
+/** A token worth trying: one non-empty string with no whitespace, read from the env or from `{ "token": … }`. */
+export function tokenShaped(envToken: string | undefined, fileText: string): boolean {
+  const shaped = (value: unknown) => typeof value === 'string' && /^\S{8,}$/.test(value)
+  if (shaped(envToken)) return true
+  try {
+    const raw: unknown = JSON.parse(fileText)
+    return isObject(raw) && shaped(raw.token)
+  } catch {
+    return false
+  }
+}
+
+/** Whether Claude Code would run the suggest hook: installed under UserPromptSubmit, and hooks not disabled. */
+export function suggestHookActive(settingsText: string): boolean {
+  try {
+    const raw: unknown = JSON.parse(settingsText)
+    if (!isObject(raw) || raw.disableAllHooks === true || !isObject(raw.hooks)) return false
+    const groups = raw.hooks.UserPromptSubmit
+    if (!Array.isArray(groups)) return false
+    return groups.some(group =>
+      isObject(group) && Array.isArray(group.hooks) && group.hooks.some(hook => isObject(hook) && typeof hook.command === 'string' && hook.command.includes('project-brain suggest')))
+  } catch {
+    return false
   }
 }
 
@@ -115,6 +160,23 @@ export function rewriteListing(text: string, mode: ListingMode, config: SkillsCo
   return compactListing(text, keepSet(listing.entries.map(entry => entry.name), mode, config, usage, now))
 }
 
+const ENTRY_HEAD = /^- \S+?(?: \(\S+\))?(?:: |$)/
+
+/**
+ * Each listed skill's description, as Claude Code worded it. The picker reads them from
+ * `skill-listing.json` so built-in and connector skills, which have no SKILL.md on disk, can be picked too.
+ */
+export function listedDescriptions(text: string): Record<string, string> {
+  const listing = parseListing(text)
+  if (listing === null) return {}
+  return Object.fromEntries(
+    listing.entries.map(entry => {
+      const [head = '', ...rest] = entry.lines
+      return [entry.name, [head.replace(ENTRY_HEAD, ''), ...rest].join('\n').trim()]
+    })
+  )
+}
+
 async function readOr($: Api, path: string, fallback: string): Promise<string> {
   try {
     return await $.fs.read(path)
@@ -123,36 +185,68 @@ async function readOr($: Api, path: string, fallback: string): Promise<string> {
   }
 }
 
-/** Jev can pick skills: on in config and env, and a TypeSafe token in the env or the data dir. */
+/** Jev can pick skills: on in config and env, a token of the right shape, and no run of recent failures. */
 async function pickerReady($: Api, config: SkillsConfig, home: string): Promise<boolean> {
   if (!config.picker || (await $.env.get('BRAIN_SKILL_PICKER')) === '0') return false
-  return Boolean(await $.env.get('TYPESAFE_API_KEY')) || (await $.fs.exists(`${home}/.project-brain/reranker.json`))
+  const fileToken = await readOr($, `${home}/.project-brain/reranker.json`, '')
+  if (!tokenShaped(await $.env.get('TYPESAFE_API_KEY'), fileToken)) return false
+  return picksHealthy(await readOr($, `${home}/.project-brain/skill-pick-health.json`, ''))
+}
+
+/** Subagents whose spawn carried a skills block, and the spawns still resolving their ids. */
+const pickedAgents = new Set<string>()
+const pendingSpawns = new Set<Promise<unknown>>()
+/** How long a subagent's listing waits for its own spawn to report its id before falling back to `stats`. */
+const SPAWN_WAIT_MS = 1_500
+
+async function spawnCarriedSkills($: Api, agentId: string): Promise<boolean> {
+  if (pickedAgents.has(agentId)) return true
+  if (pendingSpawns.size === 0) return false
+  await Promise.race([Promise.allSettled([...pendingSpawns]), $.clock.sleep(SPAWN_WAIT_MS)])
+  return pickedAgents.has(agentId)
 }
 
 /**
- * `jev` when something brings each loop's skills back in full: on the main loop the suggest hook,
- * per prompt; in a subagent this mod's own delegation hook, which only a ready picker runs.
+ * `jev` when something brings this loop's skills back in full: on the main loop the suggest hook,
+ * per prompt; in a subagent the skills block its spawn carried. Anything else keeps descriptions.
  */
-async function modeOf($: Api, config: SkillsConfig, home: string, isSubagent: boolean): Promise<ListingMode> {
+async function modeOf($: Api, config: SkillsConfig, home: string, agentId: string | undefined): Promise<ListingMode> {
   if (!(await pickerReady($, config, home))) return 'stats'
-  if (isSubagent) return 'jev'
+  if (agentId !== undefined) return (await spawnCarriedSkills($, agentId)) ? 'jev' : 'stats'
   const claudeDir = (await $.env.get('CLAUDE_CONFIG_DIR')) || `${home}/.claude`
-  const settings = await readOr($, `${claudeDir}/settings.json`, '')
-  return settings.includes('project-brain suggest') ? 'jev' : 'stats'
+  return suggestHookActive(await readOr($, `${claudeDir}/settings.json`, '')) ? 'jev' : 'stats'
 }
 
-async function compactAttachment($: Api, text: string, isSubagent: boolean): Promise<string> {
+async function rememberDescriptions($: Api, home: string, text: string, now: number): Promise<void> {
+  const path = `${home}/.project-brain/skill-listing.json`
+  let known: Record<string, string> = {}
+  try {
+    const raw: unknown = JSON.parse(await readOr($, path, '{}'))
+    if (isObject(raw) && isObject(raw.skills)) known = raw.skills as Record<string, string>
+  } catch {
+    // Unreadable: rebuilt from this listing.
+  }
+  const merged = { ...known, ...listedDescriptions(text) }
+  if (JSON.stringify(merged) === JSON.stringify(known)) return
+  await $.fs.write(path, `${JSON.stringify({ updatedAt: now, skills: merged }, null, 2)}\n`)
+}
+
+async function compactAttachment($: Api, text: string, agentId: string | undefined): Promise<string> {
   const home = await $.env.get('HOME')
   if (!home) return text
+  const now = await $.clock.now()
+  await rememberDescriptions($, home, text, now).catch(() => undefined)
   const config = parseConfig(await readOr($, `${home}/.project-brain/skills.json`, ''))
   const usage = parseUsage(await readOr($, `${home}/.project-brain/skill-usage.json`, ''))
-  const mode = await modeOf($, config, home, isSubagent)
-  return rewriteListing(text, mode, config, usage, await $.clock.now())
+  return rewriteListing(text, await modeOf($, config, home, agentId), config, usage, now)
 }
 
-/** The prompt with the delegated task's skills appended; unchanged when none was picked or anything failed. */
+/**
+ * The skills block goes first, so a delegation that ends with its own output contract still ends
+ * with it; the prompt comes back unchanged when nothing was picked or anything failed.
+ */
 export const withDelegationSkills = (prompt: string, block: string): string =>
-  block.trim() === '' ? prompt : `${prompt}\n\n${block.trim()}`
+  block.trim() === '' ? prompt : `${block.trim()}\n\n${prompt}`
 
 /** The CLI owns the pick (one Jev request, the same floor and ceiling as the prompt hook); the mod only carries its answer. */
 async function delegationSkills($: Api, prompt: string, description: string): Promise<string> {
@@ -181,18 +275,26 @@ export const register: Register = on => {
   on('prompt.attachment', { type: 'skill_listing' }, async ($, e, next) => {
     if (e.origin.kind !== 'engine') return next(e)
     try {
-      return next({ ...e, text: await compactAttachment($, e.text, e.agentId !== undefined) })
+      return next({ ...e, text: await compactAttachment($, e.text, e.agentId) })
     } catch {
       return next(e)
     }
   })
 
-  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+  on('agent.spawn', async ($, e, next) => {
+    let block = ''
     try {
-      const block = await delegationSkills($ as unknown as Api, e.prompt, e.description)
-      return next({ ...e, prompt: withDelegationSkills(e.prompt, block) })
+      block = (await delegationSkills($ as unknown as Api, e.prompt, e.description)).trim()
     } catch {
-      return next(e)
+      block = ''
     }
+    const spawning = next(block === '' ? e : { ...e, prompt: withDelegationSkills(e.prompt, block) })
+    if (block === '') return spawning
+    const tracked = spawning.then(spawned => {
+      if (spawned.agentId !== undefined) pickedAgents.add(spawned.agentId)
+    })
+    pendingSpawns.add(tracked)
+    void tracked.catch(() => undefined).finally(() => pendingSpawns.delete(tracked))
+    return spawning
   }).catch(($, e, next) => next(e))
 }

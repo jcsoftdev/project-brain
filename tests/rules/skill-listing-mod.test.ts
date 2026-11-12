@@ -15,6 +15,12 @@ interface ModModule {
   compactListing(text: string, keep: ReadonlySet<string>): string;
   keepSet(listed: string[], mode: Mode, config: Config, usage: Usage | null, now: number): Set<string>;
   rewriteListing(text: string, mode: Mode, config: Config, usage: Usage | null, now: number): string;
+  parseUsage(text: string): Usage | null;
+  tokenShaped(envToken: string | undefined, fileText: string): boolean;
+  suggestHookActive(settingsText: string): boolean;
+  picksHealthy(text: string): boolean;
+  listedDescriptions(text: string): Record<string, string>;
+  withDelegationSkills(prompt: string, block: string): string;
   register(on: (event: string, ...rest: any[]) => { catch: (fn: Handler) => void }): void;
 }
 
@@ -121,12 +127,58 @@ describe("rewriteListing", () => {
   });
 });
 
-/** A fake `$` and `on`: env, files and the CLI answer, with every process call recorded. */
+describe("readiness checks", () => {
+  it("treats thin usage as no usage, so the listing passes through", () => {
+    expect(mod.parseUsage(JSON.stringify(usage({ dataviz: { count: 3, lastUsed: NOW } })))).toBeNull();
+    expect(mod.parseUsage(JSON.stringify(usage({ dataviz: { count: 10, lastUsed: NOW } })))).not.toBeNull();
+  });
+
+  it("accepts only a token of the right shape", () => {
+    expect(mod.tokenShaped(undefined, "")).toBe(false);
+    expect(mod.tokenShaped(undefined, '{"token":""}')).toBe(false);
+    expect(mod.tokenShaped(undefined, "{garbage")).toBe(false);
+    expect(mod.tokenShaped("has space inside", "")).toBe(false);
+    expect(mod.tokenShaped(undefined, '{"token":"ts_live_abcdef123"}')).toBe(true);
+    expect(mod.tokenShaped("ts_live_abcdef123", "")).toBe(true);
+  });
+
+  it("sees the suggest hook only when installed and hooks are not disabled", () => {
+    const installed = { hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "project-brain suggest --stdin" }] }] } };
+    expect(mod.suggestHookActive(JSON.stringify(installed))).toBe(true);
+    expect(mod.suggestHookActive(JSON.stringify({ ...installed, disableAllHooks: true }))).toBe(false);
+    expect(mod.suggestHookActive(JSON.stringify({ note: "project-brain suggest" }))).toBe(false);
+    expect(mod.suggestHookActive("{nope")).toBe(false);
+  });
+
+  it("stops trusting picks after three failures in a row", () => {
+    expect(mod.picksHealthy("")).toBe(true);
+    expect(mod.picksHealthy('{"failures":2}')).toBe(true);
+    expect(mod.picksHealthy('{"failures":3}')).toBe(false);
+  });
+
+  it("records each listed description, alias and continuation lines handled", () => {
+    const described = mod.listedDescriptions(listing);
+    expect(Object.keys(described)).toHaveLength(13);
+    expect(described["engram:memory"]).toStartWith("ALWAYS ACTIVE");
+    expect(described["security-review"]).toBe("");
+    expect(described["claude-api"]!.split("\n")).toHaveLength(3);
+  });
+
+  it("puts the delegation's skills block before its prompt", () => {
+    expect(mod.withDelegationSkills("Do X.\nReport in JSON.", "Skills:\nSuggested skill: a — b\n")).toBe("Skills:\nSuggested skill: a — b\n\nDo X.\nReport in JSON.");
+    expect(mod.withDelegationSkills("Do X.", "  \n")).toBe("Do X.");
+  });
+});
+
+const TOKEN = '{"token":"ts_live_abcdef123"}';
+const SETTINGS = JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "project-brain suggest --stdin" }] }] } });
+
+/** A fake `$` and `on`: env, files and the CLI answer, with every process call and write recorded. */
 function harness(opts: { env?: Record<string, string>; files?: Record<string, string>; cli?: (argv: string[], stdin?: string) => any }) {
   const handlers = new Map<string, Handler>();
   const runs: Array<{ argv: string[]; stdin?: string }> = [];
   const env: Record<string, string> = { HOME: "/home/u", ...opts.env };
-  const files: Record<string, string> = opts.files ?? {};
+  const files: Record<string, string> = { ...opts.files };
   const $ = {
     env: { get: async (name: string) => env[name] },
     fs: {
@@ -135,8 +187,9 @@ function harness(opts: { env?: Record<string, string>; files?: Record<string, st
         return files[path]!;
       },
       exists: async (path: string) => path in files,
+      write: async (path: string, text: string) => void (files[path] = text),
     },
-    clock: { now: async () => NOW },
+    clock: { now: async () => NOW, sleep: (ms: number) => Bun.sleep(ms) },
     process: {
       run: async (argv: string[], init?: { stdin?: string }) => {
         runs.push({ argv, stdin: init?.stdin });
@@ -146,81 +199,126 @@ function harness(opts: { env?: Record<string, string>; files?: Record<string, st
   };
   mod.register((event: string, ...rest: any[]) => {
     const fn = rest[rest.length - 1] as Handler;
-    const matcher = rest.length > 1 ? rest[0] : {};
-    handlers.set(`${event}${JSON.stringify(matcher)}`, fn);
+    const matcher = rest.length > 1 ? rest[0] : undefined;
+    handlers.set(matcher ? `${event}${JSON.stringify(matcher)}` : event, fn);
     return { catch: () => {} };
   });
-  const call = (key: string, e: any) => handlers.get(key)!($, e, async (x: any) => x);
-  return { call, runs };
+  const call = (key: string, e: any, next: (x: any) => Promise<any> = async (x) => x) => handlers.get(key)!($, e, next);
+  return { call, runs, files };
 }
 
-const READY = {
-  env: { TYPESAFE_API_KEY: "t" },
-  files: { "/home/u/.claude/settings.json": '{"hooks":{"UserPromptSubmit":[{"hooks":[{"command":"project-brain suggest --stdin"}]}]}}' },
-};
-const ATTACHMENT = '{"type":"skill_listing"}';
-const AGENT = '{"tool":"Agent"}';
+const READY = { files: { "/home/u/.project-brain/reranker.json": TOKEN, "/home/u/.claude/settings.json": SETTINGS } };
+const LISTING = 'prompt.attachment{"type":"skill_listing"}';
+const attachment = (agentId?: string) => ({ type: "skill_listing", text: listing, origin: { kind: "engine" }, ...(agentId ? { agentId } : {}) });
+const BLOCK = "Skills for this task:\nSuggested skill: vercel:nextjs — Next.js guidance\n";
+const answers = (stdout: string) => () => ({ exitCode: 0, stdout, stderr: "" });
 
 describe("the mod's hooks", () => {
   it("rewrites the main loop's listing to names only when the picker is ready", async () => {
     const { call } = harness(READY);
-    const out = await call(`prompt.attachment${ATTACHMENT}`, { type: "skill_listing", text: listing, origin: { kind: "engine" } });
+    const out = await call(LISTING, attachment());
     expect(mod.parseListing(out.text)).toBeNull();
     expect(visibleNames(out.text)).toEqual([...fixtureNames()].sort());
   });
 
-  it("rewrites a subagent loop's listing the same way, without the suggest hook", async () => {
-    const { call } = harness({ env: { TYPESAFE_API_KEY: "t" } });
-    const out = await call(`prompt.attachment${ATTACHMENT}`, { type: "skill_listing", text: listing, origin: { kind: "engine" }, agentId: "a1" });
-    expect(mod.parseListing(out.text)).toBeNull();
+  it("records the listed descriptions for the picker", async () => {
+    const { call, files } = harness(READY);
+    await call(LISTING, attachment());
+    expect(Object.keys(JSON.parse(files["/home/u/.project-brain/skill-listing.json"]!).skills)).toContain("engram:memory");
+  });
+
+  it("keeps descriptions after three failed picks in a row", async () => {
+    const { call } = harness({ files: { ...READY.files, "/home/u/.project-brain/skill-pick-health.json": '{"failures":3}' } });
+    expect((await call(LISTING, attachment())).text).toBe(listing);
+  });
+
+  it("keeps descriptions when hooks are disabled or the token is malformed", async () => {
+    for (const files of [
+      { ...READY.files, "/home/u/.claude/settings.json": JSON.stringify({ ...JSON.parse(SETTINGS), disableAllHooks: true }) },
+      { ...READY.files, "/home/u/.project-brain/reranker.json": '{"token":""}' },
+    ]) {
+      const { call } = harness({ files });
+      expect((await call(LISTING, attachment())).text).toBe(listing);
+    }
+  });
+
+  it("names only in a subagent whose spawn carried a skills block, placed before the prompt", async () => {
+    const { call } = harness({ ...READY, cli: answers(BLOCK) });
+    const spawned: any[] = [];
+    await call("agent.spawn", { tool_use_id: "t1", prompt: "Build the page", description: "Landing" }, async (e) => (spawned.push(e), { model: "m", agentId: "a1" }));
+    expect(spawned[0].prompt).toBe(`${BLOCK.trim()}\n\nBuild the page`);
+    expect(mod.parseListing((await call(LISTING, attachment("a1"))).text)).toBeNull();
+  });
+
+  it("waits for a spawn still resolving its id before deciding", async () => {
+    const { call } = harness({ ...READY, cli: answers(BLOCK) });
+    let resolveSpawn: (v: any) => void = () => {};
+    const spawning = call("agent.spawn", { tool_use_id: "t2", prompt: "P", description: "D" }, () => new Promise((r) => (resolveSpawn = r)));
+    await Bun.sleep(5);
+    const listed = call(LISTING, attachment("a2"));
+    resolveSpawn({ model: "m", agentId: "a2" });
+    await spawning;
+    expect(mod.parseListing((await listed).text)).toBeNull();
+  });
+
+  it("a subagent nothing was picked for gets the usage-mode listing, and its spawn goes out unchanged", async () => {
+    const stats = JSON.stringify(usage({ dataviz: { count: 12, lastUsed: NOW - 20 * DAY } }));
+    const { call } = harness({ files: { ...READY.files, "/home/u/.project-brain/skill-usage.json": stats }, cli: answers("\n") });
+    const e = { tool_use_id: "t3", prompt: "Build the page", description: "Landing" };
+    const spawned: any[] = [];
+    await call("agent.spawn", e, async (x) => (spawned.push(x), { model: "m", agentId: "a3" }));
+    expect(spawned[0]).toBe(e);
+    const out = await call(LISTING, attachment("a3"));
+    expect(mod.parseListing(out.text)!.entries.map((x) => x.name)).toEqual(["brain-okf", "brain-style", "dataviz"]);
+  });
+
+  it("a subagent no spawn of ours carried skills for keeps descriptions without usage numbers", async () => {
+    const { call } = harness(READY);
+    expect((await call(LISTING, attachment("teammate"))).text).toBe(listing);
   });
 
   it("keeps general-use skills in full in every loop", async () => {
     const files = { ...READY.files, "/home/u/.project-brain/skills.json": JSON.stringify({ general: ["dataviz"] }) };
-    const { call } = harness({ ...READY, files });
-    for (const agentId of [undefined, "a1"]) {
-      const out = await call(`prompt.attachment${ATTACHMENT}`, { type: "skill_listing", text: listing, origin: { kind: "engine" }, agentId });
-      expect(mod.parseListing(out.text)!.entries.map((e) => e.name)).toEqual(["dataviz"]);
+    const { call } = harness({ files, cli: answers(BLOCK) });
+    await call("agent.spawn", { tool_use_id: "t4", prompt: "P", description: "D" }, async () => ({ model: "m", agentId: "a4" }));
+    for (const agentId of [undefined, "a4"]) {
+      expect(mod.parseListing((await call(LISTING, attachment(agentId))).text)!.entries.map((x) => x.name)).toEqual(["dataviz"]);
     }
   });
 
-  it("without a token and without usage numbers, passes the listing through", async () => {
-    const { call } = harness({ files: READY.files });
-    const out = await call(`prompt.attachment${ATTACHMENT}`, { type: "skill_listing", text: listing, origin: { kind: "engine" } });
-    expect(out.text).toBe(listing);
-  });
-
   it("without a token, falls back to the usage numbers", async () => {
-    const files = { "/home/u/.project-brain/skill-usage.json": JSON.stringify(usage({ dataviz: { count: 4, lastUsed: NOW - 20 * DAY } })) };
+    const files = { "/home/u/.project-brain/skill-usage.json": JSON.stringify(usage({ dataviz: { count: 12, lastUsed: NOW - 20 * DAY } })) };
     const { call } = harness({ files });
-    const out = await call(`prompt.attachment${ATTACHMENT}`, { type: "skill_listing", text: listing, origin: { kind: "engine" } });
-    expect(mod.parseListing(out.text)!.entries.map((e) => e.name)).toEqual(["brain-okf", "brain-style", "dataviz"]);
+    expect(mod.parseListing((await call(LISTING, attachment())).text)!.entries.map((x) => x.name)).toEqual(["brain-okf", "brain-style", "dataviz"]);
   });
 
   it("leaves a listing it did not author alone", async () => {
     const { call } = harness(READY);
     const e = { type: "skill_listing", text: listing, origin: { kind: "hook", event: "SessionStart" } };
-    expect(await call(`prompt.attachment${ATTACHMENT}`, e)).toBe(e);
+    expect(await call(LISTING, e)).toBe(e);
   });
 
-  it("appends the delegation's picked skills to the Agent prompt", async () => {
-    const block = "Skills for this task:\nSuggested skill: vercel:nextjs — Next.js guidance\n";
-    const { call, runs } = harness({ ...READY, cli: () => ({ exitCode: 0, stdout: block, stderr: "" }) });
-    const out = await call(`tool.call${AGENT}`, { tool: "Agent", prompt: "Build the page", description: "Landing page", subagent_type: "general-purpose" });
-    expect(out.prompt).toBe(`Build the page\n\n${block.trim()}`);
-    expect(out.subagent_type).toBe("general-purpose");
+  it("sends the delegation's prompt and description to the CLI", async () => {
+    const { call, runs } = harness({ ...READY, cli: answers(BLOCK) });
+    await call("agent.spawn", { tool_use_id: "t5", prompt: "Build the page", description: "Landing page" }, async () => ({ model: "m" }));
     expect(runs[0]!.argv).toEqual(["project-brain", "suggest", "--agent", "--stdin"]);
     expect(JSON.parse(runs[0]!.stdin!)).toEqual({ prompt: "Build the page", description: "Landing page" });
   });
 
-  it("fails open: an empty answer, a failing CLI, or no token leave the delegation unchanged", async () => {
-    const e = { tool: "Agent", prompt: "Build the page", description: "Landing page" };
-    for (const cli of [() => ({ exitCode: 0, stdout: "  \n", stderr: "" }), () => ({ exitCode: 1, stdout: "boom", stderr: "" }), () => { throw new Error("timeout"); }]) {
+  it("fails open: an empty answer, a failing CLI, a throw, or no token leave the spawn unchanged", async () => {
+    const e = { tool_use_id: "t6", prompt: "Build the page", description: "Landing page" };
+    const failures = [answers("  \n"), () => ({ exitCode: 1, stdout: "boom", stderr: "" }), () => { throw new Error("timeout"); }];
+    for (const cli of failures) {
       const { call } = harness({ ...READY, cli });
-      expect((await call(`tool.call${AGENT}`, e)).prompt).toBe("Build the page");
+      const seen: any[] = [];
+      await call("agent.spawn", e, async (x) => (seen.push(x), { model: "m" }));
+      expect(seen[0]).toBe(e);
     }
-    const noToken = harness({ files: READY.files });
-    expect((await noToken.call(`tool.call${AGENT}`, e)).prompt).toBe("Build the page");
+    const noToken = harness({ files: { "/home/u/.claude/settings.json": SETTINGS } });
+    const seen: any[] = [];
+    await noToken.call("agent.spawn", e, async (x) => (seen.push(x), { model: "m" }));
+    expect(seen[0]).toBe(e);
     expect(noToken.runs).toEqual([]);
   });
 });
+
