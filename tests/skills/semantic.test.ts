@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { runSearch } from "../../src/commands/search.js";
 import { NullEmbeddingClient } from "../../src/embeddings/null.js";
 import { pickSkill } from "../../src/skills/picker.js";
-import { cosine, rankSkillsSemantic, type SharedQuery } from "../../src/skills/semantic.js";
+import { jevReply } from "../helpers/jev-fake.js";
+import { cosine, rankSemantic, rankSkillsSemantic, type SharedQuery } from "../../src/skills/semantic.js";
 import type { SkillInfo } from "../../src/skills/discovery.js";
 import type { EmbeddingClient, VectorStore } from "../../src/types.js";
 
@@ -52,10 +53,9 @@ function jev(choice: string) {
   return {
     calls,
     fetchFn: async (_url: string, init: RequestInit) => {
-      calls.push(JSON.parse(init.body as string));
-      return new Response(
-        JSON.stringify({ answers: { pick: { choice, confidence: 0.9, probabilities: { [choice]: 0.9, none: 0.1 } } } })
-      );
+      const body = JSON.parse(init.body as string);
+      calls.push(body);
+      return jevReply(body, { [choice]: 0.9 });
     },
   };
 }
@@ -155,26 +155,17 @@ describe("semantic shortlist", () => {
 });
 
 describe("similarity floor", () => {
-  it("drops skills below the cosine floor, returning [] rather than null", async () => {
+  const far = (client: EmbeddingClient): SharedQuery => ({ embeddings: client, vector: [0.5, 0.5, 0.5] }); // cos ~0.58 to every axis
+
+  it("does not apply to skills: a task prompt scores its process skills under it, and Jev's own floor decides", async () => {
     const { client } = fakeEmbeddings();
-    const far: SharedQuery = { embeddings: client, vector: [0.5, 0.5, 0.5] }; // cos ~0.58 to every axis
-    expect(await rankSkillsSemantic(SKILLS, far, 12, dir)).toEqual([]);
+    expect(await rankSkillsSemantic(SKILLS, far(client), 12, dir)).toHaveLength(SKILLS.length);
   });
 
-  it("makes no Jev call and prints no line when nothing clears the floor", async () => {
+  it("still applies to anything ranked with the default spec, returning [] rather than null", async () => {
     const { client } = fakeEmbeddings();
-    const j = jev("brain-commit");
-    const line = await pickSkill("explícame cómo funciona el store", {
-      projectDir: "/p",
-      env: {},
-      getToken: async () => "tok",
-      discover: async () => SKILLS,
-      queryEmbedding: async () => ({ embeddings: client, vector: [0.5, 0.5, 0.5] }),
-      vectorCacheDir: dir,
-      fetchFn: j.fetchFn,
-    });
-    expect(line).toBeNull();
-    expect(j.calls).toHaveLength(0);
+    const spec = { filePrefix: "floor-test", text: (s: SkillInfo) => s.name, key: (s: SkillInfo) => s.name, format: "json" as const, warmOnHook: true };
+    expect(await rankSemantic(SKILLS, spec, far(client), 12, dir)).toEqual([]);
   });
 });
 

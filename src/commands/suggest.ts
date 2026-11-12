@@ -1,5 +1,5 @@
 import { isTrivialPrompt } from "./trivial-prompt.js";
-import { pickSuggestions } from "../skills/picker.js";
+import { pickSkill, pickSuggestions } from "../skills/picker.js";
 import type { SharedQuery } from "../skills/semantic.js";
 
 /**
@@ -93,6 +93,8 @@ export interface SuggestDeps {
   claimNotice?: (sessionId: string, kind: "clear" | "compact") => Promise<boolean>;
   /** The one-time "project-brain updated" block for this session, or null. Injectable for tests. */
   upgradeNotice?: (input: HookInput) => Promise<{ text: string; commit: () => Promise<void> } | null>;
+  /** Records whether a Jev skill request was answered. Only the CLI entry passes one, so a test never writes the real file. */
+  recordHealth?: (ok: boolean) => Promise<unknown>;
 }
 
 /**
@@ -177,6 +179,72 @@ async function taskContextFor(input: HookInput, deps: SuggestDeps) {
 }
 
 /**
+ * The prompt vector, started only when the picker awaits it, i.e. after its token and picker-flag
+ * checks, so a user without a token (or with both pickers off) never touches Ollama.
+ */
+function budgetedVector(
+  prompt: string,
+  projectDir: string,
+  queryEmbedding: (prompt: string, projectDir: string) => Promise<SharedQuery | null>,
+  embedBudgetMs: number
+): () => Promise<SharedQuery | null> {
+  let started: Promise<SharedQuery | null> | undefined;
+  return () =>
+    (started ??= new Promise<SharedQuery | null>((resolve) => {
+      const done = (value: SharedQuery | null) => {
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const timer = setTimeout(() => done(null), embedBudgetMs);
+      queryEmbedding(prompt, projectDir).then(done, () => done(null));
+    }));
+}
+
+export interface AgentSuggestDeps {
+  print?: (text: string) => void;
+  pick?: typeof pickSkill;
+  queryEmbedding?: (prompt: string, projectDir: string) => Promise<SharedQuery | null>;
+  embedBudgetMs?: number;
+  recordHealth?: (ok: boolean) => Promise<unknown>;
+}
+
+export const DELEGATION_SKILLS_HEADING = "Skills for this task, picked for it (load one with the Skill tool when you reach the part it covers):";
+
+/** What a delegation hands its subagent: `prompt`, its `description`, and the session's `cwd`. */
+function parseAgentInput(raw: string): { text: string; cwd: string | undefined } {
+  try {
+    const obj = JSON.parse(raw) as Record<string, unknown>;
+    const prompt = typeof obj.prompt === "string" ? obj.prompt : "";
+    const description = typeof obj.description === "string" ? obj.description : "";
+    return { text: [description, prompt].filter(Boolean).join("\n\n"), cwd: typeof obj.cwd === "string" && obj.cwd !== "" ? obj.cwd : undefined };
+  } catch {
+    return { text: "", cwd: undefined };
+  }
+}
+
+/**
+ * `suggest --agent --stdin`: the skills a delegated task needs, from the same one-request Jev pick
+ * as the prompt hook, printed as a block the caller appends to the subagent's prompt. Prints
+ * nothing when nothing was picked or anything failed, so the delegation goes out unchanged.
+ */
+export async function runAgentSuggest(raw: string, deps: AgentSuggestDeps = {}): Promise<void> {
+  const { print = console.log, pick = pickSkill, queryEmbedding = sharedQueryFor, embedBudgetMs = EMBED_BUDGET_MS } = deps;
+  try {
+    const { text, cwd } = parseAgentInput(raw);
+    if (!text.trim() || isTrivialPrompt(text)) return;
+    const projectDir = cwd ?? process.cwd();
+    const lines = await pick(text, {
+      projectDir,
+      queryEmbedding: budgetedVector(text, projectDir, queryEmbedding, embedBudgetMs),
+      ...(deps.recordHealth ? { recordHealth: deps.recordHealth } : {}),
+    });
+    if (lines) print(`${DELEGATION_SKILLS_HEADING}\n${lines}`);
+  } catch {
+    // A delegation must never wait on, or break over, a suggestion.
+  }
+}
+
+/**
  * The hook body: print the skill/tool suggestion lines for one prompt. Needs
  * neither an index nor retrieval, so it works in any directory. Never throws;
  * any failure prints nothing.
@@ -220,19 +288,7 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
 
     if (!prompt.trim() || isTrivialPrompt(prompt)) return await flush(null);
     const projectDir = cwd ?? process.cwd();
-
-    // Started only when the picker awaits it, i.e. after its token and picker-flag checks, so a
-    // user without a token (or with both pickers off) never touches Ollama.
-    let started: Promise<SharedQuery | null> | undefined;
-    const vector = (): Promise<SharedQuery | null> =>
-      (started ??= new Promise<SharedQuery | null>((resolve) => {
-        const done = (value: SharedQuery | null) => {
-          clearTimeout(timer);
-          resolve(value);
-        };
-        const timer = setTimeout(() => done(null), embedBudgetMs);
-        queryEmbedding(prompt, projectDir).then(done, () => done(null));
-      }));
+    const vector = budgetedVector(prompt, projectDir, queryEmbedding, embedBudgetMs);
 
     const alreadyShown = import("../hooks/injected.js").then((m) => m.liveHookOutput(input.transcriptPath), () => null);
     const task = await taskContextFor(input, deps);
@@ -242,6 +298,7 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
     const lines = await pick(prompt, {
       projectDir,
       queryEmbedding: vector,
+      ...(deps.recordHealth ? { recordHealth: deps.recordHealth } : {}),
       ...(task ? { taskSwitch: { recent: task.recent, ...(task.assistant ? { assistant: task.assistant } : {}) }, onTaskSwitch: (p: Record<string, number>) => (switchProbabilities = p) } : {}),
     });
     const shown = await alreadyShown;
@@ -261,7 +318,16 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
   }
 }
 
-/** CLI entry point: `project-brain suggest --stdin`. Without `--stdin` it does nothing. */
+async function recordPickHealthInDataDir(ok: boolean): Promise<void> {
+  const { DATA_DIR } = await import("../constants.js");
+  const { recordPickHealth } = await import("../skills/listed.js");
+  await recordPickHealth(DATA_DIR, ok);
+}
+
+/**
+ * CLI entry point: `project-brain suggest --stdin` (the prompt hook) or `suggest --agent --stdin`
+ * (a delegation's skills). Without `--stdin` it does nothing.
+ */
 export async function execute(
   args: string[],
   readStdin: () => Promise<string> = () => Bun.stdin.text(),
@@ -272,7 +338,11 @@ export async function execute(
   const timeout = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, SUGGEST_TIMEOUT_MS);
   });
-  const work = readStdin().then((raw) => runSuggest(raw, deps), () => {});
+  const recordHealth = deps.recordHealth ?? recordPickHealthInDataDir;
+  const run = args.includes("--agent")
+    ? (raw: string) => runAgentSuggest(raw, { recordHealth })
+    : (raw: string) => runSuggest(raw, { ...deps, recordHealth });
+  const work = readStdin().then(run, () => {});
   await Promise.race([work, timeout]);
   clearTimeout(timer);
 }

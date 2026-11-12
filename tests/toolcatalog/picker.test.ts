@@ -3,6 +3,8 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SkillInfo } from "../../src/skills/discovery.js";
+import { DEFAULT_SKILLS_CONFIG } from "../../src/skills/config.js";
+import { jevReply } from "../helpers/jev-fake.js";
 import { pickSkill, pickSuggestions, prefilterTools, toolPickerEnabled, SKILL_CONFIDENCE_THRESHOLD } from "../../src/skills/picker.js";
 import { modelsWithVectors, warmVectors } from "../../src/skills/semantic.js";
 import type { ToolEntry } from "../../src/toolcatalog/live.js";
@@ -18,14 +20,10 @@ const PROMPT = "send a slack message and write the git commit message";
 
 type Answers = Record<string, { choice: string; p: number }>;
 
-function jev(answers: Answers): Response {
-  return new Response(
-    JSON.stringify({
-      answers: Object.fromEntries(
-        Object.entries(answers).map(([k, v]) => [k, { choice: v.choice, confidence: v.p, probabilities: { [v.choice]: v.p, none: 1 - v.p } }])
-      ),
-    })
-  );
+/** `pick` names the skill Jev judges needed; every other key answers its choice question. */
+function jev(answers: Answers, body: any): Response {
+  const { pick, ...choices } = answers;
+  return jevReply(body, pick && pick.choice !== "none" ? { [pick.choice]: pick.p } : {}, choices);
 }
 
 function setup(answers: Answers, over: Record<string, unknown> = {}) {
@@ -37,10 +35,12 @@ function setup(answers: Answers, over: Record<string, unknown> = {}) {
       env: {},
       getToken: async () => "secret-token",
       discover: async () => SKILLS,
+      skillsConfig: DEFAULT_SKILLS_CONFIG,
       loadTools: async () => TOOLS,
       fetchFn: async (_url: string, init: RequestInit) => {
-        calls.push({ body: JSON.parse(init.body as string) });
-        return jev(answers);
+        const body = JSON.parse(init.body as string);
+        calls.push({ body });
+        return jev(answers, body);
       },
       ...over,
     },
@@ -58,9 +58,9 @@ describe("pickSuggestions", () => {
     const lines = await pickSuggestions(PROMPT, deps);
     expect(calls).toHaveLength(1);
     const { questions, state } = calls[0]!.body;
-    expect(Object.keys(questions).sort()).toEqual(["pick", "tool"]);
+    expect(Object.keys(questions).sort()).toEqual(["skill_0", "tool"]);
     expect(Object.keys(questions.tool.criteria)).toContain("none");
-    expect(Object.keys(questions.pick.criteria)).toContain("none");
+    expect(questions.skill_0.type).toBe("noul");
     expect(state.tools.map((t: { name: string }) => t.name)).toContain("mcp__claude_ai_Slack__slack_send_message");
     expect(lines).toEqual([
       expect.stringMatching(/^Suggested skill: brain-commit — /),
@@ -87,7 +87,7 @@ describe("pickSuggestions", () => {
   it("sends only the skill question when no tool is shortlisted", async () => {
     const { deps, calls } = setup({ pick: BOTH.pick! }, { loadTools: async () => [] });
     const lines = await pickSuggestions(PROMPT, deps);
-    expect(Object.keys(calls[0]!.body.questions)).toEqual(["pick"]);
+    expect(Object.keys(calls[0]!.body.questions)).toEqual(["skill_0"]);
     expect(lines).toHaveLength(1);
   });
 
@@ -137,14 +137,14 @@ describe("pickSuggestions", () => {
       },
     });
     const lines = await pickSuggestions(PROMPT, deps);
-    expect(Object.keys(calls[0]!.body.questions)).toEqual(["pick"]);
+    expect(Object.keys(calls[0]!.body.questions)).toEqual(["skill_0"]);
     expect(lines).toEqual([expect.stringMatching(/^Suggested skill: /)]);
   });
 
   it("BRAIN_TOOL_PICKER=0 drops the tool question but keeps skills", async () => {
     const { deps, calls } = setup(BOTH, { env: { BRAIN_TOOL_PICKER: "0" } });
     const lines = await pickSuggestions(PROMPT, deps);
-    expect(Object.keys(calls[0]!.body.questions)).toEqual(["pick"]);
+    expect(Object.keys(calls[0]!.body.questions)).toEqual(["skill_0"]);
     expect(lines).toEqual([expect.stringMatching(/^Suggested skill: /)]);
   });
 
@@ -174,7 +174,7 @@ describe("pickSkill keeps its skill-only contract", () => {
   it("never asks the tool question", async () => {
     const { deps, calls } = setup(BOTH);
     expect(await pickSkill(PROMPT, deps)).toStartWith("Suggested skill: ");
-    expect(Object.keys(calls[0]!.body.questions)).toEqual(["pick"]);
+    expect(Object.keys(calls[0]!.body.questions)).toEqual(["skill_0"]);
   });
 });
 

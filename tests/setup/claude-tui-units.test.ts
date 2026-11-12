@@ -7,7 +7,11 @@ import { allUnits, claudeTuiUnits, type SetupContext } from "../../src/setup/uni
 import {
   ACTIVITY_PANE_FILES,
   ACTIVITY_PLUGIN_KEY,
+  ACTIVITY_PLUGIN_NAME,
   MARKETPLACE_NAME,
+  SKILL_LISTING_FILES,
+  SKILL_LISTING_PLUGIN_KEY,
+  SKILL_LISTING_PLUGIN_NAME,
   READABLE_REPLIES_SECTION_ID,
   marketplaceDir,
 } from "../../src/setup/claude-tui.js";
@@ -42,15 +46,15 @@ async function seedSettings(value: unknown) {
   await writeFile(settingsPath, JSON.stringify(value, null, 2));
 }
 
-const TUI_IDS = ["tui:activity-pane", "tui:readable-replies"];
+const TUI_IDS = ["tui:activity-pane", "tui:readable-replies", "tui:skill-listing"];
 
 describe("Claude TUI units", () => {
-  it("are grouped, selected on a fresh setup, and never installed silently on upgrade", () => {
+  it("are grouped, never installed silently on upgrade, and only the skill listing ships unchecked", () => {
     for (const id of TUI_IDS) {
       const unit = unitOf(id);
       expect(unit, id).toBeDefined();
       expect(unit.group).toBe("Claude TUI");
-      expect(unit.defaultSelected).toBe(true);
+      expect(unit.defaultSelected).toBe(id !== "tui:skill-listing");
       expect(unit.autoOnUpgrade).toBeFalsy();
       expect(unit.description).toContain("untick");
     }
@@ -210,5 +214,79 @@ describe("tui:readable-replies", () => {
     expect(await unit.inspect(ctxFor())).toBe("stale");
     await unit.apply(ctxFor());
     expect(await unit.inspect(ctxFor())).toBe("current");
+  });
+});
+
+describe("tui:skill-listing", () => {
+  const listingCtx = (prompt: SetupContext["promptGeneralSkills"] = async () => null): SetupContext => ({ ...ctxFor(), promptGeneralSkills: prompt });
+  const listingDir = () => join(marketplaceDir(dataDir), SKILL_LISTING_PLUGIN_NAME);
+  const manifest = async () => JSON.parse(await readFile(join(marketplaceDir(dataDir), ".claude-plugin", "marketplace.json"), "utf8"));
+  const pluginNames = async () => (await manifest()).plugins.map((p: { name: string }) => p.name);
+
+  it("absent → apply → current → remove → absent in a temp HOME, other settings preserved", async () => {
+    await seedSettings(USER_SETTINGS);
+    const unit = unitOf("tui:skill-listing");
+    expect(await unit.inspect(listingCtx())).toBe("absent");
+
+    await unit.apply(listingCtx());
+    expect(await unit.inspect(listingCtx())).toBe("current");
+    const applied = await readSettings();
+    expect(applied.enabledPlugins[SKILL_LISTING_PLUGIN_KEY]).toBe(true);
+    expect(applied.enabledPlugins[ACTIVITY_PLUGIN_KEY]).toBeUndefined();
+    expect("tui" in applied).toBe(false);
+    for (const [rel, text] of Object.entries(SKILL_LISTING_FILES)) expect(await readFile(join(listingDir(), rel), "utf8"), rel).toBe(text);
+    expect(await pluginNames()).toEqual([SKILL_LISTING_PLUGIN_NAME]);
+    expect(existsSync(join(dataDir, "skill-usage.json"))).toBe(true);
+
+    await unit.remove(listingCtx());
+    expect(await unit.inspect(listingCtx())).toBe("absent");
+    expect(await readSettings()).toEqual(USER_SETTINGS);
+    expect(existsSync(marketplaceDir(dataDir))).toBe(false);
+    expect(existsSync(join(dataDir, "skill-usage.json"))).toBe(false);
+  });
+
+  it("shares the marketplace with the activity pane: removing one keeps the other current", async () => {
+    await seedSettings(USER_SETTINGS);
+    const pane = unitOf("tui:activity-pane");
+    const listing = unitOf("tui:skill-listing");
+    await pane.apply(ctxFor());
+    await listing.apply(listingCtx());
+    expect(await pane.inspect(ctxFor())).toBe("current");
+    expect(await listing.inspect(listingCtx())).toBe("current");
+    expect(await pluginNames()).toEqual([ACTIVITY_PLUGIN_NAME, SKILL_LISTING_PLUGIN_NAME]);
+
+    await listing.remove(listingCtx());
+    expect(await pane.inspect(ctxFor())).toBe("current");
+    expect((await readSettings()).extraKnownMarketplaces[MARKETPLACE_NAME]).toBeDefined();
+    expect(existsSync(listingDir())).toBe(false);
+
+    await listing.apply(listingCtx());
+    await pane.remove(ctxFor());
+    expect(await listing.inspect(listingCtx())).toBe("current");
+    expect(await pluginNames()).toEqual([SKILL_LISTING_PLUGIN_NAME]);
+  });
+
+  it("asks for the general-use skills with the most used suggested but not ticked, and saves the answer", async () => {
+    const skillDir = join(dir, ".claude", "skills", "brain-style");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, "SKILL.md"), "---\nname: brain-style\ndescription: Keeps code declarative.\n---\nbody\n");
+    const projects = join(dir, ".claude", "projects", "-repo");
+    await mkdir(projects, { recursive: true });
+    const call = { type: "tool_use", id: "t1", name: "Skill", input: { skill: "brain-style" } };
+    await writeFile(join(projects, "s.jsonl"), `${JSON.stringify({ type: "assistant", timestamp: new Date().toISOString(), message: { content: [call] } })}\n`);
+
+    const asked: Array<{ options: unknown; current: string[] }> = [];
+    await unitOf("tui:skill-listing").apply(
+      listingCtx(async (options, current) => {
+        asked.push({ options, current });
+        return ["brain-style"];
+      })
+    );
+    expect(asked).toEqual([{ options: [{ name: "brain-style", uses: 1 }], current: [] }]);
+    expect(JSON.parse(await readFile(join(dataDir, "skills.json"), "utf8")).general).toEqual(["brain-style"]);
+
+    await unitOf("tui:skill-listing").apply(listingCtx(async (_options, current) => (asked.push({ options: null, current }), null)));
+    expect(asked[1]!.current).toEqual(["brain-style"]);
+    expect(JSON.parse(await readFile(join(dataDir, "skills.json"), "utf8")).general).toEqual(["brain-style"]);
   });
 });

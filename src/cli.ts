@@ -152,6 +152,9 @@ Commands:
                        --apply   disable them for that project only (backup first)
                        --revert  re-enable exactly what --apply disabled
   tool-catalog refresh  Rebuild the MCP tool catalog behind the "Suggested tool" hints
+  skill-usage        Count skill invocations in the last 30 days of Claude Code transcripts, no changes
+                       --write   save ~/.project-brain/skill-usage.json for the compact skill listing
+                       --if-stale  with --write, skip when the file is under a day old
   arch init          Write .project-brain/architecture.json (hexagonal preset) [--force]
   compact            Reclaim storage from old versions + deleted rows now [--project <id>] [--force]
                        refuses while another process has the index open; --force overrides
@@ -166,6 +169,7 @@ Commands:
   health             Check system health and staleness
   search "<query>"   Search indexed context (used by hooks); prints compact results
   suggest --stdin    Skill/tool suggestion hook (UserPromptSubmit, global; works in any directory)
+                       --agent   read a delegation (prompt, description, cwd) and print the skills it needs
   update             Update project-brain to the latest published version, then re-apply your
                        saved setup selection with the new binary (no prompts)
                        --apply-only  skip the install (after brew/npm upgraded it for you)
@@ -505,6 +509,11 @@ switch (command) {
     await execute(args);
     // Same reason as `search`: the self-timeout does not cancel a hung Ollama/Jev call.
     process.exit(0);
+    break;
+  }
+  case "skill-usage": {
+    const { execute } = await import("./commands/skill-usage.js");
+    await execute(args);
     break;
   }
   case "update": {

@@ -16,11 +16,13 @@ export const SKILL_EMBED_BATCH = 16;
 export const SKILL_WARM_BUDGET_MS = 400;
 
 /**
- * Minimum cosine for a skill to be shortlisted. Calibrated on qwen3-embedding:0.6b
+ * Minimum cosine for an MCP tool to be shortlisted. Calibrated on qwen3-embedding:0.6b
  * against 139 installed skills with Spanish prompts: the right skill scored
- * 0.714-0.797 (lowest: "graba un video del flujo de login para el PR"), while
- * unrelated prompts topped out at 0.47-0.62. 0.67 sits in that gap; below it no
- * skill is a plausible fit, so no Jev call is made.
+ * 0.714-0.797, while unrelated prompts topped out at 0.47-0.62.
+ *
+ * Skills no longer use it: a task prompt ("arregla este bug del parser") names the work, not the
+ * skill, so the process skills it needs score 0.45-0.55 and fell under it, leaving the shortlist
+ * empty. Skills send their top N and let Jev's per-skill floor decide.
  */
 export const SKILL_MIN_COSINE = 0.67;
 
@@ -192,6 +194,8 @@ export interface RankSpec<T> {
   format: "json" | "bin";
   /** Whether the prompt hook may embed missing items (within the warm budget). Off → rank only with vectors that exist. */
   warmOnHook: boolean;
+  /** Cosine an item needs to be shortlisted. Defaults to {@link SKILL_MIN_COSINE}. */
+  minCosine?: number;
 }
 
 function openStore<T>(spec: RankSpec<T>, cacheDir: string, model: string): VectorStore {
@@ -284,7 +288,7 @@ export async function warmVectors<T>(items: T[], spec: RankSpec<T>, embeddings: 
 
 /**
  * Top `topN` items by cosine to the prompt vector that clear
- * {@link SKILL_MIN_COSINE} ([] when none do), or null when embeddings can't
+ * `spec.minCosine` ([] when none do), or null when embeddings can't
  * help (no vectors for any item, or a cache that can't be read) so the caller
  * falls back to keywords. Vectors are cached on disk by `spec.key` + model.
  * When `spec.warmOnHook`, a cold cache is warmed {@link SKILL_EMBED_BATCH}
@@ -310,13 +314,14 @@ export async function rankSemantic<T>(
       .map((s) => ({ item: s, score: cosine(query.vector, vectors[spec.key(s)]!) }))
       .sort((a, b) => b.score - a.score);
     if (scored.length === 0) return null;
-    return scored.filter((s) => s.score >= SKILL_MIN_COSINE).slice(0, topN).map((s) => s.item);
+    const floor = spec.minCosine ?? SKILL_MIN_COSINE;
+    return scored.filter((s) => s.score >= floor).slice(0, topN).map((s) => s.item);
   } catch {
     return null;
   }
 }
 
-const SKILL_SPEC: RankSpec<SkillInfo> = { filePrefix: "skill-vectors", text: skillText, key: vectorKey, format: "json", warmOnHook: true };
+const SKILL_SPEC: RankSpec<SkillInfo> = { filePrefix: "skill-vectors", text: skillText, key: vectorKey, format: "json", warmOnHook: true, minCosine: 0 };
 
 /** {@link rankSemantic} over installed skills. */
 export function rankSkillsSemantic(
