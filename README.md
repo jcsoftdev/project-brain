@@ -282,7 +282,7 @@ With no token configured, nothing changes — zero network calls, identical resu
 
 Suggestions come from their own **global** `UserPromptSubmit` hook, `project-brain suggest --stdin`, separate from the per-project retrieval hook. `setup` installs it by default (unit `hooks:suggest`), and an existing install gets it added **once** the next time its routing `SessionStart` hook runs, without rerunning `setup`. It works in every project, including ones never initialized with project-brain: no index is opened, and the prompt vector comes from the project's indexed embedding model when there is one, otherwise from the default model (keyword matching when Ollama does not answer). Without a token it stays silent. To opt out, deselect "Skill/tool suggestions" in `setup` (or remove the hook by hand) and it is never re-added, or set `BRAIN_SKILL_PICKER=0` / `BRAIN_TOOL_PICKER=0`.
 
-With a token configured, the hook asks Jev which installed skill best fits your prompt and adds one line to the context: `Suggested skill: <name> — <why>`. It only appears when Jev is at least 70% confident; otherwise nothing is added. Skills are read from `~/.claude/skills`, `<project>/.claude/skills`, `~/.agents/skills` and installed plugins (`plugin:skill`), cached on disk (rebuilt when any SKILL.md changes, or after ten minutes). The shortlist is chosen by embedding similarity using the project's embedding model, so prompts in any language the model supports match English skill descriptions; skill vectors are cached next to the skill list, and without embeddings it falls back to keyword overlap.
+With a token configured, the hook asks Jev, for each shortlisted skill, whether the work your prompt asks for needs it: process skills (planning, brainstorming, debugging, review) and domain skills (the framework or tool the work touches) can both apply to one prompt, so every skill Jev judges at least 70% likely is suggested, best first, one line each: `Suggested skill: <name> — <its full description>`. The description is the skill's own, whole, because with the [compact skill listing](#claude-tui) the model may only have the name. Below 70% nothing is added. A ceiling of 10 picks per prompt (`pickCeiling` in `~/.project-brain/skills.json`, or `BRAIN_SKILL_PICK_MAX`) guards against a runaway response; when more skills clear the floor, the top ones are kept and a line on stderr says how many were cut. General-use skills (see the [compact skill listing](#claude-tui)) are never asked about or suggested. A suggestion still visible in the live conversation is not repeated. Skills are read from `~/.claude/skills`, `<project>/.claude/skills`, `~/.agents/skills` and installed plugins (`plugin:skill`), cached on disk (rebuilt when any SKILL.md changes, or after ten minutes). The shortlist is chosen by embedding similarity using the project's embedding model, so prompts in any language the model supports match English skill descriptions; skill vectors are cached next to the skill list, and without embeddings it falls back to keyword overlap.
 
 **The prompt text and the shortlisted skills' names and descriptions (at most 12) are sent to `api.typesafe.ai`** — the same disclosure as the reranker. Trivial prompts send nothing, and on the keyword fallback so do prompts with no overlap with any skill. The whole hook gives up after 5s (Jev itself after 1s) and fails silently. Opt out with `BRAIN_SKILL_PICKER=0`.
 
@@ -357,14 +357,36 @@ Run `project-brain setup --with=nope` to print the list of valid ids.
 
 #### Claude TUI
 
-The "Claude TUI" checklist sets up Claude Code's terminal. Both units change files under `~/.claude`, so an upgrade never installs them on its own: they show up marked `NEW` and unchecked. Untick a unit to undo exactly what it wrote.
+The "Claude TUI" checklist sets up Claude Code's terminal. Every unit changes files under `~/.claude`, so an upgrade never installs them on its own: they show up marked `NEW` and unchecked. Untick a unit to undo exactly what it wrote.
 
 | Unit | What it changes | Undo (untick) |
 |---|---|---|
 | `tui:activity-pane` | Writes the `project-brain-activity` mod into a local marketplace at `~/.project-brain/claude-plugins/`, registers it in `~/.claude/settings.json` (`extraKnownMarketplaces["project-brain"]`, `enabledPlugins["project-brain-activity@project-brain"]`) and, on first install, sets `tui` to `"fullscreen"`, remembering the value it replaced; a renderer you pick later is kept on updates | Deletes both entries and the files it wrote, and puts your previous `tui` value back unless you changed it since |
 | `tui:readable-replies` | Adds a marked block to `~/.claude/CLAUDE.md`: result first, full sentences, evidence at the end, no narration between tool calls | Deletes the block; the rest of the file stays as it was |
+| `tui:skill-listing` | Writes the `project-brain-skill-listing` mod into the same local marketplace and registers it (`enabledPlugins["project-brain-skill-listing@project-brain"]`); asks for your general-use skills and saves them to `~/.project-brain/skills.json`; writes `~/.project-brain/skill-usage.json`. Unchecked even on a first run: it trades skill descriptions for tokens, which is yours to decide | Deletes its plugin entry, its files and `skill-usage.json`; the marketplace entry goes only with the last mod in it. `skills.json` stays, since the suggest hook reads it too |
 
 The activity pane is a side pane named "Actividad" with tabs for todos, commands and uncommitted changes; each changed file expands to its diff against HEAD, with line numbers, and Enter on a file name opens it in one reused nvim split (Supacode, tmux, or a Terminal window) with its diff. When subagents run, a selector shows each one with its own summary, commands and diff; the header and footer stay fixed while the body scrolls. It docks on the right only in the fullscreen renderer (`/tui fullscreen`), which is why the unit switches it on. `/activity` reopens the pane after you close it, and ctrl+o still expands tool rows in the chat. The cost it shows is Claude Code's own estimate for the session, not a bill. If another marketplace is already registered under the name `project-brain`, setup reports the unit as foreign and leaves it alone; other plugins' settings are never touched. Mods need Claude Code 2.1.287 or later, and do not load when `disableAllHooks` is set.
+
+**Compact skill listing.** Claude Code sends the model a listing of every installed skill, one line with its description each, at the start of every session and every subagent: about 7,500 tokens for 136 skills. The `project-brain-skill-listing` mod rewrites that listing so every name stays but most descriptions go, in one of two modes:
+
+- **With the Jev picker** (a TypeSafe token, the picker on, and the suggest hook installed): every skill is listed by name only, except your general-use skills. The suggest hook then brings in, per prompt, the full description of each skill the work needs (see [Skill suggestions](#skill-suggestions)). Delegations get the same treatment: when the main session calls the Agent tool, the mod runs `project-brain suggest --agent --stdin` on the task's description and prompt (one Jev request, same floor and ceiling) and appends the picked skills, with their full descriptions, to the subagent's prompt; with no token, a Jev failure or past the 5 s budget, the prompt goes out unchanged. A subagent's own listing follows the same names-only rule.
+- **Without it**: your general-use skills, the `brain-*` skills, the 15 you invoked most in the last 30 days and any you used in the last 7 keep their description; the rest are names. With no usage numbers yet, the listing is left as it is.
+
+Usage numbers come from `project-brain skill-usage --write`, which counts Skill tool calls and slash commands in `~/.claude/projects/**/*.jsonl` from the last 30 days (newest first, at most 8 GiB read, a call copied into a resumed session counted once) and writes `~/.project-brain/skill-usage.json`. Setup runs it on install; the mod reruns it at session start when the file is a day old. `project-brain skill-usage` alone prints the counts and writes nothing. The mod only rewrites the listing Claude Code itself wrote, and on any failure passes the text through unchanged.
+
+General-use skills keep their full line in every mode and are never suggested by Jev, so nothing is said twice. Setup asks for them each time it installs or updates the unit, as a multiselect of your installed skills with the most used marked as suggestions (never pre-ticked); the default is none. You can also edit the file by hand; every key is optional:
+
+```json
+{
+  "general": ["brain-style", "superpowers:brainstorming"],
+  "picker": true,
+  "pickCeiling": 10,
+  "keepTop": 15,
+  "keepRecentDays": 7
+}
+```
+
+`picker: false` (or `BRAIN_SKILL_PICKER=0`) turns off the per-prompt and per-delegation skill picks, and the listing falls back to the usage mode. `keepTop` and `keepRecentDays` only matter in that mode.
 
 #### Worktree lifecycle
 
@@ -749,7 +771,8 @@ BRAIN_HTTP_TOKEN=your-secret project-brain serve --http [--port 3000]
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL |
 | `BRAIN_NO_UPDATE_CHECK` | — | Set to `1` to disable the update-available notice |
 | `BRAIN_CONCEPT_MODEL` | `claude-haiku-5-5` | Anthropic model id `conceptualize` uses to write module concepts. Read on each call. Same credentials as `--judge` (`ANTHROPIC_API_KEY` or `ant auth login`). |
-| `BRAIN_SKILL_PICKER` | on | Set to `0` to turn off the Jev skill suggestion the global suggest hook prints — see [Skill suggestions](#skill-suggestions). |
+| `BRAIN_SKILL_PICKER` | on | Set to `0` to turn off the Jev skill suggestions the global suggest hook prints, and the per-delegation picks — see [Skill suggestions](#skill-suggestions). Wins over `picker` in `~/.project-brain/skills.json`. |
+| `BRAIN_SKILL_PICK_MAX` | `10` | Safety ceiling on skills suggested for one prompt or delegation; wins over `pickCeiling` in `~/.project-brain/skills.json`. |
 | `TYPESAFE_API_KEY` | — | Opt-in Jev reranker token — see [Reranking (optional)](#reranking-optional). Checked before `~/.project-brain/reranker.json`; a SessionStart hook exports the stored token under this name to Claude Code sessions. |
 
 ## Tuning (environment variables)

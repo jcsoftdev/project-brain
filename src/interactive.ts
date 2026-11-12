@@ -105,6 +105,34 @@ export async function promptRerankerToken(): Promise<string | null> {
   return answer;
 }
 
+export interface GeneralSkillOption {
+  name: string;
+  /** Recent invocations, shown as a suggestion; it never ticks the box by itself. */
+  uses?: number;
+}
+
+/**
+ * The general-use skills for the compact skill listing: a multiselect of installed skills, the
+ * ones in `current` ticked, the most used listed first with their count. Null when not interactive
+ * or cancelled, which leaves the saved list as it is.
+ */
+export async function promptGeneralSkills(options: GeneralSkillOption[], current: string[]): Promise<string[] | null> {
+  if (!isInteractive() || options.length === 0) return null;
+  const clack = await import("@clack/prompts");
+  const answer = await clack.multiselect({
+    message: "General-use skills: these keep their full description in every session (space toggles, enter confirms)",
+    options: options.map((option) => ({
+      value: option.name,
+      label: option.name,
+      ...(option.uses ? { hint: `suggested: used ${option.uses}× in the last 30 days` } : {}),
+    })),
+    initialValues: current.filter((name) => options.some((option) => option.name === name)),
+    required: false,
+  });
+  if (clack.isCancel(answer)) return null;
+  return answer as string[];
+}
+
 /** One prompt's worth of rows: the group, what it is, and what can be ticked. */
 export interface PromptSection {
   group: string;

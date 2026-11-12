@@ -1,0 +1,7 @@
+{
+  "name": "project-brain-skill-listing",
+  "version": "0.1.0",
+  "description": "Lists most skills by name only in the session's skill listing; the Jev picker brings each prompt's skills in full, or, without it, the skills you use most keep their description.",
+  "author": { "name": "jcsoftdev" },
+  "types": "./types/index.d.ts"
+}

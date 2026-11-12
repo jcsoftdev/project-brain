@@ -54,6 +54,14 @@ export interface SetupContext {
    * session (see `isInteractive`).
    */
   promptRerankerToken?: () => Promise<string | null>;
+  /**
+   * Injectable for testing; defaults to `promptGeneralSkills` from `src/interactive.js`, which only
+   * prompts in a genuine interactive session. Null keeps the saved general-use list.
+   */
+  promptGeneralSkills?: (
+    options: import("../interactive.js").GeneralSkillOption[],
+    current: string[]
+  ) => Promise<string[] | null>;
   /** Set when re-applying a saved selection: an MCP entry that already exists is not rewritten. */
   keepRegistration?: boolean;
 }
@@ -1699,5 +1707,77 @@ export function claudeTuiUnits(): SetupUnit[] {
         await removeSection(claudeMdOf(ctx), READABLE_REPLIES_SECTION_ID);
       },
     },
+
+    skillListingUnit(),
   ];
+}
+
+/** Where Claude Code keeps its transcripts, beside the settings file so a redirected one stays redirected. */
+const projectsRootOf = (ctx: SetupContext) => join(dirname(ctx.claudeSettingsPath), "projects");
+
+/** Installed skills for the general-use prompt, the most used first: a suggestion, never a tick. */
+async function generalSkillOptions(ctx: SetupContext): Promise<import("../interactive.js").GeneralSkillOption[]> {
+  const { discoverSkills } = await import("../skills/discovery.js");
+  const { readSkillUsage } = await import("../skills/usage.js");
+  const home = dirname(dirname(ctx.claudeSettingsPath));
+  const skills = await discoverSkills({ home, projectDir: process.cwd(), cacheDir: ctx.dataDir }).catch(() => []);
+  const usage = (await readSkillUsage(ctx.dataDir))?.skills ?? {};
+  return skills
+    .map((skill) => ({ name: skill.name, uses: usage[skill.name]?.count }))
+    .sort((a, b) => (b.uses ?? 0) - (a.uses ?? 0) || a.name.localeCompare(b.name));
+}
+
+function skillListingUnit(): SetupUnit {
+  return {
+    id: "tui:skill-listing",
+    group: "Claude TUI",
+    label: "Compact skill listing",
+    description:
+      "installs the project-brain-skill-listing mod, which lists skills by name only in each session's skill listing (all names stay): " +
+      "with a Jev token the suggest hook brings each prompt's skills in full; without one, the brain-* skills and those you used most in 30 days keep their description. " +
+      "Asks for your general-use skills, which always keep it (~/.project-brain/skills.json); untick to remove the mod",
+    // Unchecked, unlike its siblings: it changes what the model knows about every skill, trading
+    // descriptions for tokens, and a skill reduced to its name is easier to overlook. That trade is
+    // the user's to make.
+    defaultSelected: false,
+
+    async inspect(ctx): Promise<UnitState> {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable") return "foreign";
+      const { modState, SKILL_LISTING_MOD } = await import("./claude-tui.js");
+      return modState(settings, ctx.dataDir, SKILL_LISTING_MOD);
+    },
+
+    async apply(ctx): Promise<void> {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable") {
+        console.warn(`Warning: ${ctx.claudeSettingsPath} is not valid JSON — compact skill listing not installed.`);
+        return;
+      }
+      const { installMod, modState, SKILL_LISTING_MOD } = await import("./claude-tui.js");
+      if ((await modState(settings, ctx.dataDir, SKILL_LISTING_MOD)) === "foreign") return;
+
+      const { refreshSkillUsage } = await import("../skills/usage.js");
+      await refreshSkillUsage({ dataDir: ctx.dataDir, projectsRoot: projectsRootOf(ctx) }).catch(() => null);
+
+      const { readSkillsConfig, writeGeneralList } = await import("../skills/config.js");
+      const prompt = ctx.promptGeneralSkills ?? (await import("../interactive.js")).promptGeneralSkills;
+      const general = await prompt(await generalSkillOptions(ctx), readSkillsConfig(ctx.dataDir, {}).general);
+      if (general !== null) await writeGeneralList(ctx.dataDir, general);
+
+      const next = await installMod(settings, ctx.dataDir, SKILL_LISTING_MOD);
+      await mkdir(dirname(ctx.claudeSettingsPath), { recursive: true });
+      await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+    },
+
+    async remove(ctx): Promise<void> {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable" || settings === null) return;
+      const { uninstallMod, SKILL_LISTING_MOD } = await import("./claude-tui.js");
+      const next = await uninstallMod(settings, ctx.dataDir, SKILL_LISTING_MOD);
+      if (next !== settings) await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+      const { skillUsagePath } = await import("../skills/usage.js");
+      await rm(skillUsagePath(ctx.dataDir), { force: true });
+    },
+  };
 }
