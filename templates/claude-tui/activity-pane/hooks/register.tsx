@@ -1450,6 +1450,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     return [
       ...lead,
       ...stepRows(steps),
+      ...tail,
       ...(lastCommand ? [blank('gap-last'), ...section(`last-cmd-${scope}`, 'Último comando', true, () => commandRows(lastCommand, `last-${scope}`))] : []),
       blank('gap-changes'),
       divider('div-changes'),
@@ -1499,7 +1500,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     spans: [span(` ${label}${look ? ' ' : ' '}`, { inverse: isOn, bold: isOn }), ...(look ? [span(`${look.icon} `, { color: look.color, inverse: isOn })] : []), span(' ')],
   })
 
-  const header: Row[] = [{ key: 'title', cells: [{ spans: [span('ACTIVIDAD', { bold: true })] }], right: [...(status ? [status] : []), ...headerRunning(snap.running), ...headerBlocked(snap.blocked, snap.running.now)] }]
+  const header: Row[] = [{ key: 'title', cells: [{ spans: [span('ACTIVIDAD', { bold: true })] }], right: [status ? [status] : [], headerRunning(snap.running), headerBlocked(snap.blocked, snap.running.now)].filter(one => one.length > 0).flatMap((one, index) => (index === 0 ? one : [span('  '), ...one])) }]
   if (records.length > 0) {
     header.push({
       key: 'agents',
@@ -1813,6 +1814,12 @@ async function mainToolCall($: Api, e: Parameters<Hook<'tool.call'>>[1], next: P
   return ran
 }
 
+/** A `next` that runs at most once: later calls get the first call's settled result. */
+const onceNext = <T,>(next: (input: T) => unknown): ((input: T) => Promise<unknown>) => {
+  let first: Promise<unknown> | undefined
+  return input => (first ??= Promise.resolve(next(input)))
+}
+
 export const register: Register = on => {
   registerAgents(on)
   registerCi(on)
@@ -2059,15 +2066,27 @@ export const register: Register = on => {
       return (
         <Box key={row.key} flexDirection="row" justifyContent="space-between" width={width}>
           {left}
-          <Text>{spansOf(row.right.length > 0 ? row.right : [span(' ')])}</Text>
+          <Text wrap="truncate-end">{spansOf(row.right.length > 0 ? row.right : [span(' ')])}</Text>
         </Box>
       )
     }
 
     return <Box flexDirection="column" width={width} height={Math.max(1, e.props.scroll.bodyRows)} backgroundColor={PANE_BG}>{frame.rows.map(rowOf)}</Box>
   })
-  on('session.start', async ($, e, next) => ciSessionStart($, e, ((e1: typeof e) => contextSessionStart($, e1, ((e2: typeof e) => progressSessionStart($, e2, ((e3: typeof e) => runningSessionStart($, e3, ((e4: typeof e) => mainSessionStart($, e4, next)) as never)) as never)) as never)) as never))
-  on('turn.start', async ($, e, next) => blockedTurnStart($, e, ((e1: typeof e) => mainTurnStart($, e1, next)) as never))
-  on('turn.complete', async ($, e, next) => agentsTurnComplete($, e, ((e1: typeof e) => contextTurnComplete($, e1, ((e2: typeof e) => progressTurnComplete($, e2, ((e3: typeof e) => mainTurnComplete($, e3, next)) as never)) as never)) as never))
-  on('tool.call', async ($, e, next) => blockedToolCall($, e, ((e1: typeof e) => progressToolCall($, e1, ((e2: typeof e) => runningToolCall($, e2, ((e3: typeof e) => mainToolCall($, e3, next)) as never)) as never)) as never))
+  on('session.start', async ($, e, next) => {
+    const once = onceNext(next as never)
+    return ciSessionStart($, e, ((e1: typeof e) => contextSessionStart($, e1, ((e2: typeof e) => progressSessionStart($, e2, ((e3: typeof e) => runningSessionStart($, e3, ((e4: typeof e) => mainSessionStart($, e4, once as never).catch(() => once(e4))) as never)) as never)) as never)) as never)
+  })
+  on('turn.start', async ($, e, next) => {
+    const once = onceNext(next as never)
+    return blockedTurnStart($, e, ((e1: typeof e) => mainTurnStart($, e1, once as never).catch(() => once(e1))) as never)
+  })
+  on('turn.complete', async ($, e, next) => {
+    const once = onceNext(next as never)
+    return agentsTurnComplete($, e, ((e1: typeof e) => contextTurnComplete($, e1, ((e2: typeof e) => progressTurnComplete($, e2, ((e3: typeof e) => mainTurnComplete($, e3, once as never).catch(() => once(e3))) as never)) as never)) as never)
+  })
+  on('tool.call', async ($, e, next) => {
+    const once = onceNext(next as never)
+    return blockedToolCall($, e, ((e1: typeof e) => progressToolCall($, e1, ((e2: typeof e) => runningToolCall($, e2, ((e3: typeof e) => mainToolCall($, e3, once as never).catch(() => once(e3))) as never)) as never)) as never)
+  })
 }
