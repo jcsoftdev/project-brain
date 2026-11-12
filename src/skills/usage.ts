@@ -1,4 +1,4 @@
-import { mkdir, open, readdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
 
@@ -164,6 +164,22 @@ export async function readSkillUsage(dataDir: string): Promise<SkillUsage | null
   }
 }
 
+/**
+ * Creates the lock exclusively. A stale one is taken over by renaming it aside first: only one of
+ * several refreshes racing for it can win the rename, so only one deletes it and retries.
+ */
+async function claimLock(lock: string, now: number): Promise<boolean> {
+  const create = () => open(lock, "wx").then((handle) => handle.close().then(() => true), () => false);
+  if (await create()) return true;
+  const age = await stat(lock).then((st) => now - st.mtimeMs, () => null);
+  if (age === null || age < LOCK_STALE_MS) return false;
+  const aside = `${lock}.${process.pid}.stale`;
+  const tookOver = await rename(lock, aside).then(() => true, () => false);
+  if (!tookOver) return false;
+  await rm(aside, { force: true });
+  return create();
+}
+
 export interface RefreshOptions extends ScanOptions {
   dataDir: string;
   /** Skip the scan when the file is younger than this. Zero always scans. */
@@ -180,14 +196,9 @@ export async function refreshSkillUsage(opts: RefreshOptions): Promise<SkillUsag
   if (existing && now - existing.generatedAt < (opts.maxAgeMs ?? USAGE_MAX_AGE_MS)) return null;
 
   const lock = `${skillUsagePath(opts.dataDir)}.lock`;
-  const lockAge = await stat(lock).then((st) => now - st.mtimeMs, () => null);
-  if (lockAge !== null && lockAge < LOCK_STALE_MS) return null;
-  if (lockAge !== null) await rm(lock, { force: true });
   await mkdir(opts.dataDir, { recursive: true });
-  const handle = await open(lock, "wx").catch(() => null);
-  if (!handle) return null;
+  if (!(await claimLock(lock, now))) return null;
   try {
-    await handle.close();
     const usage = await scanSkillUsage({ ...opts, now });
     await writeFileAtomic(skillUsagePath(opts.dataDir), `${JSON.stringify(usage, null, 2)}\n`);
     return usage;

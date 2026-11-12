@@ -100,6 +100,35 @@ describe("refreshSkillUsage", () => {
     await writeFile(`${skillUsagePath(dataDir)}.lock`, "");
     expect(await refreshSkillUsage({ dataDir, projectsRoot: projects })).toBeNull();
   });
+
+  it("takes over a stale lock, and only one of two racing refreshes scans", async () => {
+    await transcript("-repo/a.jsonl", [skillCall("t1", "brain-okf", 0)]);
+    await mkdir(dataDir, { recursive: true });
+    const lock = `${skillUsagePath(dataDir)}.lock`;
+    await writeFile(lock, "");
+    const old = new Date(Date.now() - 60 * 60_000);
+    await utimes(lock, old, old);
+    const results = await Promise.all([refreshSkillUsage({ dataDir, projectsRoot: projects }), refreshSkillUsage({ dataDir, projectsRoot: projects })]);
+    expect(results.filter((r) => r !== null)).toHaveLength(1);
+  });
+});
+
+describe("skill-usage command transcripts root", () => {
+  it("follows CLAUDE_CONFIG_DIR", async () => {
+    const configDir = join(dir, "claude-config");
+    await mkdir(join(configDir, "projects", "-repo"), { recursive: true });
+    await writeFile(join(configDir, "projects", "-repo", "s.jsonl"), `${skillCall("c1", "from-config-dir", 0)}\n`);
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const out: string[] = [];
+    try {
+      await execute([], { dataDir, log: (l) => out.push(l) });
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+    }
+    expect(out.join("\n")).toContain("from-config-dir");
+  });
 });
 
 describe("skill-usage command", () => {

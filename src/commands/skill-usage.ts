@@ -29,7 +29,7 @@ export async function execute(args: string[], deps: SkillUsageDeps = {}): Promis
   const log = deps.log ?? console.log;
   if (args.includes("--help") || args.includes("-h")) return log(USAGE);
   const dataDir = deps.dataDir ?? DATA_DIR;
-  const projectsRoot = deps.projectsRoot ?? join(homedir(), ".claude", "projects");
+  const projectsRoot = deps.projectsRoot ?? join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects");
 
   if (!args.includes("--write")) {
     const usage = await scanSkillUsage({ projectsRoot });
