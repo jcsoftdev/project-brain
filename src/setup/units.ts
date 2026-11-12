@@ -1709,6 +1709,7 @@ export function claudeTuiUnits(): SetupUnit[] {
     },
 
     skillListingUnit(),
+    contextGateUnit(),
   ];
 }
 
@@ -1779,6 +1780,48 @@ function skillListingUnit(): SetupUnit {
       if (next !== settings) await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
       const { skillUsagePath } = await import("../skills/usage.js");
       await rm(skillUsagePath(ctx.dataDir), { force: true });
+    },
+  };
+}
+
+function contextGateUnit(): SetupUnit {
+  return {
+    id: "tui:context-gate",
+    group: "Claude TUI",
+    label: "Context gate",
+    description:
+      "installs the project-brain-context-gate mod: before context another hook injects reaches the model, Jev judges whether this prompt needs it, " +
+      "and what it does not need is left out (~/.project-brain/context-gate-log.json lists what was dropped). " +
+      "engram, project-brain and the signatures you list under contextAllow in ~/.project-brain/skills.json are never filtered; " +
+      "every answer is replayed on resume so the prompt cache holds. Needs a Jev token; untick to remove the mod",
+    defaultSelected: false,
+
+    async inspect(ctx): Promise<UnitState> {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable") return "foreign";
+      const { modState, CONTEXT_GATE_MOD } = await import("./claude-tui.js");
+      return modState(settings, ctx.dataDir, CONTEXT_GATE_MOD);
+    },
+
+    async apply(ctx): Promise<void> {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable") {
+        console.warn(`Warning: ${ctx.claudeSettingsPath} is not valid JSON — context gate not installed.`);
+        return;
+      }
+      const { installMod, modState, CONTEXT_GATE_MOD } = await import("./claude-tui.js");
+      if ((await modState(settings, ctx.dataDir, CONTEXT_GATE_MOD)) === "foreign") return;
+      const next = await installMod(settings, ctx.dataDir, CONTEXT_GATE_MOD);
+      await mkdir(dirname(ctx.claudeSettingsPath), { recursive: true });
+      await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+    },
+
+    async remove(ctx): Promise<void> {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable" || settings === null) return;
+      const { uninstallMod, CONTEXT_GATE_MOD } = await import("./claude-tui.js");
+      const next = await uninstallMod(settings, ctx.dataDir, CONTEXT_GATE_MOD);
+      if (next !== settings) await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
     },
   };
 }

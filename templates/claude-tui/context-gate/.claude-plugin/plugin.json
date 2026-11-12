@@ -1,0 +1,7 @@
+{
+  "name": "project-brain-context-gate",
+  "version": "0.1.0",
+  "description": "Asks Jev whether the context other hooks inject is needed for the prompt at hand, leaves out what is not, and replays every answer on resume so the prompt cache holds.",
+  "author": { "name": "jcsoftdev" },
+  "types": "./types/index.d.ts"
+}
