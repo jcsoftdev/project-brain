@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { runSearch } from "../../src/commands/search.js";
 import { NullEmbeddingClient } from "../../src/embeddings/null.js";
 import { pickSkill } from "../../src/skills/picker.js";
+import { jevReply } from "../helpers/jev-fake.js";
 import { cosine, rankSkillsSemantic, type SharedQuery } from "../../src/skills/semantic.js";
 import type { SkillInfo } from "../../src/skills/discovery.js";
 import type { EmbeddingClient, VectorStore } from "../../src/types.js";
@@ -52,10 +53,9 @@ function jev(choice: string) {
   return {
     calls,
     fetchFn: async (_url: string, init: RequestInit) => {
-      calls.push(JSON.parse(init.body as string));
-      return new Response(
-        JSON.stringify({ answers: { pick: { choice, confidence: 0.9, probabilities: { [choice]: 0.9, none: 0.1 } } } })
-      );
+      const body = JSON.parse(init.body as string);
+      calls.push(body);
+      return jevReply(body, { [choice]: 0.9 });
     },
   };
 }

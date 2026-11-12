@@ -7,6 +7,8 @@ import {
   SKILL_CONFIDENCE_THRESHOLD,
 } from "../../src/skills/picker.js";
 import type { SkillInfo } from "../../src/skills/discovery.js";
+import { DEFAULT_SKILLS_CONFIG } from "../../src/skills/config.js";
+import { jevReply } from "../helpers/jev-fake.js";
 
 const SKILLS: SkillInfo[] = [
   { name: "brain-commit", description: "Writes a git commit message in the repository convention" },
@@ -16,11 +18,9 @@ const SKILLS: SkillInfo[] = [
 
 const PROMPT = "please write the git commit message for these changes";
 
-function jevResponse(choice: string, p: number): Response {
-  return new Response(
-    JSON.stringify({ answers: { pick: { choice, confidence: p, probabilities: { [choice]: p, none: 1 - p } } } })
-  );
-}
+/** Answers every skill judgment in the request: `scores` by name, anything else well under the floor. */
+const scoring = (scores: Record<string, number>) => async (_url: string, init: RequestInit) =>
+  jevReply(JSON.parse(init.body as string), scores);
 
 function deps(over: Record<string, unknown> = {}) {
   const calls: Array<{ url: string; body: any }> = [];
@@ -31,9 +31,10 @@ function deps(over: Record<string, unknown> = {}) {
       env: {},
       getToken: async () => "secret-token",
       discover: async () => SKILLS,
+      skillsConfig: DEFAULT_SKILLS_CONFIG,
       fetchFn: async (url: string, init: RequestInit) => {
         calls.push({ url, body: JSON.parse(init.body as string) });
-        return jevResponse("brain-commit", 0.93);
+        return jevReply(JSON.parse(init.body as string), { "brain-commit": 0.93 });
       },
       ...over,
     },
@@ -63,7 +64,7 @@ describe("pickSkill", () => {
     expect(line).toStartWith("Suggested skill: brain-commit — ");
     expect(calls).toHaveLength(1);
     expect(calls[0]!.body.state.prompt).toBe(PROMPT);
-    expect(Object.keys(calls[0]!.body.questions.pick.criteria)).toContain("none");
+    expect(calls[0]!.body.questions.skill_0.type).toBe("noul");
   });
 
   it("truncates descriptions sent to Jev", async () => {
@@ -75,12 +76,12 @@ describe("pickSkill", () => {
 
   it("stays silent below the confidence threshold", async () => {
     const p = SKILL_CONFIDENCE_THRESHOLD - 0.05;
-    const { deps: d } = deps({ fetchFn: async () => jevResponse("brain-commit", p) });
+    const { deps: d } = deps({ fetchFn: scoring({ "brain-commit": p }) });
     expect(await pickSkill(PROMPT, d)).toBeNull();
   });
 
   it("stays silent when none wins", async () => {
-    const { deps: d } = deps({ fetchFn: async () => jevResponse("none", 0.95) });
+    const { deps: d } = deps({ fetchFn: scoring({}) });
     expect(await pickSkill(PROMPT, d)).toBeNull();
   });
 
@@ -152,7 +153,9 @@ describe("task-switch question", () => {
         return new Response(
           JSON.stringify({
             answers: {
-              pick: { choice: "brain-commit", confidence: 0.9, probabilities: { "brain-commit": 0.9, none: 0.1 } },
+              skill_0: { noul: 0.9 },
+              skill_1: { noul: 0.1 },
+              skill_2: { noul: 0.1 },
               switch: { choice: "new_task", confidence: 0.85, probabilities: { new_task: 0.85, same_task: 0.15 } },
             },
           })
