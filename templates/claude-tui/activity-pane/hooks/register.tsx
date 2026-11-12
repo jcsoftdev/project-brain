@@ -1,5 +1,23 @@
 import { atom, read, update } from 'claude-code'
 import type { Hook, Register } from 'claude-code'
+import { actAgents, agentChipsGrouped, readAgents, registerAgents, rowsAgentReport } from './feat-agents'
+import { agentsTurnComplete } from './feat-agents'
+import type { AgentsAction, AgentsPart } from './feat-agents'
+import { footerCi, readCi, registerCi, rowsCi } from './feat-ci'
+import { ciSessionStart } from './feat-ci'
+import type { CiPart } from './feat-ci'
+import { footerContext, readContext, registerContext, rowsContext } from './feat-context'
+import { contextSessionStart, contextTurnComplete } from './feat-context'
+import type { ContextPart } from './feat-context'
+import { footerProgress, readProgress, registerProgress, rowsProgress } from './feat-progress'
+import { progressSessionStart, progressToolCall, progressTurnComplete } from './feat-progress'
+import type { ProgressPart } from './feat-progress'
+import { headerRunning, readRunning, registerRunning, rowsRunning } from './feat-running'
+import { runningSessionStart, runningToolCall } from './feat-running'
+import type { RunningPart } from './feat-running'
+import { headerBlocked, readBlocked, registerBlocked, rowsBlocked } from './feat-blocked'
+import { blockedToolCall, blockedTurnStart } from './feat-blocked'
+import type { BlockedPart } from './feat-blocked'
 
 import type {
   AgentRecord,
@@ -28,7 +46,7 @@ import type {
 
 const PANE = 'activity'
 const PANE_ARGS = { id: PANE, title: 'Actividad', columns: 1000 } as const
-const MAIN = 'main'
+export const MAIN = 'main'
 const KEEP = 300
 const OUTPUT_LINES = 40
 const DIFF_LINES = 120
@@ -170,7 +188,7 @@ const commitCalls = atom({ plugin: 'project-brain-activity', key: 'commitCalls' 
 const history = atom({ plugin: 'project-brain-activity', key: 'history' } as const, { state: 'idle', rows: [], more: 0, loadedAt: 0 } as HistoryView, { shape: 'history-1' })
 const historyFiles = atom({ plugin: 'project-brain-activity', key: 'historyFiles' } as const, {} as Record<string, HistoryFiles>, { shape: 'history-files-1' })
 
-type Api = Parameters<Hook<'turn.complete'>>[0]
+export type Api = Parameters<Hook<'turn.complete'>>[0]
 
 // Timers are not drawn state: a reload dropping them only loses one debounce.
 let refreshTimer: { cancel: () => void } | undefined
@@ -466,7 +484,7 @@ export type RunResult = { exitCode: number; stdout: string; stderr: string }
 export type Run = (argv: readonly string[], init?: { cwd?: string; timeoutMs?: number; stdin?: string }) => Promise<RunResult>
 export type ReadText = (path: string) => Promise<string>
 
-const quietly = (run: Run, argv: readonly string[], cwd?: string, stdin?: string): Promise<RunResult | undefined> =>
+export const quietly = (run: Run, argv: readonly string[], cwd?: string, stdin?: string): Promise<RunResult | undefined> =>
   run(argv, cwd === undefined && stdin === undefined ? undefined : { ...(cwd === undefined ? {} : { cwd }), ...(stdin === undefined ? {} : { stdin }) }).catch(() => undefined)
 
 export const gitTop = async (run: Run, cwd?: string): Promise<string | undefined> => {
@@ -1026,6 +1044,7 @@ export type Action =
   | { kind: 'diff'; target: DiffTarget }
   | { kind: 'open'; target: DiffTarget }
   | { kind: 'commit'; sha: string }
+  | AgentsAction
 export type Cell = { spans: Span[]; action?: Action; label?: string; key?: string }
 export type Row = { key: string; cells: Cell[]; right?: Span[] }
 
@@ -1049,11 +1068,17 @@ export type Snapshot = {
   view: PaneScroll
   historyView: HistoryView
   historyFiles: Record<string, HistoryFiles>
+  agentsPart: AgentsPart
+  ci: CiPart
+  contextPart: ContextPart
+  progress: ProgressPart
+  running: RunningPart
+  blocked: BlockedPart
 }
 
 export type PaneModel = { header: Row[]; body: Row[]; footer: Row[]; scope: string; cambios: CambiosScope; tab: Tab }
 
-type Look = { icon: string; color: Tone }
+export type Look = { icon: string; color: Tone }
 
 const STATUS_LOOK: Record<CallStatus, Look> = {
   running: { icon: ICONS.running, color: 'warning' },
@@ -1063,7 +1088,7 @@ const STATUS_LOOK: Record<CallStatus, Look> = {
   interrupted: { icon: ICONS.interrupted, color: 'subtle' },
 }
 
-const AGENT_LOOK: Record<AgentState, Look & { label: string }> = {
+export const AGENT_LOOK: Record<AgentState, Look & { label: string }> = {
   running: { icon: ICONS.running, color: 'warning', label: 'ejecutando' },
   done: { icon: ICONS.ok, color: 'success', label: 'terminó' },
   failed: { icon: ICONS.error, color: 'error', label: 'falló' },
@@ -1092,7 +1117,7 @@ const SCOPE_LABELS: { value: CambiosScope; icon: string; label: string }[] = [
   { value: 'branch', icon: ICONS.branch, label: 'Rama' },
 ]
 
-const span = (value: string, style: Omit<Span, 'text'> = {}): Span => ({ text: value, ...style })
+export const span = (value: string, style: Omit<Span, 'text'> = {}): Span => ({ text: value, ...style })
 
 const touches = (change: FileChange, edited: string[]): boolean =>
   edited.some(path => path === change.path || path.endsWith(`/${change.path}`))
@@ -1416,8 +1441,14 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
 
   const summaryRows = (): Row[] => {
     const steps = groupSteps(scoped)
-    if (steps.length === 0) return [line('empty', 'Sin actividad todavía.', { dim: true })]
+    const ctx = { width, accent, isOpen }
+    const live = scope === MAIN ? [...rowsProgress(snap.progress, ctx), ...rowsRunning(snap.running, ctx), ...rowsBlocked(snap.blocked, ctx)] : rowsRunning(snap.running, ctx)
+    const lead = live.length > 0 ? [...live, blank('gap-live')] : []
+    const contextRows = scope === MAIN ? rowsContext(snap.contextPart, ctx) : []
+    const tail = contextRows.length > 0 ? [blank('gap-context'), ...contextRows] : []
+    if (steps.length === 0) return [...lead, line('empty', 'Sin actividad todavía.', { dim: true }), ...tail]
     return [
+      ...lead,
       ...stepRows(steps),
       ...(lastCommand ? [blank('gap-last'), ...section(`last-cmd-${scope}`, 'Último comando', true, () => commandRows(lastCommand, `last-${scope}`))] : []),
       blank('gap-changes'),
@@ -1452,7 +1483,8 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     ]
   }
 
-  const body = current === 'diff' ? cambiosRows() : current === 'commands' ? commandsTabRows() : current === 'history' ? historyTabRows() : summaryRows()
+  const ciRows = rowsCi(snap.ci, { width, accent, isOpen })
+  const body = current === 'diff' ? [...ciRows, ...(ciRows.length > 0 ? [blank('gap-ci')] : []), ...cambiosRows()] : current === 'commands' ? commandsTabRows() : current === 'history' ? historyTabRows() : summaryRows()
 
   const status = waiting
     ? span(`${ICONS.waiting} esperando respuesta`, { color: 'warning' })
@@ -1467,17 +1499,11 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     spans: [span(` ${label}${look ? ' ' : ' '}`, { inverse: isOn, bold: isOn }), ...(look ? [span(`${look.icon} `, { color: look.color, inverse: isOn })] : []), span(' ')],
   })
 
-  const header: Row[] = [{ key: 'title', cells: [{ spans: [span('ACTIVIDAD', { bold: true })] }], right: status ? [status] : [] }]
+  const header: Row[] = [{ key: 'title', cells: [{ spans: [span('ACTIVIDAD', { bold: true })] }], right: [...(status ? [status] : []), ...headerRunning(snap.running), ...headerBlocked(snap.blocked, snap.running.now)] }]
   if (records.length > 0) {
     header.push({
       key: 'agents',
-      cells: agentStrip(
-        chip(`agent-${MAIN}`, 'Principal', scope === MAIN, { kind: 'agent', id: MAIN }),
-        records.map(one => chip(`agent-${one.id}`, shortName(one), scope === one.id, { kind: 'agent', id: one.id }, AGENT_LOOK[one.state])),
-        records.findIndex(one => one.id === scope),
-        records.map(one => one.id),
-        width,
-      ),
+      cells: agentChipsGrouped({ records, scope, expanded: snap.agentsPart.expanded, width }),
     })
   }
   if (agent) {
@@ -1485,6 +1511,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     header.push(
       { key: 'agent-head', cells: [{ spans: [span(`${ICONS.agent} ${shortName(agent)}`, { color: accent, bold: true }), span(` · ${agent.id.slice(0, 4)} · `, { dim: true }), span(look.label, { color: look.color })] }] },
       line('agent-task', agent.description, { dim: true }),
+      ...rowsAgentReport(agent, snap.agentsPart.reports[agent.id], width),
     )
   }
   header.push({
@@ -1527,6 +1554,8 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     ),
     contextRow('footer-context', ''),
   ]
+  const extra = [...footerProgress(snap.progress), ...footerCi(snap.ci), ...footerContext(snap.contextPart)]
+  if (extra.length > 0) footer.push({ key: 'footer-extra', cells: [{ spans: extra.flatMap((one, index) => (index === 0 ? [one] : [span('  '), one])) }] })
 
   return { header, body, footer, scope, cambios, tab: current }
 }
@@ -1554,15 +1583,16 @@ export const paneFrame = (model: PaneModel, bodyRows: number, view: PaneScroll, 
 
 // ---------------------------------------------------------------- hooks
 
-const runOf = ($: Api): Run => (argv, init) => $.process.run(argv, init)
+export const runOf = ($: Api): Run => (argv, init) => $.process.run(argv, init)
 
 const readSnapshot = async ($: Api): Promise<Snapshot> => {
-  const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps, historyView, historyFilesBySha, accent] = await Promise.all([
+  const [list, tabByAgent, flipped, files, usd, context, opened, patches, records, picked, isWorking, view, commitList, scopeByAgent, branchView, steps, historyView, historyFilesBySha, accent, agentsPart, ci, contextPart, progress, running, blocked] = await Promise.all([
     read($, entries), read($, tabs), read($, toggled), read($, changes), read($, costUsd), read($, contextUsage), read($, openFiles), read($, diffs),
     read($, agents), read($, pickedAgent), read($, working), read($, scroll), read($, commits), read($, scopes), read($, branch), read($, stepContext),
     read($, history), read($, historyFiles), read($, accentColor),
+    readAgents($), readCi($), readContext($), readProgress($), readRunning($), readBlocked($),
   ])
-  return { accent, list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view, historyView, historyFiles: historyFilesBySha }
+  return { accent, list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view, historyView, historyFiles: historyFilesBySha, agentsPart, ci, contextPart, progress, running, blocked }
 }
 
 /** Fills in the line counts and files of up to ten commits that have none yet. */
@@ -1627,16 +1657,169 @@ const scheduleRescan = ($: Api): void => {
 export const sessionStartOf = (stored: number, now: number, list: ToolEntry[], known: CommitRecord[]): number =>
   stored > 0 ? stored : Math.min(now, ...list.map(one => one.startedAt), ...known.map(one => one.at))
 
-export const register: Register = on => {
-  on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'activity', description: 'Abre el panel de actividad' })
-    const [stored, list, known] = await Promise.all([read($, sessionStart), read($, entries), read($, commits)])
-    const now = await $.clock.now()
-    await update($, sessionStart, () => sessionStartOf(stored, now, list, known))
+async function mainSessionStart($: Api, e: Parameters<Hook<'session.start'>>[1], next: Parameters<Hook<'session.start'>>[2]): Promise<Awaited<ReturnType<Hook<'session.start'>>>> {
+  await $.command.register({ name: 'activity', description: 'Abre el panel de actividad' })
+  const [stored, list, known] = await Promise.all([read($, sessionStart), read($, entries), read($, commits)])
+  const now = await $.clock.now()
+  await update($, sessionStart, () => sessionStartOf(stored, now, list, known))
+  scheduleRescan($ as Api)
+  void refreshAccent($ as Api).catch(() => undefined)
+  return next(e)
+}
+
+async function mainTurnStart($: Api, e: Parameters<Hook<'turn.start'>>[1], next: Parameters<Hook<'turn.start'>>[2]): Promise<Awaited<ReturnType<Hook<'turn.start'>>>> {
+  const loopId = e.agentId
+  if (loopId === undefined) await update($, working, () => true)
+  else await update($, agents, list => setAgentState(list, loopId, 'running'))
+  return next(e)
+}
+
+async function mainTurnComplete($: Api, e: Parameters<Hook<'turn.complete'>>[1], next: Parameters<Hook<'turn.complete'>>[2]): Promise<Awaited<ReturnType<Hook<'turn.complete'>>>> {
+  const done = await next(e)
+  const loopId = e.agentId
+  if (loopId === undefined) await update($, working, () => false)
+  else await update($, agents, list => setAgentState(list, loopId, turnEndState(e.reason)))
+  scheduleRescan($)
+  void refreshAccent($).catch(() => undefined)
+  return done
+}
+
+async function mainToolCall($: Api, e: Parameters<Hook<'tool.call'>>[1], next: Parameters<Hook<'tool.call'>>[2]): Promise<Awaited<ReturnType<Hook<'tool.call'>>>> {
+  const input = e as unknown as Record<string, unknown>
+  const run: Run = (argv, init) => $.process.run(argv, init)
+  const startedAt = await $.clock.now()
+  const loopId = e.agentId
+  const entry: ToolEntry = {
+    id: e.tool_use_id,
+    tool: e.tool,
+    summary: summarize(input),
+    status: 'running',
+    output: '',
+    startedAt,
+    ...(loopId === undefined ? {} : { agentId: loopId }),
+  }
+  if (e.tool === 'Bash') entry.command = cleanText(input.command)
+  const file = cleanText(input.file_path) ?? cleanText(input.notebook_path)
+  if (file !== undefined) entry.file = file
+  if (e.tool === 'Agent') entry.note = cleanText(input.subagent_type)
+  if (e.tool === 'AskUserQuestion') entry.decisions = decisionsOf(input)
+  await update($, entries, list => [...list, entry].slice(-KEEP))
+
+  if (loopId !== undefined && !(await read($, agents)).some(one => one.id === loopId)) {
+    const info = (await $.agent.list().catch(() => [])).find(one => one.id === loopId)
+    if (info) {
+      const record: AgentRecord = { id: loopId, description: oneLine(info.description), type: oneLine(info.type), state: agentStateOf(info.status), startedAt }
+      if (info.name) record.name = oneLine(info.name)
+      await update($, agents, list => mergeAgent(list, record))
+    }
+  }
+
+  const finish = async (finished: Partial<ToolEntry>) => {
+    const durationMs = (await $.clock.now()) - startedAt
+    await update($, entries, list => list.map(one => (one.id === entry.id ? { ...one, durationMs, ...finished } : one)))
+  }
+
+  let ran: Awaited<ReturnType<typeof next>> | undefined
+  try {
+    ran = await next(e)
+  } finally {
+    if (ran === undefined) await finish({ status: 'interrupted', output: 'interrumpido' }).catch(() => undefined)
+  }
+
+  const wasInterrupted = (ran.result as { interrupted?: unknown } | undefined)?.interrupted === true
+  const status: CallStatus = ran.deny !== undefined ? 'denied' : wasInterrupted ? 'interrupted' : ran.isError === true ? 'error' : 'ok'
+  const full = ran.deny ?? ran.text ?? ''
+  const finished: Partial<ToolEntry> = { status, output: lastLines(full, OUTPUT_LINES) }
+  if (entry.command !== undefined) {
+    const exitCode = exitCodeOf(full, ran.isError === true)
+    if (exitCode !== undefined) finished.exitCode = exitCode
+    if (isTestCommand(entry.command)) finished.testFiles = testFilesOf(full)
+  }
+  if (e.tool === 'AskUserQuestion') finished.decisions = answered(input, status, ran.result)
+  const spawnedId = text((ran.result as { agentId?: unknown } | undefined)?.agentId)
+  if (e.tool === 'Agent' && spawnedId !== undefined) {
+    finished.spawned = spawnedId
+    const state = agentResultState(status, ran.result)
+    const known = (await read($, agents)).some(one => one.id === spawnedId) || (await $.agent.list().catch(() => [])).some(one => one.id === spawnedId)
+    if (state !== undefined && known) {
+      const record: AgentRecord = { id: spawnedId, description: cleanText(input.description) ?? '', type: entry.note ?? 'agente', state, startedAt }
+      await update($, agents, list => mergeAgent(list, record))
+    }
+  }
+  await finish(finished)
+
+  const rawCommand = text(input.command)
+  if (e.tool === 'Bash' && status !== 'denied' && rawCommand !== undefined && gitCommitVerbs(rawCommand).length > 0) {
+    const endedAt = await $.clock.now()
+    const dir = commitDirOf(rawCommand)
+    const top = dir === undefined || !SAFE_PATH.test(dir) ? undefined : await gitTop(run, dir)
+    const call: CommitCall = { startedAt, endedAt, ...(loopId === undefined ? {} : { agentId: loopId }), ...(top === undefined ? {} : { top }) }
+    await update($, commitCalls, list => [...list, call].slice(-COMMIT_CALLS))
     scheduleRescan($ as Api)
-    void refreshAccent($ as Api).catch(() => undefined)
-    return next(e)
-  })
+  }
+  if (e.tool === 'Bash' && status === 'ok' && rawCommand !== undefined && ran.text !== undefined) {
+    const found = commitsIn(rawCommand, ran.text)
+    if (found.length > 0) await update($, commits, list => addCommits(list, found, loopId, startedAt))
+    if (madeMergeCommit(rawCommand, ran.text)) {
+      void (async () => {
+        const top = await gitTop(run)
+        const head = top === undefined ? undefined : await loadHeadCommit(run, top)
+        if (head) await update($, commits, list => addCommits(list, [head], loopId, startedAt))
+      })().catch(() => undefined)
+    }
+  }
+
+  const refresh = async () => {
+    const top = await gitTop(run)
+    if (top === undefined) return
+    const fileList = await loadUncommitted(run, top, async path => {
+      const info = await $.fs.stat(path)
+      return info.isLink || info.kind !== 'file' || info.size > 2_000_000 ? Promise.reject(new Error('skipped')) : $.fs.read(path)
+    })
+    if (fileList !== undefined) await update($, changes, () => fileList)
+
+    for (const key of await read($, openFiles)) {
+      if (!key.startsWith('u:') && !key.startsWith('b:')) continue
+      const path = key.slice(2)
+      const change = key.startsWith('u:') ? fileList?.find(one => one.path === path) : undefined
+      if (key.startsWith('u:') && change === undefined) {
+        await update($, openFiles, keys => keys.filter(one => one !== key))
+        await update($, diffs, all => Object.fromEntries(Object.entries(all).filter(([name]) => name !== key)))
+        continue
+      }
+      const target: DiffTarget = key.startsWith('u:')
+        ? { scope: 'uncommitted', path, ...(change?.untracked ? { untracked: true } : {}) }
+        : { scope: 'branch', path, sha: (await read($, branch)).base }
+      const patch = await fetchDiff(run, top, target)
+      await update($, diffs, all => ({ ...all, [key]: patch }))
+    }
+
+    await fillCommitStats($ as Api, run, top)
+
+    if ((await read($, branch)).isLoaded) {
+      const view = await loadBranch(run, top)
+      await update($, branch, () => view)
+    }
+  }
+
+  const touchesFiles = (e.tool === 'Bash' && ran.isReadOnly !== true) || CHANGE_TOOLS.has(e.tool)
+  if (touchesFiles) {
+    refreshTimer?.cancel()
+    refreshTimer = $.clock.after(REFRESH_MS, () => {
+      refreshTimer = undefined
+      void refresh().catch(() => undefined)
+    })
+  }
+  return ran
+}
+
+export const register: Register = on => {
+  registerAgents(on)
+  registerCi(on)
+  registerContext(on)
+  registerProgress(on)
+  registerRunning(on)
+  registerBlocked(on)
 
   on('ui.close', async ($, e, next) => {
     if (e.id === PANE && e.origin.kind === 'person') await update($, autoOpen, () => false)
@@ -1664,22 +1847,7 @@ export const register: Register = on => {
     return result
   })
 
-  on('turn.start', async ($, e, next) => {
-    const loopId = e.agentId
-    if (loopId === undefined) await update($, working, () => true)
-    else await update($, agents, list => setAgentState(list, loopId, 'running'))
-    return next(e)
-  })
 
-  on('turn.complete', async ($, e, next) => {
-    const done = await next(e)
-    const loopId = e.agentId
-    if (loopId === undefined) await update($, working, () => false)
-    else await update($, agents, list => setAgentState(list, loopId, turnEndState(e.reason)))
-    scheduleRescan($)
-    void refreshAccent($).catch(() => undefined)
-    return done
-  })
 
   on('agent.spawn', async ($, e, next) => {
     const spawned = await next(e)
@@ -1721,134 +1889,6 @@ export const register: Register = on => {
     return {}
   }).catch(($, e, next) => next(e))
 
-  on('tool.call', async ($, e, next) => {
-    const input = e as unknown as Record<string, unknown>
-    const run: Run = (argv, init) => $.process.run(argv, init)
-    const startedAt = await $.clock.now()
-    const loopId = e.agentId
-    const entry: ToolEntry = {
-      id: e.tool_use_id,
-      tool: e.tool,
-      summary: summarize(input),
-      status: 'running',
-      output: '',
-      startedAt,
-      ...(loopId === undefined ? {} : { agentId: loopId }),
-    }
-    if (e.tool === 'Bash') entry.command = cleanText(input.command)
-    const file = cleanText(input.file_path) ?? cleanText(input.notebook_path)
-    if (file !== undefined) entry.file = file
-    if (e.tool === 'Agent') entry.note = cleanText(input.subagent_type)
-    if (e.tool === 'AskUserQuestion') entry.decisions = decisionsOf(input)
-    await update($, entries, list => [...list, entry].slice(-KEEP))
-
-    if (loopId !== undefined && !(await read($, agents)).some(one => one.id === loopId)) {
-      const info = (await $.agent.list().catch(() => [])).find(one => one.id === loopId)
-      if (info) {
-        const record: AgentRecord = { id: loopId, description: oneLine(info.description), type: oneLine(info.type), state: agentStateOf(info.status), startedAt }
-        if (info.name) record.name = oneLine(info.name)
-        await update($, agents, list => mergeAgent(list, record))
-      }
-    }
-
-    const finish = async (finished: Partial<ToolEntry>) => {
-      const durationMs = (await $.clock.now()) - startedAt
-      await update($, entries, list => list.map(one => (one.id === entry.id ? { ...one, durationMs, ...finished } : one)))
-    }
-
-    let ran: Awaited<ReturnType<typeof next>> | undefined
-    try {
-      ran = await next(e)
-    } finally {
-      if (ran === undefined) await finish({ status: 'interrupted', output: 'interrumpido' }).catch(() => undefined)
-    }
-
-    const wasInterrupted = (ran.result as { interrupted?: unknown } | undefined)?.interrupted === true
-    const status: CallStatus = ran.deny !== undefined ? 'denied' : wasInterrupted ? 'interrupted' : ran.isError === true ? 'error' : 'ok'
-    const full = ran.deny ?? ran.text ?? ''
-    const finished: Partial<ToolEntry> = { status, output: lastLines(full, OUTPUT_LINES) }
-    if (entry.command !== undefined) {
-      const exitCode = exitCodeOf(full, ran.isError === true)
-      if (exitCode !== undefined) finished.exitCode = exitCode
-      if (isTestCommand(entry.command)) finished.testFiles = testFilesOf(full)
-    }
-    if (e.tool === 'AskUserQuestion') finished.decisions = answered(input, status, ran.result)
-    const spawnedId = text((ran.result as { agentId?: unknown } | undefined)?.agentId)
-    if (e.tool === 'Agent' && spawnedId !== undefined) {
-      finished.spawned = spawnedId
-      const state = agentResultState(status, ran.result)
-      const known = (await read($, agents)).some(one => one.id === spawnedId) || (await $.agent.list().catch(() => [])).some(one => one.id === spawnedId)
-      if (state !== undefined && known) {
-        const record: AgentRecord = { id: spawnedId, description: cleanText(input.description) ?? '', type: entry.note ?? 'agente', state, startedAt }
-        await update($, agents, list => mergeAgent(list, record))
-      }
-    }
-    await finish(finished)
-
-    const rawCommand = text(input.command)
-    if (e.tool === 'Bash' && status !== 'denied' && rawCommand !== undefined && gitCommitVerbs(rawCommand).length > 0) {
-      const endedAt = await $.clock.now()
-      const dir = commitDirOf(rawCommand)
-      const top = dir === undefined || !SAFE_PATH.test(dir) ? undefined : await gitTop(run, dir)
-      const call: CommitCall = { startedAt, endedAt, ...(loopId === undefined ? {} : { agentId: loopId }), ...(top === undefined ? {} : { top }) }
-      await update($, commitCalls, list => [...list, call].slice(-COMMIT_CALLS))
-      scheduleRescan($ as Api)
-    }
-    if (e.tool === 'Bash' && status === 'ok' && rawCommand !== undefined && ran.text !== undefined) {
-      const found = commitsIn(rawCommand, ran.text)
-      if (found.length > 0) await update($, commits, list => addCommits(list, found, loopId, startedAt))
-      if (madeMergeCommit(rawCommand, ran.text)) {
-        void (async () => {
-          const top = await gitTop(run)
-          const head = top === undefined ? undefined : await loadHeadCommit(run, top)
-          if (head) await update($, commits, list => addCommits(list, [head], loopId, startedAt))
-        })().catch(() => undefined)
-      }
-    }
-
-    const refresh = async () => {
-      const top = await gitTop(run)
-      if (top === undefined) return
-      const fileList = await loadUncommitted(run, top, async path => {
-        const info = await $.fs.stat(path)
-        return info.isLink || info.kind !== 'file' || info.size > 2_000_000 ? Promise.reject(new Error('skipped')) : $.fs.read(path)
-      })
-      if (fileList !== undefined) await update($, changes, () => fileList)
-
-      for (const key of await read($, openFiles)) {
-        if (!key.startsWith('u:') && !key.startsWith('b:')) continue
-        const path = key.slice(2)
-        const change = key.startsWith('u:') ? fileList?.find(one => one.path === path) : undefined
-        if (key.startsWith('u:') && change === undefined) {
-          await update($, openFiles, keys => keys.filter(one => one !== key))
-          await update($, diffs, all => Object.fromEntries(Object.entries(all).filter(([name]) => name !== key)))
-          continue
-        }
-        const target: DiffTarget = key.startsWith('u:')
-          ? { scope: 'uncommitted', path, ...(change?.untracked ? { untracked: true } : {}) }
-          : { scope: 'branch', path, sha: (await read($, branch)).base }
-        const patch = await fetchDiff(run, top, target)
-        await update($, diffs, all => ({ ...all, [key]: patch }))
-      }
-
-      await fillCommitStats($ as Api, run, top)
-
-      if ((await read($, branch)).isLoaded) {
-        const view = await loadBranch(run, top)
-        await update($, branch, () => view)
-      }
-    }
-
-    const touchesFiles = (e.tool === 'Bash' && ran.isReadOnly !== true) || CHANGE_TOOLS.has(e.tool)
-    if (touchesFiles) {
-      refreshTimer?.cancel()
-      refreshTimer = $.clock.after(REFRESH_MS, () => {
-        refreshTimer = undefined
-        void refresh().catch(() => undefined)
-      })
-    }
-    return ran
-  }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
     if (e.props.isExpanded === true) return next(e)
@@ -1985,6 +2025,9 @@ export const register: Register = on => {
         await toggleCommit(action.sha)
       } else if (action.kind === 'diff') {
         await toggleDiff(action.target)
+      } else if (action.kind === 'agents') {
+        await actAgents($ as Api, action)
+        await resetScroll()
       } else {
         await openTarget(action.target)
       }
@@ -2023,4 +2066,8 @@ export const register: Register = on => {
 
     return <Box flexDirection="column" width={width} height={Math.max(1, e.props.scroll.bodyRows)} backgroundColor={PANE_BG}>{frame.rows.map(rowOf)}</Box>
   })
+  on('session.start', async ($, e, next) => ciSessionStart($, e, ((e1: typeof e) => contextSessionStart($, e1, ((e2: typeof e) => progressSessionStart($, e2, ((e3: typeof e) => runningSessionStart($, e3, ((e4: typeof e) => mainSessionStart($, e4, next)) as never)) as never)) as never)) as never))
+  on('turn.start', async ($, e, next) => blockedTurnStart($, e, ((e1: typeof e) => mainTurnStart($, e1, next)) as never))
+  on('turn.complete', async ($, e, next) => agentsTurnComplete($, e, ((e1: typeof e) => contextTurnComplete($, e1, ((e2: typeof e) => progressTurnComplete($, e2, ((e3: typeof e) => mainTurnComplete($, e3, next)) as never)) as never)) as never))
+  on('tool.call', async ($, e, next) => blockedToolCall($, e, ((e1: typeof e) => progressToolCall($, e1, ((e2: typeof e) => runningToolCall($, e2, ((e3: typeof e) => mainToolCall($, e3, next)) as never)) as never)) as never))
 }
