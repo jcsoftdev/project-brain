@@ -168,6 +168,10 @@ export const accentOf = (grepOutput: string): string => {
   return SESSION_COLORS[names.at(-1) ?? ''] ?? 'claude'
 }
 
+/** After the first full scan, only the transcript's tail can hold a newer `/color` change. */
+const ACCENT_TAIL_BYTES = 262_144
+let accentScanned = false
+
 /** Reads the session colour Claude Code writes into the transcript as an `agent-color` entry. */
 const refreshAccent = async ($: Api): Promise<void> => {
   const [id, root, home] = await Promise.all([
@@ -177,8 +181,14 @@ const refreshAccent = async ($: Api): Promise<void> => {
   ])
   if (!home || !/^[0-9a-f-]{36}$/.test(id)) return
   const transcript = `${home}/.claude/projects/${root.replace(/[^A-Za-z0-9]/g, '-')}/${id}.jsonl`
-  const found = await $.process.run(['/usr/bin/grep', '-a', '-o', '"agentColor":"[a-z]*"', transcript], { timeoutMs: 3000 }).catch(() => undefined)
+  const scan = accentScanned
+    ? ['/usr/bin/tail', '-c', String(ACCENT_TAIL_BYTES), transcript]
+    : ['/usr/bin/grep', '-a', '-o', '"agentColor":"[a-z]*"', transcript]
+  const found = await $.process.run(scan, { timeoutMs: 3000 }).catch(() => undefined)
   if (!found) return
+  const wasScanned = accentScanned
+  accentScanned = true
+  if (wasScanned && !found.stdout.includes('"agentColor":"')) return
   const next = accentOf(found.stdout)
   if (next !== (await read($, accentColor))) await update($, accentColor, () => next)
 }
