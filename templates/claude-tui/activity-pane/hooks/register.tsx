@@ -1114,6 +1114,31 @@ export const ownerOf = (owners: Map<string, CommitRecord[]>, sha: string): Commi
 export const cambiosScopeOf = (snap: Pick<Snapshot, 'scopeByAgent' | 'commitList'>, scope: string): CambiosScope =>
   snap.scopeByAgent[scope] ?? (commitsFor(snap.commitList, scope).length > 0 ? 'commits' : 'uncommitted')
 
+const cellWidth = (cell: Cell): number => cell.spans.reduce((sum, one) => sum + [...one.text].length, 0)
+
+/**
+ * The agent chips that fit one row: "Principal" stays pinned, the rest scroll as a window that always holds
+ * the selected agent. Hidden chips collapse into "‹ N" / "N ›" markers that select the nearest hidden agent.
+ */
+export const agentStrip = (pinned: Cell, chips: Cell[], selected: number, ids: string[], width: number): Cell[] => {
+  const total = cellWidth(pinned) + chips.reduce((sum, one) => sum + cellWidth(one), 0)
+  if (total <= width) return [pinned, ...chips]
+  const marker = (text: string, id: string, key: string): Cell => ({ key, label: text, action: { kind: 'agent', id }, spans: [span(text, { color: 'suggestion', bold: true })] })
+  const room = Math.max(0, width - cellWidth(pinned) - 2 * 5)
+  let start = Math.max(0, selected)
+  let end = start
+  let used = 0
+  const fits = (index: number) => used + cellWidth(chips[index] as Cell) <= room
+  while (end < chips.length && (end === start || fits(end))) used += cellWidth(chips[end++] as Cell)
+  while (start > 0 && fits(start - 1)) used += cellWidth(chips[--start] as Cell)
+  return [
+    pinned,
+    ...(start > 0 ? [marker(`‹ ${start} `, ids[start - 1] ?? MAIN, 'agents-left')] : []),
+    ...chips.slice(start, end),
+    ...(end < chips.length ? [marker(` ${chips.length - end} ›`, ids[end] ?? MAIN, 'agents-right')] : []),
+  ]
+}
+
 export const buildPane = (snap: Snapshot, width: number): PaneModel => {
   const { list, flipped, opened, patches, records } = snap
   const accent = snap.accent
@@ -1446,10 +1471,13 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
   if (records.length > 0) {
     header.push({
       key: 'agents',
-      cells: [
+      cells: agentStrip(
         chip(`agent-${MAIN}`, 'Principal', scope === MAIN, { kind: 'agent', id: MAIN }),
-        ...records.map(one => chip(`agent-${one.id}`, shortName(one), scope === one.id, { kind: 'agent', id: one.id }, AGENT_LOOK[one.state])),
-      ],
+        records.map(one => chip(`agent-${one.id}`, shortName(one), scope === one.id, { kind: 'agent', id: one.id }, AGENT_LOOK[one.state])),
+        records.findIndex(one => one.id === scope),
+        records.map(one => one.id),
+        width,
+      ),
     })
   }
   if (agent) {
