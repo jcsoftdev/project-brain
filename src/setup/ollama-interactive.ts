@@ -11,6 +11,36 @@ export interface InteractiveOllamaSpec {
   ollamaBin: string;
   modelsDir: string;
   logPath: string;
+  runnerEnv?: Record<string, string>;
+}
+
+export const RUNNER_ENV_KEYS = ["OLLAMA_FLASH_ATTENTION", "OLLAMA_KV_CACHE_TYPE", "OLLAMA_LLM_LIBRARY", "OLLAMA_MODELS"] as const;
+
+export function defaultOllamaServiceFiles(home: string = homedir()): string[] {
+  return [
+    join(home, "Library", "LaunchAgents", "sh.brew.ollama.plist"),
+    join(home, "Library", "LaunchAgents", "homebrew.mxcl.ollama.plist"),
+    join(home, ".config", "systemd", "user", "ollama.service"),
+    join("/", "etc", "systemd", "system", "ollama.service"),
+  ];
+}
+
+export function serviceDefinitionEnv(text: string): Record<string, string> {
+  const pairs = [
+    ...[...text.matchAll(/<key>(OLLAMA_[A-Z_]+)<\/key>\s*<string>([^<]*)<\/string>/g)].map((m) => [m[1]!, m[2]!]),
+    ...[...text.matchAll(/^Environment="?(OLLAMA_[A-Z_]+)=([^"\n]*)"?$/gm)].map((m) => [m[1]!, m[2]!]),
+  ];
+  return Object.fromEntries(pairs);
+}
+
+export function defaultInstanceEnv(
+  files: string[],
+  readText: (path: string) => string | null,
+  env: Record<string, string | undefined> = process.env
+): Record<string, string> {
+  const fromService = files.map(readText).find((text): text is string => text !== null);
+  const source: Record<string, string | undefined> = fromService ? serviceDefinitionEnv(fromService) : env;
+  return Object.fromEntries(RUNNER_ENV_KEYS.flatMap((key) => (source[key] ? [[key, source[key]!]] : [])));
 }
 
 const OLLAMA_BIN_CANDIDATES = [
@@ -33,6 +63,7 @@ export function sharedModelsDir(env: Record<string, string | undefined> = proces
 
 export function interactiveServiceEnv(spec: InteractiveOllamaSpec): Record<string, string> {
   return {
+    ...spec.runnerEnv,
     OLLAMA_HOST: `127.0.0.1:${INTERACTIVE_PORT}`,
     OLLAMA_KEEP_ALIVE: "-1",
     OLLAMA_MAX_LOADED_MODELS: "1",

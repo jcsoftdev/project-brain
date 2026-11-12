@@ -544,6 +544,7 @@ describe("service:ollama-interactive", () => {
       skipOllama: false,
       platform,
       ollamaBin: "/opt/homebrew/bin/ollama",
+      defaultOllamaServiceFiles: [],
       runService: async (argv) => {
         calls.push(argv);
         return 0;
@@ -597,6 +598,41 @@ describe("service:ollama-interactive", () => {
 
     await unit.remove(ctx);
     expect(calls).toHaveLength(1);
+  });
+
+  it("copies the default instance's runner settings so both produce identical vectors", async () => {
+    const { ctx } = await laneContext("darwin");
+    const brewPlist = join(ctx.dataDir, "sh.brew.ollama.plist");
+    await Bun.write(
+      brewPlist,
+      `<dict>
+		<key>OLLAMA_FLASH_ATTENTION</key>
+		<string>1</string>
+		<key>OLLAMA_KV_CACHE_TYPE</key>
+		<string>q8_0</string>
+		<key>OLLAMA_MODELS</key>
+		<string>/Volumes/models</string>
+		<key>OLLAMA_HOST</key>
+		<string>0.0.0.0:11434</string>
+	</dict>`
+    );
+    ctx.defaultOllamaServiceFiles = [join(ctx.dataDir, "missing.plist"), brewPlist];
+    const unit = await laneUnit();
+    await unit.apply(ctx);
+
+    const text = await Bun.file(join(ctx.serviceDir!, "dev.projectbrain.ollama-interactive.plist")).text();
+    expect(text).toContain("<key>OLLAMA_FLASH_ATTENTION</key>\n    <string>1</string>");
+    expect(text).toContain("<key>OLLAMA_KV_CACHE_TYPE</key>\n    <string>q8_0</string>");
+    expect(text).toContain("<key>OLLAMA_MODELS</key>\n    <string>/Volumes/models</string>");
+    expect(text).toContain("<key>OLLAMA_HOST</key>\n    <string>127.0.0.1:11435</string>");
+    expect(text).not.toContain("0.0.0.0:11434");
+  });
+
+  it("reads runner settings from a systemd Environment line", async () => {
+    const { serviceDefinitionEnv } = await import("../../src/setup/ollama-interactive.js");
+    expect(
+      serviceDefinitionEnv('[Service]\nEnvironment="OLLAMA_FLASH_ATTENTION=1"\nEnvironment=OLLAMA_KV_CACHE_TYPE=q8_0\n')
+    ).toEqual({ OLLAMA_FLASH_ATTENTION: "1", OLLAMA_KV_CACHE_TYPE: "q8_0" });
   });
 
   it("installs a systemd user unit on Linux", async () => {

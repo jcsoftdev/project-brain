@@ -1,5 +1,5 @@
 import { basename, dirname, join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import type { AIToolRegistrar } from "../registrars/types.js";
 import { resolveRerankerToken } from "../rerank/token.js";
@@ -44,6 +44,7 @@ export interface SetupContext {
   serviceDir?: string;
   runService?: (argv: string[]) => Promise<number>;
   ollamaBin?: string | null;
+  defaultOllamaServiceFiles?: string[];
   platform?: string;
   /**
    * Non-interactive token for `config:reranker`, from `--reranker-token`.
@@ -1189,7 +1190,13 @@ function ollamaInteractiveUnit(): SetupUnit {
     const kind = serviceKindFor(ctx.platform ?? process.platform);
     const ollamaBin = ctx.ollamaBin !== undefined ? ctx.ollamaBin : mod.findOllamaBin();
     if (!kind || !ollamaBin || ctx.skipOllama) return null;
-    const spec = { ollamaBin, modelsDir: mod.sharedModelsDir(), logPath: join(ctx.dataDir, "ollama-interactive.log") };
+    const runnerEnv = mod.defaultInstanceEnv(ctx.defaultOllamaServiceFiles ?? mod.defaultOllamaServiceFiles(), readTextOrNull);
+    const spec = {
+      ollamaBin,
+      modelsDir: runnerEnv.OLLAMA_MODELS ?? mod.sharedModelsDir(),
+      logPath: join(ctx.dataDir, "ollama-interactive.log"),
+      runnerEnv,
+    };
     return {
       mod,
       kind,
@@ -1239,6 +1246,14 @@ function ollamaInteractiveUnit(): SetupUnit {
       await rm(file, { force: true });
     },
   };
+}
+
+function readTextOrNull(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
 }
 
 async function runServiceCommand(argv: string[]): Promise<number> {
