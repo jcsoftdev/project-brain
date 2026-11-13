@@ -86,7 +86,7 @@ export interface SearchDeps {
   alreadyShown?: Promise<string | null> | string | null;
 }
 
-interface Hit {
+export interface Hit {
   chunk_id?: string;
   source: string;
   symbol?: string;
@@ -98,7 +98,7 @@ interface Hit {
 }
 
 /** One injected item: `- source › symbol (Lstart-end) [score x.xx]` and the first two non-empty snippet lines. */
-function formatHit(r: Hit): string {
+export function formatHit(r: Hit): string {
   const symbol = r.symbol ? ` › ${r.symbol}` : "";
   const range = r.start_line != null && r.end_line != null ? ` (L${r.start_line}-${r.end_line})` : "";
   const snippet = r.snippet
