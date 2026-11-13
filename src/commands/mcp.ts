@@ -41,7 +41,7 @@ export async function execute(args: string[], opts: McpOptions = {}): Promise<nu
     return r.error ? 1 : 0;
   }
 
-  const plans = await planPrune(env, rest.includes("--all") ? undefined : [opts.cwd ?? process.cwd()]);
+  const plans = await planPrune({ ...env, askJev: rest.includes("--apply") }, rest.includes("--all") ? undefined : [opts.cwd ?? process.cwd()]);
   if (plans.length === 0) {
     log("No known project to look at (is this directory in ~/.claude.json?).");
     return 1;

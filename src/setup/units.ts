@@ -1804,7 +1804,7 @@ function mcpPruneUnit(): SetupUnit {
     group: "Other",
     label: "Disable unused MCP servers",
     description:
-      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions, or 14 days of history with 3 sessions in the window; never project-brain), so their tool lists and instructions stop loading. With a TypeSafe token, a project with less history asks Jev once which unused servers it will not need (sends its README head, manifest and the servers' tool names; PROJECT_BRAIN_MCP_PRUNE_JEV=0 turns that off); otherwise nothing leaves the machine. `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out",
+      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions, or 14 days of history with 3 sessions in the window; never project-brain), so their tool lists and instructions stop loading. Only with a TypeSafe (Jev) token: for a project registered with project-brain that has less history, it asks Jev which unused servers that project will not need, sending api.typesafe.ai the project's languages, frameworks, package name and dependency names plus each server's name, tool names and redacted instructions (never README text, file names, server commands, URLs or env); PROJECT_BRAIN_MCP_PRUNE_JEV=0 turns that off, and without a token nothing leaves the machine. `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out",
     defaultSelected: true,
     autoOnUpgrade: true,
 
@@ -1815,8 +1815,9 @@ function mcpPruneUnit(): SetupUnit {
       if (featureEnvOptOut("mcp-prune")) return "unavailable";
       const { planPrune, hasPruneEntries, envFromProcess } = await import("../mcpprune/prune.js");
       const { jevFromProcess } = await import("../mcpprune/judge.js");
-      const full = { ...env, ...envFromProcess(), jev: await jevFromProcess(ctx.dataDir) };
-      const pending = (await planPrune(full)).some((p) => p.candidates.length > 0);
+      // Cache only: inspect backs `status`, which must stay read-only and fast.
+      const full = { ...env, ...envFromProcess(), jev: await jevFromProcess(ctx.dataDir), askJev: false };
+      const pending = (await planPrune(full)).some((p) => p.candidates.length > 0 || p.awaitingJev);
       // Present once anything is disabled, so unticking the unit maps to removal and runs the revert.
       if (await hasPruneEntries(env)) return pending ? "stale" : "current";
       if (!featureEnabled("mcp-prune", ctx.dataDir)) return "absent";
@@ -1830,7 +1831,7 @@ function mcpPruneUnit(): SetupUnit {
       await setFeature(ctx.dataDir, "mcp-prune", true);
       const { planPrune, applyPrune, envFromProcess } = await import("../mcpprune/prune.js");
       const { jevFromProcess } = await import("../mcpprune/judge.js");
-      const full = { ...env, ...envFromProcess(), jev: await jevFromProcess(ctx.dataDir) };
+      const full = { ...env, ...envFromProcess(), jev: await jevFromProcess(ctx.dataDir), askJev: true };
       const result = await applyPrune(full, await planPrune(full));
       if (result.error) console.warn(`Warning: MCP prune changed nothing: ${result.error}`);
       if (result.added.length === 0) return;

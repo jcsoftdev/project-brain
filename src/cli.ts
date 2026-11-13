@@ -160,8 +160,9 @@ Commands:
                          (backup first; --description <text> sets the skill description)
                        --revert  restore the latest backup and remove the skills it created
   mcp prune          List MCP servers a project never used (default: this project), no changes
+                         (thin history + Jev token: registered projects use cached Jev answers)
                        --all     every project in ~/.claude.json
-                       --apply   disable them for that project only (backup first)
+                       --apply   disable them for that project only (backup first); may ask Jev
                        --revert  re-enable exactly what --apply disabled
   tool-catalog refresh  Rebuild the MCP tool catalog behind the "Suggested tool" hints
   skill-usage        Count skill invocations in the last 30 days of Claude Code transcripts, no changes

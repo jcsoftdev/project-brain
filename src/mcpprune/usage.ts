@@ -35,8 +35,8 @@ export interface Usage {
   newest: number | null;
   /** Tool ids Claude Code announced to the sessions, used or not: what each server offers. */
   announced: Set<string>;
-  /** Server name → the instructions it gave the sessions. */
-  instructions: Map<string, string>;
+  /** Server name → the newest instructions it gave the sessions, and when. */
+  instructions: Map<string, { text: string; at: number }>;
 }
 
 export const emptyUsage = (): Usage => ({
@@ -56,7 +56,7 @@ export function mergeUsage(into: Usage, from: Usage): Usage {
   if (from.oldest !== null) into.oldest = Math.min(into.oldest ?? from.oldest, from.oldest);
   if (from.newest !== null) into.newest = Math.max(into.newest ?? from.newest, from.newest);
   for (const tool of from.announced) into.announced.add(tool);
-  for (const [server, text] of from.instructions) if (!into.instructions.has(server)) into.instructions.set(server, text);
+  for (const [server, seen] of from.instructions) keepNewest(into.instructions, server, seen);
   return into;
 }
 
@@ -83,16 +83,22 @@ const MARKER = '"name":"mcp__';
 const ANNOUNCED = "deferred_tools_delta";
 const INSTRUCTED = "mcp_instructions_delta";
 
+function keepNewest(map: Usage["instructions"], server: string, seen: { text: string; at: number }): void {
+  if (seen.at >= (map.get(server)?.at ?? -Infinity)) map.set(server, seen);
+}
+
 /** What a `deferred_tools_delta` or `mcp_instructions_delta` attachment tells about the servers a session had. */
-function announcements(line: string, usage: Usage): void {
+function announcements(line: string, usage: Usage, fallback: number): void {
   try {
-    const att = (JSON.parse(line) as { attachment?: Record<string, unknown> }).attachment;
+    const obj = JSON.parse(line) as { timestamp?: unknown; attachment?: Record<string, unknown> };
+    const att = obj.attachment;
+    const at = typeof obj.timestamp === "string" && !Number.isNaN(Date.parse(obj.timestamp)) ? Date.parse(obj.timestamp) : fallback;
     const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
     if (att?.type === ANNOUNCED) for (const n of strings(att.addedNames)) if (n.startsWith("mcp__")) usage.announced.add(n);
     if (att?.type === INSTRUCTED) {
       const blocks = strings(att.addedBlocks);
       strings(att.addedNames).forEach((name, i) => {
-        if (blocks[i] && !usage.instructions.has(name)) usage.instructions.set(name, blocks[i]!);
+        if (blocks[i]) keepNewest(usage.instructions, name, { text: blocks[i]!, at });
       });
     }
   } catch {
@@ -136,7 +142,7 @@ export async function scanUsage(projectsRoot: string, projectDir: string, sinceM
       continue;
     }
     for (const line of text.split("\n")) {
-      if (line.includes(ANNOUNCED) || line.includes(INSTRUCTED)) announcements(line, usage);
+      if (line.includes(ANNOUNCED) || line.includes(INSTRUCTED)) announcements(line, usage, f.mtime);
       if (!line.includes(MARKER)) continue;
       for (const [tool, at] of toolCalls(line, f.mtime)) if (at > (usage.lastUsed.get(tool) ?? 0)) usage.lastUsed.set(tool, at);
     }

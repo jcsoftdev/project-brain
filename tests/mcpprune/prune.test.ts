@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { computePlan } from "../../src/setup/plan.js";
 import { allUnits, type SetupContext } from "../../src/setup/units.js";
-import { applyPrune, planPrune, repoKey, revertPrune, type PruneEnv } from "../../src/mcpprune/prune.js";
+import { applyPrune, AWAITING_JEV, MAX_JEV_REQUESTS, planPrune, repoKey, revertPrune, type PruneEnv } from "../../src/mcpprune/prune.js";
 import { classifyTool } from "../../src/mcpprune/usage.js";
-import { jevFromProcess } from "../../src/mcpprune/judge.js";
+import { jevFromProcess, redactInstructions } from "../../src/mcpprune/judge.js";
 import { execute } from "../../src/commands/mcp.js";
 import { projectDirKey } from "../../src/toolcatalog/transcripts.js";
 
@@ -335,12 +335,14 @@ describe("Jev at prune time", () => {
   type Sent = { state: { project: Record<string, unknown>; servers: Record<string, { name: string; tools: string[]; instructions?: string }> } };
 
   /** A TypeSafe stand-in that answers each server question from `scores`, keyed by server name. */
-  function fakeJev(scores: Record<string, number> | "down") {
+  function fakeJev(scores: Record<string, number> | "down" | "slow") {
     const requests: Sent[] = [];
     const fetchFn = async (_url: string, init: RequestInit): Promise<Response> => {
       const body = JSON.parse(String(init.body)) as Sent;
       requests.push(body);
       if (scores === "down") return new Response("boom", { status: 503 });
+      if (scores === "slow")
+        return new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(Object.assign(new Error("t"), { name: "TimeoutError" }))));
       const answers = Object.fromEntries(Object.entries(body.state.servers).map(([k, s]) => [k, { type: "noul", noul: scores[s.name] ?? 0.5 }]));
       return new Response(JSON.stringify({ answers }), { status: 200 });
     };
@@ -354,29 +356,49 @@ describe("Jev at prune time", () => {
       { type: "attachment", attachment: { type: "deferred_tools_delta", addedNames: tools, removedNames: [] } },
       { type: "attachment", attachment: { type: "mcp_instructions_delta", addedNames: Object.keys(instructions), addedBlocks: Object.values(instructions) } },
     ];
-    await writeFile(join(tdir, "announce.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    await writeFile(join(tdir, `announce-${tools.length}-${Object.keys(instructions).length}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
   }
 
-  it("disables in a thin project only what Jev rates unneeded, says so, and revert restores it", async () => {
-    const a = await project("shop");
-    await writeFile(join(a, "README.md"), "# Shop\nA web store.");
+  async function register(...dirs: string[]): Promise<void> {
+    await mkdir(env.dataDir, { recursive: true });
+    const registry = Object.fromEntries(dirs.map((d, i) => [`p${i}`, { root: d, updatedAt: 1 }]));
+    await writeFile(join(env.dataDir, "projects.json"), JSON.stringify(registry));
+  }
+
+  /** A registered thin project whose sessions announced both servers' tools. */
+  async function thinProject(name: string): Promise<string> {
+    const a = await project(name);
     await writeClaude([a]);
     await transcripts(a, 1);
-    await announce(a, ["mcp__alpha__deploy", "mcp__beta__model_3d"], { beta: "Generates 3D models." });
+    await announce(a, ["mcp__alpha__deploy", "mcp__beta__model_3d"]);
+    return a;
+  }
+
+  const cacheFile = () => join(env.dataDir, "mcp-prune-jev.json");
+
+  it("disables in a thin project only what Jev rates unneeded, sends no free text, and revert restores it", async () => {
+    const a = await project("shop");
+    await writeFile(join(a, "README.md"), "# Shop\nOPENAI_API_KEY=sk-live-abcdefghijklmnop");
+    await writeFile(join(a, "id_rsa_backup"), "x");
+    await writeFile(join(a, "package.json"), JSON.stringify({ name: "shop", dependencies: { next: "1" }, devDependencies: { typescript: "5" } }));
+    await writeClaude([a]);
+    await transcripts(a, 1);
+    await announce(a, ["mcp__alpha__deploy", "mcp__beta__model_3d"], { beta: "Generates 3D models. Webhook https://hooks.slack.com/services/T0/B0/x" });
+    await register(a);
     const { jev, requests } = fakeJev({ alpha: 0.9, beta: 0.05 });
 
-    const [plan] = await planPrune({ ...env, jev }, [a]);
-    expect(plan!.skipped).toBeUndefined();
+    const [plan] = await planPrune({ ...env, jev, askJev: true }, [a]);
     expect(plan!.basis).toBe("jev");
     expect(plan!.candidates).toEqual([{ name: "beta", mcpJson: false, needed: 0.05 }]);
     expect(requests).toHaveLength(1);
     const sent = requests[0]!.state;
-    expect(sent.project.readme).toContain("A web store.");
+    expect(sent.project).toEqual({ name: "shop", languages: ["TypeScript"], frameworks: ["Next.js"], packageManager: null, dependencies: ["next", "typescript"] });
     expect(Object.values(sent.servers)).toEqual([
       { name: "alpha", tools: ["deploy"] },
-      { name: "beta", tools: ["model_3d"], instructions: "Generates 3D models." },
+      { name: "beta", tools: ["model_3d"], instructions: "Generates 3D models. Webhook [url]" },
     ]);
-    expect(JSON.stringify(sent)).not.toContain("test-token");
+    const wire = JSON.stringify(requests[0]);
+    for (const leak of ["sk-live", "id_rsa", "hooks.slack.com", "test-token", "README"]) expect(wire).not.toContain(leak);
 
     const lines: string[] = [];
     await execute(["prune"], { env: { ...env, jev }, cwd: a, log: (l) => lines.push(l) });
@@ -390,48 +412,154 @@ describe("Jev at prune time", () => {
   });
 
   it("keeps every server Jev rates at or above the floor", async () => {
-    const a = await project("app");
-    await writeClaude([a]);
-    await transcripts(a, 2);
+    const a = await thinProject("app");
+    await register(a);
     const { jev } = fakeJev({ alpha: 0.6, beta: 0.2 });
-    const [plan] = await planPrune({ ...env, jev }, [a]);
-    expect(plan!.candidates).toEqual([]);
+    expect((await planPrune({ ...env, jev, askJev: true }, [a]))[0]!.candidates).toEqual([]);
   });
 
-  it("falls back to skipping thin projects when Jev fails or there is no token, and stops asking after a failure", async () => {
-    const [a, b] = [await project("a"), await project("b")];
-    await writeClaude([a, b]);
-    await transcripts(a, 2);
-    await transcripts(b, 2);
+  it("falls back to skipping when Jev fails or there is no token, and does not retry a failed repo for a day", async () => {
+    const a = await thinProject("a");
+    await register(a);
     const { jev, requests } = fakeJev("down");
 
-    const plans = await planPrune({ ...env, jev });
-    expect(plans.map((p) => p.skipped)).toEqual(["not enough history yet", "not enough history yet"]);
+    const plans = await planPrune({ ...env, jev, askJev: true });
+    expect(plans.map((p) => p.skipped)).toEqual(["not enough history yet"]);
+    expect((await planPrune({ ...env, jev: null })).map((p) => p.skipped)).toEqual(["not enough history yet"]);
+    await planPrune({ ...env, jev, askJev: true });
     expect(requests).toHaveLength(1);
-    expect((await planPrune({ ...env, jev: null })).map((p) => p.skipped)).toEqual(["not enough history yet", "not enough history yet"]);
-
     expect((await applyPrune({ ...env, jev }, plans)).added).toEqual([]);
     expect((await readJson()).projects[a].disabledMcpServers).toBeUndefined();
   });
 
-  it("never asks about, or disables, a pinned or recently used server", async () => {
+  it("never asks about, or disables, a pinned, recently used, or undescribed server", async () => {
     const a = await project("a");
     await writeClaude([a]);
     await transcripts(a, 2, ["mcp__beta__x"]);
+    await register(a);
     const { jev, requests } = fakeJev({ alpha: 0, beta: 0 });
-
-    const [plan] = await planPrune({ ...env, jev, allow: ["alpha"] }, [a]);
-    expect(plan!.candidates).toEqual([]);
+    expect((await planPrune({ ...env, jev, askJev: true, allow: ["alpha"] }, [a]))[0]!.candidates).toEqual([]);
+    // alpha is neither pinned nor used here, but no session announced its tools or instructions.
+    expect((await planPrune({ ...env, jev, askJev: true }, [a]))[0]!.candidates).toEqual([]);
     expect(requests).toHaveLength(0);
   });
 
-  it("leaves a project untouched within the window alone, without asking", async () => {
-    const a = await project("a");
-    await writeClaude([a]);
-    await transcripts(a, 2, [], 60);
+  it("never asks for an unregistered project, a project unused in the window, or a git directory", async () => {
+    const a = await thinProject("a");
     const { jev, requests } = fakeJev({ alpha: 0, beta: 0 });
-    expect((await planPrune({ ...env, jev }, [a]))[0]!.skipped).toBe("not enough history yet");
+    expect((await planPrune({ ...env, jev, askJev: true }, [a]))[0]!.skipped).toBe("not enough history yet");
+
+    const old = await project("old");
+    const bare = await project("repo.git");
+    await writeClaude([old, bare]);
+    await transcripts(old, 2, [], 60);
+    await transcripts(bare, 2);
+    await register(old, bare);
+    expect((await planPrune({ ...env, jev, askJev: true })).map((p) => p.skipped)).toEqual(["not enough history yet", "not enough history yet"]);
     expect(requests).toHaveLength(0);
+  });
+
+  it("plans from the cache only unless asked to apply: no request, no write", async () => {
+    const a = await thinProject("a");
+    await register(a);
+    const { jev, requests } = fakeJev({ alpha: 0.9, beta: 0.05 });
+
+    const [dry] = await planPrune({ ...env, jev }, [a]);
+    expect(dry!.skipped).toBe(AWAITING_JEV);
+    expect(dry!.awaitingJev).toBe(true);
+    expect(requests).toHaveLength(0);
+    expect(existsSync(cacheFile())).toBe(false);
+
+    await planPrune({ ...env, jev, askJev: true }, [a]);
+    expect((await planPrune({ ...env, jev }, [a]))[0]!.candidates.map((c) => c.name)).toEqual(["beta"]);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("asks again when a server's tools change, after the TTL, and never shares answers across repos", async () => {
+    const a = await thinProject("a");
+    const b = await thinProject("b");
+    await writeClaude([a, b]);
+    await register(a, b);
+    const { jev, requests } = fakeJev({ alpha: 0.9, beta: 0.05 });
+    const now = Date.now();
+
+    await planPrune({ ...env, jev, askJev: true, now });
+    expect(requests).toHaveLength(2);
+    await planPrune({ ...env, jev, askJev: true, now });
+    expect(requests).toHaveLength(2);
+
+    await announce(a, ["mcp__beta__texture"]);
+    await planPrune({ ...env, jev, askJev: true, now }, [a]);
+    expect(requests).toHaveLength(3);
+    expect(Object.values(requests[2]!.state.servers).map((s) => s.name)).toEqual(["beta"]);
+
+    await planPrune({ ...env, jev, askJev: true, now: now + 31 * DAY, windowDays: 90 }, [b]);
+    expect(requests).toHaveLength(4);
+  });
+
+  it("stops asking once the run's deadline lapses and keeps what is unanswered", async () => {
+    const [a, b] = [await thinProject("a"), await thinProject("b")];
+    await writeClaude([a, b]);
+    await register(a, b);
+    const { jev, requests } = fakeJev("slow");
+    const started = Date.now();
+    const plans = await planPrune({ ...env, jev, askJev: true, jevDeadlineMs: 150 });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(requests).toHaveLength(1);
+    expect(plans.every((p) => p.candidates.length === 0)).toBe(true);
+  });
+
+  it("caps the requests of one run", async () => {
+    const dirs: string[] = [];
+    for (let i = 0; i < MAX_JEV_REQUESTS + 2; i++) dirs.push(await thinProject(`p${i}`));
+    await writeClaude(dirs);
+    await register(...dirs);
+    const { jev, requests } = fakeJev({ alpha: 0.9, beta: 0.05 });
+    const plans = await planPrune({ ...env, jev, askJev: true });
+    expect(requests).toHaveLength(MAX_JEV_REQUESTS);
+    expect(plans.filter((p) => p.candidates.length > 0)).toHaveLength(MAX_JEV_REQUESTS);
+  });
+
+  it("keeps a cache entry another run wrote while this one was asking", async () => {
+    const a = await thinProject("a");
+    await register(a);
+    const { jev } = fakeJev({ alpha: 0.9, beta: 0.05 });
+    const racing = {
+      token: jev.token,
+      fetchFn: async (url: string, init: RequestInit) => {
+        await mkdir(env.dataDir, { recursive: true });
+        await writeFile(cacheFile(), JSON.stringify({ answers: { "other\u0000x\u0000y": { at: Date.now(), needed: 0.5 } }, failed: {} }));
+        return jev.fetchFn(url, init);
+      },
+    };
+    await planPrune({ ...env, jev: racing, askJev: true }, [a]);
+    const keys = Object.keys(JSON.parse(await readFile(cacheFile(), "utf-8")).answers);
+    expect(keys).toContain("other\u0000x\u0000y");
+    expect(keys.filter((k) => k.startsWith(`${a}\u0000`))).toHaveLength(2);
+  });
+
+  it("setup inspect never calls Jev or writes, and reports a project awaiting Jev as pending", async () => {
+    const a = await thinProject("a");
+    await register(a);
+    const prev = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = "env-token";
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      throw new Error("no network in inspect");
+    }) as unknown as typeof fetch;
+    try {
+      const ctx = { dataDir: env.dataDir, installed: [], claudeSettingsPath: join(root, ".claude", "settings.json") } as unknown as SetupContext;
+      const unit = allUnits(ctx).find((u) => u.id === "config:mcp-prune")!;
+      expect(await unit.inspect(ctx)).toBe("absent");
+      expect(calls).toBe(0);
+      expect(existsSync(cacheFile())).toBe(false);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (prev === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = prev;
+    }
   });
 
   it("takes the token from the environment unless opted out", async () => {
@@ -448,5 +576,30 @@ describe("Jev at prune time", () => {
       if (prev.opt === undefined) delete process.env.PROJECT_BRAIN_MCP_PRUNE_JEV;
       else process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = prev.opt;
     }
+  });
+});
+
+describe("redactInstructions", () => {
+  const cases: Array<[string, string]> = [
+    ["Use search_docs to find pages.", "Use search_docs to find pages."],
+    ["Webhook https://hooks.slack.com/services/T0/B0/x here", "Webhook [url] here"],
+    ["See www.example.com/docs", "See [url]"],
+    ["Mail ops@acme.io for access", "Mail [email] for access"],
+    ["api_key=abc123 then", "api_key=[redacted] then"],
+    ['password: "hunter 2" ok', "password: [redacted] ok"],
+    ["token sk-live-abcdefghijk1", "token [secret]"],
+    ["gh ghp_abcdefghij0123456789 x", "gh [secret] x"],
+    ["slack xoxb-1234-abcdefgh y", "slack [secret] y"],
+    [`aws ${"AKIA"}ABCDEFGHIJKLMNOP z`, "aws [secret] z"],
+    ["hex deadbeefdeadbeefdeadbeefdeadbeef end", "hex [secret] end"],
+    [`b64 ${"QWxhZGRpbjpvcGVu"}IHNlc2FtZQ9876543210abcd end`, "b64 [secret] end"],
+    ["tool mcp__plugin_engram_engram__mem_session_summary stays", "tool mcp__plugin_engram_engram__mem_session_summary stays"],
+  ];
+  it.each(cases)("%s", (input, expected) => {
+    expect(redactInstructions(input)).toBe(expected);
+  });
+
+  it("keeps only a short head", () => {
+    expect(redactInstructions("word ".repeat(200)).length).toBeLessThanOrEqual(300);
   });
 });

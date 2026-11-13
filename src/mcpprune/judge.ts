@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
+import { detectStack } from "../indexer/stack.js";
 import { resolveRerankerToken } from "../rerank/token.js";
 import { collapse } from "../toolcatalog/live.js";
 import { askDetailed, type NoulQuestion, type TypesafeFetchFn } from "../typesafe/client.js";
@@ -13,21 +14,31 @@ export interface JevSettings {
   timeoutMs?: number;
 }
 
-/** What Jev reads about one server: never its command, arguments, URL or environment. */
+/** What Jev reads about one server: its name, tool names and redacted instructions, never its command, URL or environment. */
 export interface ServerBrief {
   name: string;
   tools: string[];
   instructions?: string;
 }
 
-/** Prune runs offline, so it can wait longer than a prompt hook. */
+/** Structured, low-risk signals only: no README text, no file names. */
+export interface ProjectSignals {
+  name?: string;
+  languages: string[];
+  frameworks: string[];
+  packageManager: string | null;
+  dependencies: string[];
+}
+
+/** Per request; the run as a whole is bounded by {@link JudgeRun.deadline}. */
 const TIMEOUT_MS = 8_000;
-const README_CHARS = 1_500;
-const INSTRUCTIONS_CHARS = 600;
+const INSTRUCTIONS_CHARS = 300;
 const MAX_TOOLS = 40;
-const MAX_ENTRIES = 40;
+const MAX_DEPENDENCIES = 60;
 /** Answers older than this are asked again: a project's direction drifts. */
 const CACHE_TTL_MS = 30 * 86_400_000;
+/** A repo whose request failed is not asked again for this long, so a dead network does not keep setup busy. */
+const FAILURE_TTL_MS = 86_400_000;
 
 const cachePath = (dataDir: string) => join(dataDir, "mcp-prune-jev.json");
 
@@ -38,87 +49,139 @@ export async function jevFromProcess(dataDir: string): Promise<JevSettings | nul
   return token ? { token } : null;
 }
 
-const readText = (path: string) => readFile(path, "utf-8").catch(() => null);
-
-/** README head, package manifest basics and top-level names: enough to tell a game from a web shop. */
-export async function describeProject(dir: string): Promise<Record<string, unknown>> {
-  const entries = await readdir(dir).catch(() => [] as string[]);
-  const readmeName = entries.find((n) => /^readme(\.md|\.txt)?$/i.test(n));
-  const readme = readmeName ? await readText(join(dir, readmeName)) : null;
-  const brief: Record<string, unknown> = {
-    name: basename(dir),
-    files: entries.filter((n) => !n.startsWith(".") || n === ".mcp.json").sort().slice(0, MAX_ENTRIES),
-  };
-  if (readme) brief.readme = collapse(readme).slice(0, README_CHARS);
-  try {
-    const pkg = JSON.parse((await readText(join(dir, "package.json"))) ?? "") as Record<string, unknown>;
-    const deps = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v) : []);
-    brief.package = {
-      ...(typeof pkg.name === "string" ? { name: pkg.name } : {}),
-      ...(typeof pkg.description === "string" ? { description: pkg.description } : {}),
-      dependencies: [...deps(pkg.dependencies), ...deps(pkg.devDependencies)].slice(0, MAX_ENTRIES),
-    };
-  } catch {
-    // No manifest, or not JSON: the rest still describes the project.
-  }
-  return brief;
-}
-
-interface CacheEntry {
-  key: string;
-  at: number;
-  needed: Record<string, number>;
-}
-
-async function loadCache(dataDir: string): Promise<Record<string, CacheEntry>> {
-  try {
-    const raw = JSON.parse((await readText(cachePath(dataDir))) ?? "") as unknown;
-    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, CacheEntry>) : {};
-  } catch {
-    return {};
-  }
-}
-
-export interface JudgeRequest {
-  dataDir: string;
-  jev: JevSettings;
-  now: number;
-  /** The repo the answers are cached under; its worktrees share them. */
-  repo: string;
-  project: Record<string, unknown>;
-  servers: ServerBrief[];
-}
-
-export interface JudgeResult {
-  /** Server name → probability (0..1) that the project will call it. */
-  needed: Map<string, number>;
-  /** False when every answer came from the cache. */
-  asked: boolean;
-}
+const SECRET_SHAPES: Array<[RegExp, string]> = [
+  [/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[url]"],
+  [/\bwww\.\S+/gi, "[url]"],
+  [/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]"],
+  [/\b([\w-]*(?:key|token|secret|password|passwd|pwd|credential|auth)[\w-]*)(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1$2[redacted]"],
+  [/\b(?:sk|pk|rk)-[\w-]{8,}/g, "[secret]"],
+  [/\bgh[pousr]_[A-Za-z0-9]{10,}/g, "[secret]"],
+  [/\bxox[abposr]-[\w-]{8,}/gi, "[secret]"],
+  [/\bAKIA[0-9A-Z]{12,}/g, "[secret]"],
+  [/\b[A-Fa-f0-9]{24,}\b/g, "[secret]"],
+];
 
 /**
- * Asks Jev, in one request, how likely the project is to need each server. Answers
- * are cached per repo and reused while the project description is unchanged, so a
- * prune run that plans twice (setup inspects, then applies) asks once. Null on any
- * failure, which callers treat as "no opinion". Never throws, never logs the token.
+ * Server instructions with URLs, emails and anything secret-shaped removed, cut to a short head.
+ * Long runs that mix letters and digits (base64, tokens) go; plain identifiers stay.
  */
-export async function judgeServers(req: JudgeRequest): Promise<JudgeResult | null> {
-  try {
-    const key = createHash("sha1").update(JSON.stringify(req.project)).digest("hex");
-    const cache = await loadCache(req.dataDir);
-    const hit = cache[req.repo];
-    const fresh = hit && hit.key === key && req.now - hit.at < CACHE_TTL_MS ? hit.needed : {};
-    const missing = req.servers.filter((s) => typeof fresh[s.name] !== "number");
-    if (missing.length === 0) return { needed: new Map(req.servers.map((s) => [s.name, fresh[s.name]!])), asked: false };
+export function redactInstructions(text: string, max = INSTRUCTIONS_CHARS): string {
+  let out = collapse(text);
+  for (const [shape, replacement] of SECRET_SHAPES) out = out.replace(shape, replacement);
+  out = out.replace(/[A-Za-z0-9+/=_-]{32,}/g, (run) => (/\d/.test(run) && /[A-Za-z]/.test(run) ? "[secret]" : run));
+  return out.slice(0, max).trim();
+}
 
-    const servers: Record<string, unknown> = {};
+/** Stack, manifest name and dependency names: enough to tell a game from a web shop, nothing a README could leak. */
+export async function projectSignals(dir: string): Promise<ProjectSignals> {
+  const stack = await detectStack(dir).catch(() => ({ languages: [], frameworks: [], packageManager: null, manifest: null }));
+  const signals: ProjectSignals = {
+    languages: stack.languages,
+    frameworks: stack.frameworks,
+    packageManager: stack.packageManager,
+    dependencies: [],
+  };
+  try {
+    const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf-8")) as Record<string, unknown>;
+    const names = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v) : []);
+    if (typeof pkg.name === "string") signals.name = pkg.name;
+    signals.dependencies = [...names(pkg.dependencies), ...names(pkg.devDependencies)].sort().slice(0, MAX_DEPENDENCIES);
+  } catch {
+    // No manifest, or not JSON: the stack still describes the project.
+  }
+  return signals;
+}
+
+/** A brief worth sending: the server announced tools or gave instructions. One with neither is kept, never judged by its name. */
+export const judgeable = (s: ServerBrief): boolean => s.tools.length > 0 || Boolean(s.instructions);
+
+const hash = (value: unknown) => createHash("sha1").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+
+const answerKey = (repo: string, project: ProjectSignals, server: ServerBrief) =>
+  `${repo}\u0000${hash(project)}\u0000${hash([server.name, server.tools.slice(0, MAX_TOOLS), server.instructions ?? ""])}`;
+
+interface CacheFile {
+  answers: Record<string, { at: number; needed: number }>;
+  failed: Record<string, number>;
+}
+
+async function loadCache(dataDir: string): Promise<CacheFile> {
+  try {
+    const raw = JSON.parse(await readFile(cachePath(dataDir), "utf-8")) as Partial<CacheFile>;
+    const record = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
+    return { answers: record(raw.answers) as CacheFile["answers"], failed: record(raw.failed) as CacheFile["failed"] };
+  } catch {
+    return { answers: {}, failed: {} };
+  }
+}
+
+/** Answers this process already got, so a lost cache write does not cost a second request within one run. */
+const memory: CacheFile = { answers: {}, failed: {} };
+
+/** Merges into whatever is on disk right before the rename, so concurrent runs keep each other's entries. */
+async function remember(dataDir: string, update: Partial<CacheFile>): Promise<void> {
+  Object.assign(memory.answers, update.answers);
+  Object.assign(memory.failed, update.failed);
+  try {
+    const disk = await loadCache(dataDir);
+    const merged: CacheFile = { answers: { ...disk.answers, ...update.answers }, failed: { ...disk.failed, ...update.failed } };
+    for (const repo of Object.keys(update.answers ?? {}).map((k) => k.split("\u0000")[0]!)) delete merged.failed[repo];
+    await writeFileAtomic(cachePath(dataDir), `${JSON.stringify(merged, null, 2)}\n`);
+  } catch {
+    // The in-process copy still serves this run.
+  }
+}
+
+/** One prune run's budget: how many requests it may make and until when. */
+export interface JudgeRun {
+  jev: JevSettings;
+  dataDir: string;
+  now: number;
+  /** False: answer from the cache only, with no request and no write (status, dry runs). */
+  ask: boolean;
+  /** Wall-clock ms after which no request starts; unanswered servers are kept. */
+  deadline: number;
+  requestsLeft: number;
+}
+
+export type Verdict =
+  /** Probability per judged server; servers missing from the map are kept. */
+  | { needed: Map<string, number> }
+  /** The cache cannot answer and this run may not ask. */
+  | { pending: true }
+  /** Jev failed, recently failed, or the run's budget is spent: keep everything. */
+  | null;
+
+/**
+ * How likely the project is to need each server, from the cache or, when the run
+ * may ask, from one Jev request covering every server the cache cannot answer.
+ * Never throws, never logs the token.
+ */
+export async function judgeServers(run: JudgeRun, repo: string, project: ProjectSignals, servers: ServerBrief[]): Promise<Verdict> {
+  try {
+    const disk = await loadCache(run.dataDir);
+    const cached = (k: string) =>
+      [memory.answers[k], disk.answers[k]].find((a) => a && typeof a.needed === "number" && run.now - a.at < CACHE_TTL_MS);
+    const keys = new Map(servers.map((s) => [s.name, answerKey(repo, project, s)]));
+    const needed = new Map<string, number>();
+    for (const s of servers) {
+      const hit = cached(keys.get(s.name)!);
+      if (hit) needed.set(s.name, hit.needed);
+    }
+    const missing = servers.filter((s) => !needed.has(s.name));
+    if (missing.length === 0) return { needed };
+    const failedAt = Math.max(memory.failed[repo] ?? 0, disk.failed[repo] ?? 0);
+    if (run.now - failedAt < FAILURE_TTL_MS) return null;
+    if (!run.ask) return { pending: true };
+    const remaining = run.deadline - Date.now();
+    if (run.requestsLeft <= 0 || remaining <= 0) return null;
+    run.requestsLeft--;
+
+    const state: Record<string, unknown> = { project };
     const questions: Record<string, NoulQuestion> = {};
+    const briefs: Record<string, unknown> = {};
     missing.forEach((s, i) => {
-      servers[`s${i}`] = {
-        name: s.name,
-        tools: s.tools.slice(0, MAX_TOOLS),
-        ...(s.instructions ? { instructions: collapse(s.instructions).slice(0, INSTRUCTIONS_CHARS) } : {}),
-      };
+      briefs[`s${i}`] = { name: s.name, tools: s.tools.slice(0, MAX_TOOLS), ...(s.instructions ? { instructions: s.instructions } : {}) };
       questions[`s${i}`] = {
         type: "noul",
         instructions:
@@ -126,17 +189,23 @@ export async function judgeServers(req: JudgeRequest): Promise<JudgeResult | nul
           `during their coding sessions there: what the server does fits the work this project involves.`,
       };
     });
-    const outcome = await askDetailed(req.jev.token, { project: req.project, servers }, questions, {
-      fetchFn: req.jev.fetchFn,
-      timeoutMs: req.jev.timeoutMs ?? TIMEOUT_MS,
+    state.servers = briefs;
+    const outcome = await askDetailed(run.jev.token, state, questions, {
+      fetchFn: run.jev.fetchFn,
+      timeoutMs: Math.min(run.jev.timeoutMs ?? TIMEOUT_MS, remaining),
     });
-    if (!outcome.ok) return null;
-
-    const answered = Object.fromEntries(missing.map((s, i) => [s.name, outcome.answers[`s${i}`]!.noul]));
-    const needed = { ...fresh, ...answered };
-    cache[req.repo] = { key, at: req.now, needed };
-    await writeFileAtomic(cachePath(req.dataDir), `${JSON.stringify(cache, null, 2)}\n`).catch(() => {});
-    return { needed: new Map(req.servers.map((s) => [s.name, needed[s.name]!])), asked: true };
+    if (!outcome.ok) {
+      await remember(run.dataDir, { failed: { [repo]: run.now } });
+      return null;
+    }
+    const answers: CacheFile["answers"] = {};
+    missing.forEach((s, i) => {
+      const p = outcome.answers[`s${i}`]!.noul;
+      needed.set(s.name, p);
+      answers[keys.get(s.name)!] = { at: run.now, needed: p };
+    });
+    await remember(run.dataDir, { answers });
+    return { needed };
   } catch {
     return null;
   }
