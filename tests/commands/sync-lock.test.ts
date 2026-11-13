@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -72,12 +72,42 @@ describe("acquireSyncLock", () => {
     expect(taken).not.toBeNull();
   });
 
-  it("takes over an unparseable lock left by a crash mid-write", async () => {
+  it("takes over an unparseable lock once it is past the grace period", async () => {
+    // Locks are now published complete, but an older version wrote them in two steps.
     writeFileSync(syncLockPath(root), "{ truncated");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(syncLockPath(root), old, old);
 
     const taken = await acquireSyncLock(root, { pid: 7, isAlive: () => true });
 
     expect(taken).not.toBeNull();
+  });
+
+  it("leaves a freshly written unparseable lock alone, since its writer may still be finishing", async () => {
+    writeFileSync(syncLockPath(root), "{ truncated");
+
+    expect(await acquireSyncLock(root, { pid: 7, isAlive: () => true })).toBeNull();
+  });
+
+  it("defers to a live taker holding the takeover sentinel", async () => {
+    await acquireSyncLock(root, { pid: 100, isAlive: () => true });
+    writeFileSync(`${syncLockPath(root)}.takeover`, JSON.stringify({ pid: 300, at: Date.now() }));
+
+    const taken = await acquireSyncLock(root, { pid: 200, isAlive: (pid) => pid !== 100 });
+
+    expect(taken).toBeNull();
+    expect(JSON.parse(readFileSync(syncLockPath(root), "utf-8")).pid).toBe(100);
+  });
+
+  it("breaks a takeover sentinel left by a taker that died, then takes the lock", async () => {
+    await acquireSyncLock(root, { pid: 100, isAlive: () => true });
+    writeFileSync(`${syncLockPath(root)}.takeover`, JSON.stringify({ pid: 300, at: Date.now() }));
+
+    const taken = await acquireSyncLock(root, { pid: 200, isAlive: (pid) => pid === 200 });
+
+    expect(taken).not.toBeNull();
+    expect(JSON.parse(readFileSync(syncLockPath(root), "utf-8")).pid).toBe(200);
+    expect(existsSync(`${syncLockPath(root)}.takeover`)).toBe(false);
   });
 
   it("removes the lock on release, freeing it for the next run", async () => {
@@ -116,7 +146,7 @@ describe("readLockHolder", () => {
     await acquireSyncLock(root, { pid: 14982, now: () => 60_000 });
 
     const holder = await readLockHolder(root);
-    expect(holder).toEqual({ pid: 14982, at: 60_000 });
+    expect(holder).toMatchObject({ pid: 14982, at: 60_000 });
   });
 
   it("never decides staleness — it just reads, even for a dead or ancient holder", async () => {
@@ -124,6 +154,6 @@ describe("readLockHolder", () => {
 
     // A liveness-blind read: still reports the record as-is.
     const holder = await readLockHolder(root);
-    expect(holder).toEqual({ pid: 1, at: 0 });
+    expect(holder).toMatchObject({ pid: 1, at: 0 });
   });
 });

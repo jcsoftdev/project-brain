@@ -239,10 +239,35 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
         try { await readFile(legacyManifestPath, "utf-8"); alreadyIndexed = true; } catch {}
       }
 
-      if (alreadyIndexed) {
-        indexStats = await runSync({ root, projectId, store, embeddings, onProgress: options.onProgress });
+      const index = () =>
+        alreadyIndexed
+          ? runSync({ root, projectId, store, embeddings, onProgress: options.onProgress })
+          : runReindex({ root, projectId, store, embeddings, onProgress: options.onProgress });
+
+      if (options.indexDeps) {
+        indexStats = await index();
       } else {
-        indexStats = await runReindex({ root, projectId, store, embeddings, onProgress: options.onProgress });
+        // One embedding run per machine — see embed-lock.ts. Injected deps
+        // (tests) never touch the real Ollama, so they skip the machine lock.
+        const { DATA_DIR } = await import("../constants.js");
+        const { runWithEmbedLock, resolveEmbedLockWaitMs, formatWaitMessage, formatTimeoutMessage } = await import(
+          "./embed-lock.js"
+        );
+        const { syncOneRoot } = await import("./sync.js");
+        const waitMs = resolveEmbedLockWaitMs();
+        const outcome = await runWithEmbedLock({
+          dataDir: options.dataDir ?? DATA_DIR,
+          root,
+          coalesce: false,
+          timeoutMs: waitMs,
+          onWait: (holder) => console.log(formatWaitMessage(holder, waitMs)),
+          run: async () => {
+            indexStats = await index();
+            return 0;
+          },
+          runPending: (pending) => syncOneRoot(pending, true),
+        });
+        if (outcome.kind !== "ran") throw new Error(formatTimeoutMessage(outcome.holder).replace(/^Error: /, ""));
       }
       indexed = true;
     } catch (err: unknown) {

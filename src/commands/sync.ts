@@ -1190,26 +1190,68 @@ export async function checkStaleness(options: StalenessOptions): Promise<Stalene
 
 /** CLI entry point for the sync command. */
 export async function execute(args: string[]): Promise<void> {
-  // Dynamic imports to avoid circular deps and keep CLI lean
-  const { LanceDbStore } = await import("../store/lancedb.js");
-  const { readFile } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-
   const root = args.find((a) => !a.startsWith("--")) ?? process.cwd();
   const changedOnly = args.includes("--changed-only");
 
-  // Load project config
-  const configPath = join(root, ".project-brain", "project.json");
-  let projectId: string;
-  try {
-    const raw = await readFile(configPath, "utf-8");
-    const config = JSON.parse(raw);
-    projectId = config.projectId;
-  } catch {
+  if ((await readProjectId(root)) === null) {
     console.error(
       "Error: project not initialized. Run `project-brain init` first."
     );
     process.exit(1);
+  }
+
+  // One embedding run per machine, across every worktree — see embed-lock.ts.
+  const { DATA_DIR } = await import("../constants.js");
+  const {
+    runWithEmbedLock,
+    resolveEmbedLockWaitMs,
+    formatQueuedMessage,
+    formatWaitMessage,
+    formatTimeoutMessage,
+  } = await import("./embed-lock.js");
+  const waitMs = resolveEmbedLockWaitMs();
+  const outcome = await runWithEmbedLock({
+    dataDir: DATA_DIR,
+    root,
+    coalesce: changedOnly,
+    timeoutMs: waitMs,
+    onWait: (holder) => console.log(formatWaitMessage(holder, waitMs)),
+    run: syncOneRoot,
+  });
+  if (outcome.kind === "queued") {
+    console.log(formatQueuedMessage(root, outcome.holder));
+    return;
+  }
+  if (outcome.kind === "timeout") {
+    console.error(formatTimeoutMessage(outcome.holder));
+    process.exit(1);
+  }
+  if (outcome.exitCode !== 0) process.exit(outcome.exitCode);
+}
+
+async function readProjectId(root: string): Promise<string | null> {
+  const { readFile } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  try {
+    const config = JSON.parse(await readFile(join(root, ".project-brain", "project.json"), "utf-8"));
+    return typeof config?.projectId === "string" ? config.projectId : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sync one root under its own per-root lock. Resolves to the exit code instead
+ * of exiting, because the embed-lock holder also calls it for the roots that
+ * coalesced behind it.
+ */
+export async function syncOneRoot(root: string, changedOnly: boolean): Promise<number> {
+  const { LanceDbStore } = await import("../store/lancedb.js");
+
+  const projectId = await readProjectId(root);
+  if (projectId === null) {
+    console.error(`Error: ${root} is not initialized. Run \`project-brain init\` there first.`);
+    return 1;
   }
 
   // Single-flight: the post-commit hook spawns a sync per commit, detached and
@@ -1230,7 +1272,7 @@ export async function execute(args: string[]): Promise<void> {
     // wrong decision about whether to skip.
     const holder = await readLockHolder(root);
     console.log(formatSkipMessage(projectId, holder));
-    return;
+    return 0;
   }
 
   const pid = process.pid;
@@ -1379,5 +1421,5 @@ export async function execute(args: string[]): Promise<void> {
     await lock.release();
   }
 
-  if (exitCode !== 0) process.exit(exitCode);
+  return exitCode;
 }
