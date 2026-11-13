@@ -111,6 +111,10 @@ export const WATCHER_ALWAYS_IGNORE = [
   "node_modules/",
   ".git/",
   ".project-brain/",
+  // Agent worktrees live in .claude/worktrees/; every write there would
+  // otherwise wake the parent checkout's watcher. The full walk already skips
+  // .claude/ (indexer/gitignore.ts), so the watcher now agrees with it.
+  ".claude/",
   "dist/",
   "build/",
   // JS/TS
