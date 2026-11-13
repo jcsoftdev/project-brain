@@ -106,9 +106,14 @@ export interface LifecycleDeps {
 export function lsofHolders(path: string, selfPid: number = process.pid, spawn: SpawnFn = spawnSync): number[] | null {
   const r = spawn("lsof", ["-d", "cwd", "-Fpn"], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
   if (r.error || typeof r.stdout !== "string" || r.stdout.length === 0) return null;
+  return holdersIn(r.stdout, path, selfPid);
+}
+
+/** Pids in `lsof -d cwd -Fpn` output whose cwd is `path` or inside it. One listing can answer for many paths. */
+export function holdersIn(lsofOutput: string, path: string, selfPid: number = process.pid): number[] {
   const pids: number[] = [];
   let pid = 0;
-  for (const line of r.stdout.split("\n")) {
+  for (const line of lsofOutput.split("\n")) {
     if (line.startsWith("p")) pid = Number(line.slice(1));
     else if (line.startsWith("n") && pid !== selfPid && isInside(line.slice(1), path)) pids.push(pid);
   }
@@ -128,7 +133,7 @@ export async function defaultDeps(cwd: string = process.cwd()): Promise<Lifecycl
   };
 }
 
-function isInside(candidate: string, dir: string): boolean {
+export function isInside(candidate: string, dir: string): boolean {
   return candidate === dir || candidate.startsWith(dir + sep);
 }
 
@@ -171,7 +176,7 @@ function safeRealpath(p: string): string {
 }
 
 /** Defaults to compare against: the resolved one, plus its local twin when that is `origin/<x>`. */
-function mergeTargets(defaultBranch: string): string[] {
+export function mergeTargets(defaultBranch: string): string[] {
   const local = defaultBranch.replace(/^origin\//, "");
   return local === defaultBranch ? [defaultBranch] : [defaultBranch, local];
 }
@@ -180,7 +185,12 @@ function mergeTargets(defaultBranch: string): string[] {
 function dirtyLines(deps: LifecycleDeps, path: string): { dirty: string[]; nodeModulesSymlink: boolean } {
   const r = git(deps, path, ["status", "--porcelain=v1", "-uall", "--ignore-submodules=none"]);
   if (!r.ok) return { dirty: [`git status failed: ${r.err}`], nodeModulesSymlink: false };
-  const lines = r.out.split("\n").filter(Boolean);
+  return workLines(r.out, path);
+}
+
+/** Porcelain output minus the lone untracked `node_modules` symlink, which is the isolation leftover rather than work. */
+export function workLines(porcelain: string, path: string): { dirty: string[]; nodeModulesSymlink: boolean } {
+  const lines = porcelain.split("\n").filter(Boolean);
   const link = join(path, "node_modules");
   const isLink = (() => {
     try {
