@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
 import { discoverMcpConfigs, normalizeServerName, type McpServerConfig } from "../toolcatalog/config.js";
 import { readRegistry } from "../store/project-registry.js";
-import { judgeable, judgeServers, projectSignals, redactInstructions, type JevSettings, type JudgeRun, type ServerBrief } from "./judge.js";
+import { judgeable, judgeServers, projectSignals, type JevSettings, type JudgeRun, type ServerBrief } from "./judge.js";
 import { classifyTool, emptyUsage, mergeUsage, scanUsage, type Usage } from "./usage.js";
 
 const DAY = 86_400_000;
@@ -290,13 +290,12 @@ async function unusedServers(env: PruneEnv, project: string, usage: Usage, never
     .map((s) => ({ name: s.name, mcpJson: inMcpJson.has(s.name) }));
 }
 
-/** The tools and redacted instructions the project's own sessions were given for `name`. */
+/** The tools and instructions the project's own sessions were given for `name`; only the tool names are ever sent. */
 function briefOf(name: string, usage: Usage): ServerBrief {
   const prefix = `mcp__${normalizeServerName(name)}__`;
   const tools = [...usage.announced].filter((t) => t.startsWith(prefix)).map((t) => t.slice(prefix.length)).sort();
   const seen = usage.instructions.get(name);
-  const instructions = seen ? redactInstructions(seen.text) : "";
-  return { name, tools, ...(instructions ? { instructions } : {}) };
+  return { name, tools, ...(seen ? { instructions: seen.text } : {}) };
 }
 
 /** A bare repo, a `.git` directory or a submodule's internals: never a project worth describing. */

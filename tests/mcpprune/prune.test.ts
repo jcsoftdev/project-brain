@@ -3,11 +3,11 @@ import { existsSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computePlan } from "../../src/setup/plan.js";
+import { computePlan, initialChecked } from "../../src/setup/plan.js";
 import { allUnits, type SetupContext } from "../../src/setup/units.js";
 import { applyPrune, AWAITING_JEV, MAX_JEV_REQUESTS, planPrune, repoKey, revertPrune, type PruneEnv } from "../../src/mcpprune/prune.js";
 import { classifyTool } from "../../src/mcpprune/usage.js";
-import { jevFromProcess, redactInstructions } from "../../src/mcpprune/judge.js";
+import { jevFromProcess } from "../../src/mcpprune/judge.js";
 import { execute } from "../../src/commands/mcp.js";
 import { projectDirKey } from "../../src/toolcatalog/transcripts.js";
 
@@ -380,10 +380,19 @@ describe("Jev at prune time", () => {
     const a = await project("shop");
     await writeFile(join(a, "README.md"), "# Shop\nOPENAI_API_KEY=sk-live-abcdefghijklmnop");
     await writeFile(join(a, "id_rsa_backup"), "x");
-    await writeFile(join(a, "package.json"), JSON.stringify({ name: "shop", dependencies: { next: "1" }, devDependencies: { typescript: "5" } }));
+    await writeFile(
+      join(a, "package.json"),
+      JSON.stringify({
+        name: "@acme-internal/project-nightingale-merger",
+        dependencies: { next: "1", "@acme-internal/payroll-sdk": "1" },
+        devDependencies: { typescript: "5" },
+      })
+    );
     await writeClaude([a]);
     await transcripts(a, 1);
-    await announce(a, ["mcp__alpha__deploy", "mcp__beta__model_3d"], { beta: "Generates 3D models. Webhook https://hooks.slack.com/services/T0/B0/x" });
+    await announce(a, ["mcp__alpha__deploy", "mcp__beta__model_3d"], {
+      beta: "Generates 3D models. Webhook https://hooks.slack.com/services/T0/B0/x API key AbC123xyz eyJhbGciOi.eyJzdWIi.c2lnbmF0dXJl",
+    });
     await register(a);
     const { jev, requests } = fakeJev({ alpha: 0.9, beta: 0.05 });
 
@@ -391,14 +400,20 @@ describe("Jev at prune time", () => {
     expect(plan!.basis).toBe("jev");
     expect(plan!.candidates).toEqual([{ name: "beta", mcpJson: false, needed: 0.05 }]);
     expect(requests).toHaveLength(1);
-    const sent = requests[0]!.state;
-    expect(sent.project).toEqual({ name: "shop", languages: ["TypeScript"], frameworks: ["Next.js"], packageManager: null, dependencies: ["next", "typescript"] });
-    expect(Object.values(sent.servers)).toEqual([
-      { name: "alpha", tools: ["deploy"] },
-      { name: "beta", tools: ["model_3d"], instructions: "Generates 3D models. Webhook [url]" },
-    ]);
-    const wire = JSON.stringify(requests[0]);
-    for (const leak of ["sk-live", "id_rsa", "hooks.slack.com", "test-token", "README"]) expect(wire).not.toContain(leak);
+    const question = (k: string) => ({
+      type: "noul",
+      instructions:
+        `A developer working in \`project\` will call tools of the MCP server \`servers.${k}\` ` +
+        `during their coding sessions there: what the server does fits the work this project involves.`,
+    });
+    expect(requests[0]).toEqual({
+      model: "jev-latest",
+      state: {
+        project: { languages: ["TypeScript"], frameworks: ["Next.js"], packageManager: null, dependencies: ["next", "typescript"] },
+        servers: { s0: { name: "alpha", tools: ["deploy"] }, s1: { name: "beta", tools: ["model_3d"] } },
+      },
+      questions: { s0: question("s0"), s1: question("s1") },
+    } as unknown as Sent);
 
     const lines: string[] = [];
     await execute(["prune"], { env: { ...env, jev }, cwd: a, log: (l) => lines.push(l) });
@@ -538,68 +553,76 @@ describe("Jev at prune time", () => {
     expect(keys.filter((k) => k.startsWith(`${a}\u0000`))).toHaveLength(2);
   });
 
-  it("setup inspect never calls Jev or writes, and reports a project awaiting Jev as pending", async () => {
-    const a = await thinProject("a");
-    await register(a);
-    const prev = process.env.TYPESAFE_API_KEY;
-    process.env.TYPESAFE_API_KEY = "env-token";
+  /** Runs `body` with a token in the env, the opt-in env set to `optIn` (or unset), and global fetch counting calls. */
+  async function withTokenAndNoNetwork(optIn: string | undefined, body: (calls: () => number) => Promise<void>): Promise<void> {
+    const prev = { key: process.env.TYPESAFE_API_KEY, opt: process.env.PROJECT_BRAIN_MCP_PRUNE_JEV };
     const realFetch = globalThis.fetch;
     let calls = 0;
+    process.env.TYPESAFE_API_KEY = "env-token";
+    if (optIn === undefined) delete process.env.PROJECT_BRAIN_MCP_PRUNE_JEV;
+    else process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = optIn;
     globalThis.fetch = (async () => {
       calls++;
-      throw new Error("no network in inspect");
+      throw new Error("no network here");
     }) as unknown as typeof fetch;
     try {
-      const ctx = { dataDir: env.dataDir, installed: [], claudeSettingsPath: join(root, ".claude", "settings.json") } as unknown as SetupContext;
-      const unit = allUnits(ctx).find((u) => u.id === "config:mcp-prune")!;
-      expect(await unit.inspect(ctx)).toBe("absent");
-      expect(calls).toBe(0);
-      expect(existsSync(cacheFile())).toBe(false);
+      await body(() => calls);
     } finally {
       globalThis.fetch = realFetch;
-      if (prev === undefined) delete process.env.TYPESAFE_API_KEY;
-      else process.env.TYPESAFE_API_KEY = prev;
-    }
-  });
-
-  it("takes the token from the environment unless opted out", async () => {
-    const prev = { key: process.env.TYPESAFE_API_KEY, opt: process.env.PROJECT_BRAIN_MCP_PRUNE_JEV };
-    try {
-      process.env.TYPESAFE_API_KEY = "env-token";
-      delete process.env.PROJECT_BRAIN_MCP_PRUNE_JEV;
-      expect(await jevFromProcess(env.dataDir)).toEqual({ token: "env-token" });
-      process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "0";
-      expect(await jevFromProcess(env.dataDir)).toBeNull();
-    } finally {
       if (prev.key === undefined) delete process.env.TYPESAFE_API_KEY;
       else process.env.TYPESAFE_API_KEY = prev.key;
       if (prev.opt === undefined) delete process.env.PROJECT_BRAIN_MCP_PRUNE_JEV;
       else process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = prev.opt;
     }
-  });
-});
+  }
 
-describe("redactInstructions", () => {
-  const cases: Array<[string, string]> = [
-    ["Use search_docs to find pages.", "Use search_docs to find pages."],
-    ["Webhook https://hooks.slack.com/services/T0/B0/x here", "Webhook [url] here"],
-    ["See www.example.com/docs", "See [url]"],
-    ["Mail ops@acme.io for access", "Mail [email] for access"],
-    ["api_key=abc123 then", "api_key=[redacted] then"],
-    ['password: "hunter 2" ok', "password: [redacted] ok"],
-    ["token sk-live-abcdefghijk1", "token [secret]"],
-    ["gh ghp_abcdefghij0123456789 x", "gh [secret] x"],
-    ["slack xoxb-1234-abcdefgh y", "slack [secret] y"],
-    [`aws ${"AKIA"}ABCDEFGHIJKLMNOP z`, "aws [secret] z"],
-    ["hex deadbeefdeadbeefdeadbeefdeadbeef end", "hex [secret] end"],
-    [`b64 ${"QWxhZGRpbjpvcGVu"}IHNlc2FtZQ9876543210abcd end`, "b64 [secret] end"],
-    ["tool mcp__plugin_engram_engram__mem_session_summary stays", "tool mcp__plugin_engram_engram__mem_session_summary stays"],
-  ];
-  it.each(cases)("%s", (input, expected) => {
-    expect(redactInstructions(input)).toBe(expected);
+  const setupCtx = () => ({ dataDir: env.dataDir, installed: [], claudeSettingsPath: join(root, ".claude", "settings.json") }) as unknown as SetupContext;
+  const unitOf = (id: string) => allUnits(setupCtx()).find((u) => u.id === id)!;
+
+  it("is opt-in: never ticked on a first run or an upgrade, and never applied by one", () => {
+    const unit = unitOf("config:mcp-prune-jev");
+    expect(unit.defaultSelected).toBe(false);
+    expect(unit.autoOnUpgrade).toBe(false);
+    expect(initialChecked("absent", "unseen", unit.defaultSelected, false)).toBe(false);
+    expect(initialChecked("absent", "unseen", unit.defaultSelected, true)).toBe(false);
   });
 
-  it("keeps only a short head", () => {
-    expect(redactInstructions("word ".repeat(200)).length).toBeLessThanOrEqual(300);
+  it("with the opt-in off, setup inspect and apply (as --apply-saved runs them) make no Jev request", async () => {
+    const a = await thinProject("a");
+    await register(a);
+    await withTokenAndNoNetwork(undefined, async (calls) => {
+      expect(await unitOf("config:mcp-prune-jev").inspect(setupCtx())).toBe("absent");
+      const prune = unitOf("config:mcp-prune");
+      expect(await prune.inspect(setupCtx())).toBe("current");
+      await prune.apply(setupCtx());
+      expect(calls()).toBe(0);
+      expect(existsSync(cacheFile())).toBe(false);
+      expect((await readJson()).projects[a].disabledMcpServers).toBeUndefined();
+    });
+  });
+
+  it("with the opt-in on, setup inspect still never calls Jev or writes, and reports a project awaiting Jev as pending", async () => {
+    const a = await thinProject("a");
+    await register(a);
+    await withTokenAndNoNetwork("1", async (calls) => {
+      expect(await unitOf("config:mcp-prune-jev").inspect(setupCtx())).toBe("current");
+      expect(await unitOf("config:mcp-prune").inspect(setupCtx())).toBe("absent");
+      expect(calls()).toBe(0);
+      expect(existsSync(cacheFile())).toBe(false);
+    });
+  });
+
+  it("needs the opt-in: env =1 enables, =0 disables and wins over a ticked unit", async () => {
+    await withTokenAndNoNetwork(undefined, async () => {
+      expect(await jevFromProcess(env.dataDir)).toBeNull();
+      await unitOf("config:mcp-prune-jev").apply(setupCtx());
+      expect(await jevFromProcess(env.dataDir)).toEqual({ token: "env-token" });
+      process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "0";
+      expect(await jevFromProcess(env.dataDir)).toBeNull();
+      expect(await unitOf("config:mcp-prune-jev").inspect(setupCtx())).toBe("unavailable");
+      await unitOf("config:mcp-prune-jev").remove(setupCtx());
+      process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "1";
+      expect(await jevFromProcess(env.dataDir)).toEqual({ token: "env-token" });
+    });
   });
 });

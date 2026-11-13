@@ -5,10 +5,10 @@ import { DATA_DIR } from "./constants.js";
 import { writeFileAtomic } from "./atomic-write.js";
 
 /**
- * The context-economy features, each switched by its own setup unit. All are on until the user
- * unticks them; the setup selection is persisted here so hooks can read it at runtime.
+ * The context-economy features, each switched by its own setup unit. All but the opt-in ones are on
+ * until the user unticks them; the setup selection is persisted here so hooks can read it at runtime.
  */
-export type FeatureId = "task-switch" | "routing-skill" | "search-gate" | "mcp-prune" | "context-slim" | "conceptualize";
+export type FeatureId = "task-switch" | "routing-skill" | "search-gate" | "mcp-prune" | "context-slim" | "conceptualize" | "mcp-prune-jev";
 
 type Env = Record<string, string | undefined>;
 
@@ -17,6 +17,12 @@ const ENV_OFF: Partial<Record<FeatureId, string>> = {
   "task-switch": "PROJECT_BRAIN_TASK_SWITCH",
   "mcp-prune": "PROJECT_BRAIN_MCP_PRUNE",
   conceptualize: "PROJECT_BRAIN_CONCEPTUALIZE",
+  "mcp-prune-jev": "PROJECT_BRAIN_MCP_PRUNE_JEV",
+};
+
+/** Off until the user ticks them or sets their env variable to `1`: they send data the default features do not. */
+const OPT_IN: Partial<Record<FeatureId, string>> = {
+  "mcp-prune-jev": "PROJECT_BRAIN_MCP_PRUNE_JEV",
 };
 
 const featuresPath = (dataDir: string) => join(dataDir, "features.json");
@@ -35,14 +41,21 @@ function parse(text: string): Partial<Record<FeatureId, boolean>> {
   }
 }
 
-/** Synchronous so a hook can ask without ceremony; a missing or unreadable file means every feature is on. */
+/**
+ * Synchronous so a hook can ask without ceremony. A missing or unreadable file means every
+ * feature is at its default: on, or off for an opt-in one. The env variable wins either way.
+ */
 export function featureEnabled(id: FeatureId, dataDir: string = DATA_DIR, env: Env = process.env): boolean {
   if (featureEnvOptOut(id, env)) return false;
+  const optIn = OPT_IN[id];
+  if (optIn !== undefined && env[optIn] === "1") return true;
+  let saved: boolean | undefined;
   try {
-    return parse(readFileSync(featuresPath(dataDir), "utf8"))[id] !== false;
+    saved = parse(readFileSync(featuresPath(dataDir), "utf8"))[id];
   } catch {
-    return true;
+    saved = undefined;
   }
+  return typeof saved === "boolean" ? saved : optIn === undefined;
 }
 
 export async function setFeature(dataDir: string, id: FeatureId, on: boolean): Promise<void> {

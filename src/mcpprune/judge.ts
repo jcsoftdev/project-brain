@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
+import { featureEnabled } from "../features.js";
 import { detectStack } from "../indexer/stack.js";
 import { resolveRerankerToken } from "../rerank/token.js";
-import { collapse } from "../toolcatalog/live.js";
 import { askDetailed, type NoulQuestion, type TypesafeFetchFn } from "../typesafe/client.js";
 
 /** How prune reaches Jev; absent means usage history alone decides, as before Jev took part. */
@@ -14,16 +14,15 @@ export interface JevSettings {
   timeoutMs?: number;
 }
 
-/** What Jev reads about one server: its name, tool names and redacted instructions, never its command, URL or environment. */
+/** One server as prune knows it. Only `name` and `tools` are ever sent; `instructions` feeds the local cache key alone. */
 export interface ServerBrief {
   name: string;
   tools: string[];
   instructions?: string;
 }
 
-/** Structured, low-risk signals only: no README text, no file names. */
+/** Structured, low-risk signals only: no README text, no file names, no package name, no scoped dependency. */
 export interface ProjectSignals {
-  name?: string;
   languages: string[];
   frameworks: string[];
   packageManager: string | null;
@@ -32,7 +31,6 @@ export interface ProjectSignals {
 
 /** Per request; the run as a whole is bounded by {@link JudgeRun.deadline}. */
 const TIMEOUT_MS = 8_000;
-const INSTRUCTIONS_CHARS = 300;
 const MAX_TOOLS = 40;
 const MAX_DEPENDENCIES = 60;
 /** Answers older than this are asked again: a project's direction drifts. */
@@ -42,37 +40,21 @@ const FAILURE_TTL_MS = 86_400_000;
 
 const cachePath = (dataDir: string) => join(dataDir, "mcp-prune-jev.json");
 
-/** Token from `TYPESAFE_API_KEY` or `reranker.json`, unless `PROJECT_BRAIN_MCP_PRUNE_JEV=0`. Never throws. */
+/**
+ * Token from `TYPESAFE_API_KEY` or `reranker.json`, only when the opt-in `mcp-prune-jev`
+ * feature is on (ticked in setup, or `PROJECT_BRAIN_MCP_PRUNE_JEV=1`). Never throws.
+ */
 export async function jevFromProcess(dataDir: string): Promise<JevSettings | null> {
-  if (process.env.PROJECT_BRAIN_MCP_PRUNE_JEV === "0") return null;
+  if (!featureEnabled("mcp-prune-jev", dataDir)) return null;
   const token = await resolveRerankerToken({ dataDir }).catch(() => null);
   return token ? { token } : null;
 }
 
-const SECRET_SHAPES: Array<[RegExp, string]> = [
-  [/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[url]"],
-  [/\bwww\.\S+/gi, "[url]"],
-  [/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]"],
-  [/\b([\w-]*(?:key|token|secret|password|passwd|pwd|credential|auth)[\w-]*)(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1$2[redacted]"],
-  [/\b(?:sk|pk|rk)-[\w-]{8,}/g, "[secret]"],
-  [/\bgh[pousr]_[A-Za-z0-9]{10,}/g, "[secret]"],
-  [/\bxox[abposr]-[\w-]{8,}/gi, "[secret]"],
-  [/\bAKIA[0-9A-Z]{12,}/g, "[secret]"],
-  [/\b[A-Fa-f0-9]{24,}\b/g, "[secret]"],
-];
-
 /**
- * Server instructions with URLs, emails and anything secret-shaped removed, cut to a short head.
- * Long runs that mix letters and digits (base64, tokens) go; plain identifiers stay.
+ * Stack and public dependency names: enough to tell a game from a web shop. Scoped names
+ * (`@org/...`) are left out because private packages live under scopes; the package's own
+ * name is never read.
  */
-export function redactInstructions(text: string, max = INSTRUCTIONS_CHARS): string {
-  let out = collapse(text);
-  for (const [shape, replacement] of SECRET_SHAPES) out = out.replace(shape, replacement);
-  out = out.replace(/[A-Za-z0-9+/=_-]{32,}/g, (run) => (/\d/.test(run) && /[A-Za-z]/.test(run) ? "[secret]" : run));
-  return out.slice(0, max).trim();
-}
-
-/** Stack, manifest name and dependency names: enough to tell a game from a web shop, nothing a README could leak. */
 export async function projectSignals(dir: string): Promise<ProjectSignals> {
   const stack = await detectStack(dir).catch(() => ({ languages: [], frameworks: [], packageManager: null, manifest: null }));
   const signals: ProjectSignals = {
@@ -84,16 +66,18 @@ export async function projectSignals(dir: string): Promise<ProjectSignals> {
   try {
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf-8")) as Record<string, unknown>;
     const names = (v: unknown) => (v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v) : []);
-    if (typeof pkg.name === "string") signals.name = pkg.name;
-    signals.dependencies = [...names(pkg.dependencies), ...names(pkg.devDependencies)].sort().slice(0, MAX_DEPENDENCIES);
+    signals.dependencies = [...names(pkg.dependencies), ...names(pkg.devDependencies)]
+      .filter((n) => !n.startsWith("@"))
+      .sort()
+      .slice(0, MAX_DEPENDENCIES);
   } catch {
     // No manifest, or not JSON: the stack still describes the project.
   }
   return signals;
 }
 
-/** A brief worth sending: the server announced tools or gave instructions. One with neither is kept, never judged by its name. */
-export const judgeable = (s: ServerBrief): boolean => s.tools.length > 0 || Boolean(s.instructions);
+/** A brief worth sending: the server announced tools. One without is kept, never judged by its name alone. */
+export const judgeable = (s: ServerBrief): boolean => s.tools.length > 0;
 
 const hash = (value: unknown) => createHash("sha1").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 
@@ -181,7 +165,7 @@ export async function judgeServers(run: JudgeRun, repo: string, project: Project
     const questions: Record<string, NoulQuestion> = {};
     const briefs: Record<string, unknown> = {};
     missing.forEach((s, i) => {
-      briefs[`s${i}`] = { name: s.name, tools: s.tools.slice(0, MAX_TOOLS), ...(s.instructions ? { instructions: s.instructions } : {}) };
+      briefs[`s${i}`] = { name: s.name, tools: s.tools.slice(0, MAX_TOOLS) };
       questions[`s${i}`] = {
         type: "noul",
         instructions:

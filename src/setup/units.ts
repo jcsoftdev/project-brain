@@ -1616,7 +1616,7 @@ async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, 
  * Code's.
  */
 export function allUnits(ctx: SetupContext): SetupUnit[] {
-  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...claudeTuiUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit()];
+  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...claudeTuiUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit(), mcpPruneJevUnit()];
 }
 
 
@@ -1630,6 +1630,8 @@ function featureUnit(spec: {
   label: string;
   description: string;
   group?: SetupUnit["group"];
+  /** Never ticked by default, never applied by an upgrade: the user turns it on. */
+  optIn?: boolean;
 }): SetupUnit {
   const set = async (ctx: SetupContext, on: boolean) => {
     const { setFeature } = await import("../features.js");
@@ -1640,8 +1642,8 @@ function featureUnit(spec: {
     group: spec.group ?? "Other",
     label: spec.label,
     description: spec.description,
-    defaultSelected: true,
-    autoOnUpgrade: true,
+    defaultSelected: !spec.optIn,
+    autoOnUpgrade: !spec.optIn,
 
     async inspect(ctx): Promise<UnitState> {
       const { featureEnabled, featureEnvOptOut } = await import("../features.js");
@@ -1804,7 +1806,7 @@ function mcpPruneUnit(): SetupUnit {
     group: "Other",
     label: "Disable unused MCP servers",
     description:
-      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions, or 14 days of history with 3 sessions in the window; never project-brain), so their tool lists and instructions stop loading. Only with a TypeSafe (Jev) token: for a project registered with project-brain that has less history, it asks Jev which unused servers that project will not need, sending api.typesafe.ai the project's languages, frameworks, package name and dependency names plus each server's name, tool names and redacted instructions (never README text, file names, server commands, URLs or env); PROJECT_BRAIN_MCP_PRUNE_JEV=0 turns that off, and without a token nothing leaves the machine. `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out",
+      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions, or 14 days of history with 3 sessions in the window; never project-brain), so their tool lists and instructions stop loading; `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out. Nothing leaves the machine unless you also tick the opt-in Jev assist",
     defaultSelected: true,
     autoOnUpgrade: true,
 
@@ -1851,6 +1853,20 @@ function mcpPruneUnit(): SetupUnit {
       await revertPrune(env);
     },
   };
+}
+
+/** Opt-in: lets prune ask Jev about projects with too little history, so it sends data the default prune never does. */
+function mcpPruneJevUnit(): SetupUnit {
+  return featureUnit({
+    id: "config:mcp-prune-jev",
+    feature: "mcp-prune-jev",
+    label: "Jev assist for MCP pruning (opt-in)",
+    description:
+      "opt-in, off unless ticked or PROJECT_BRAIN_MCP_PRUNE_JEV=1 (=0 forces it off); needs a TypeSafe token. When `mcp prune --apply`, setup or update prunes a project registered with project-brain whose history is too thin, " +
+      "it sends api.typesafe.ai each unused server's name and tool names plus the project's detected languages, frameworks, package manager and unscoped dependency names " +
+      "(never server instructions, scoped @org packages, the package name, README text or file names), and disables only servers Jev rates under 20%",
+    optIn: true,
+  });
 }
 
 /** The global rules file beside the settings file, so a redirected settings path redirects it too. */

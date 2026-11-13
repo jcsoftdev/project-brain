@@ -160,7 +160,8 @@ Commands:
                          (backup first; --description <text> sets the skill description)
                        --revert  restore the latest backup and remove the skills it created
   mcp prune          List MCP servers a project never used (default: this project), no changes
-                         (thin history + Jev token: registered projects use cached Jev answers)
+                         (opt-in Jev assist, PROJECT_BRAIN_MCP_PRUNE_JEV=1 or setup: thin-history registered
+                          projects send server + tool names, stack and unscoped dependency names to TypeSafe)
                        --all     every project in ~/.claude.json
                        --apply   disable them for that project only (backup first); may ask Jev
                        --revert  re-enable exactly what --apply disabled
