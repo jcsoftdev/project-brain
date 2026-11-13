@@ -1,5 +1,5 @@
-import { join } from "node:path";
-import { mkdir, open, readFile, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { link, mkdir, open, readFile, rename, unlink, writeFile } from "node:fs/promises";
 
 /**
  * A lock older than this is abandoned regardless of what the liveness probe
@@ -71,6 +71,11 @@ export async function readLockHolder(root: string): Promise<LockRecord | null> {
   return readRecord(syncLockPath(root));
 }
 
+/** Read any pid-file lock's holder, for display only. */
+export async function readPidFileLockHolder(path: string): Promise<LockRecord | null> {
+  return readRecord(path);
+}
+
 /**
  * Cross-process single-flight lock for a project's sync, held as a file under
  * `.project-brain/`.
@@ -83,39 +88,81 @@ export async function readLockHolder(root: string): Promise<LockRecord | null> {
  * full-memory job on top of the last.
  *
  * Scoping is per project root, so a worktree locks independently of its
- * siblings — the same boundary `.project-brain/` already draws.
+ * siblings — the same boundary `.project-brain/` already draws. The
+ * machine-wide lock that serializes embedding across roots lives in
+ * `embed-lock.ts` and is built on the same primitive.
  */
 export async function acquireSyncLock(
   root: string,
   opts: AcquireSyncLockOptions = {}
 ): Promise<SyncLock | null> {
+  return acquirePidFileLock(syncLockPath(root), opts);
+}
+
+export interface PidFileLock extends SyncLock {
+  /** Re-stamp the lock's age, so a holder that keeps working never reads as abandoned. */
+  refresh(): Promise<void>;
+}
+
+export interface AcquirePidFileLockOptions extends AcquireSyncLockOptions {
+  /** Age past which the lock is abandoned whatever the liveness probe says. */
+  staleMs?: number;
+}
+
+/**
+ * Exclusive lock file recording its holder's pid. A holder that died, or a
+ * record older than `staleMs`, is taken over.
+ *
+ * Takeover renames the abandoned file aside instead of unlinking it, then
+ * checks that what it moved is the record it judged stale. Unlink-then-create
+ * let two contenders that both saw the dead holder each delete the other's
+ * fresh lock and both believe they held it; a rename moves exactly one file,
+ * and a contender that moved a live lock by mistake puts it back.
+ */
+export async function acquirePidFileLock(
+  path: string,
+  opts: AcquirePidFileLockOptions = {}
+): Promise<PidFileLock | null> {
   const pid = opts.pid ?? process.pid;
   const isAlive = opts.isAlive ?? defaultIsAlive;
   const now = opts.now ?? Date.now;
-  const path = syncLockPath(root);
+  const staleMs = opts.staleMs ?? SYNC_LOCK_STALE_MS;
 
-  const write = async () => {
-    await mkdir(join(root, ".project-brain"), { recursive: true });
-    // `wx` fails when the file exists — the atomic test-and-set this needs.
-    const handle = await open(path, "wx");
-    await handle.writeFile(JSON.stringify({ pid, at: now() } satisfies LockRecord));
-    await handle.close();
+  const create = async (): Promise<boolean> => {
+    await mkdir(dirname(path), { recursive: true });
+    try {
+      // `wx` fails when the file exists — the atomic test-and-set this needs.
+      const handle = await open(path, "wx");
+      await handle.writeFile(JSON.stringify({ pid, at: now() } satisfies LockRecord));
+      await handle.close();
+      return true;
+    } catch {
+      return false;
+    }
   };
 
-  try {
-    await write();
-  } catch {
+  if (!(await create())) {
     const held = await readRecord(path);
-    const stale =
-      held === null || !isAlive(held.pid) || now() - held.at > SYNC_LOCK_STALE_MS;
+    const stale = held === null || !isAlive(held.pid) || now() - held.at > staleMs;
     if (!stale) return null;
 
-    try {
-      await unlink(path);
-      await write();
-    } catch {
-      return null; // lost the race to another taker
+    const aside = `${path}.${pid}.${now()}.stale`;
+    const moved = await rename(path, aside).then(() => true, () => false);
+    if (!moved) return null; // another contender moved it first
+    const movedRecord = await readRecord(aside);
+    const movedWhatWeJudged =
+      held === null
+        ? movedRecord === null
+        : movedRecord?.pid === held.pid && movedRecord.at === held.at;
+    if (!movedWhatWeJudged) {
+      // A contender re-created the lock between our read and our rename.
+      // `link` refuses to overwrite, so putting it back never clobbers a third holder.
+      await link(aside, path).catch(() => {});
+      await unlink(aside).catch(() => {});
+      return null;
     }
+    await unlink(aside).catch(() => {});
+    if (!(await create())) return null; // lost the race to another taker
   }
 
   return {
@@ -125,6 +172,11 @@ export async function acquireSyncLock(
       const held = await readRecord(path);
       if (held?.pid !== pid) return;
       await unlink(path).catch(() => {});
+    },
+    async refresh() {
+      const held = await readRecord(path);
+      if (held?.pid !== pid) return;
+      await writeFile(path, JSON.stringify({ pid, at: now() } satisfies LockRecord)).catch(() => {});
     },
   };
 }

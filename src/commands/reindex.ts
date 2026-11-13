@@ -1,4 +1,4 @@
-import { runSync, resolveSyncModel, syncExitCode } from "./sync.js";
+import { runSync, resolveSyncModel, syncExitCode, syncOneRoot } from "./sync.js";
 import { ManifestStore } from "../indexer/manifest-store.js";
 import type { SyncProgress, SyncResult } from "./sync.js";
 import type { EmbeddingClient, VectorStore } from "../types.js";
@@ -105,8 +105,30 @@ export async function execute(args: string[]): Promise<void> {
   const { makeProgressPrinter, formatDuration, formatModelLabel } = await import("../indexer/progress.js");
   const { onProgress, clear } = makeProgressPrinter();
 
-  const startedAt = Date.now();
-  const result = await runReindex({ root, projectId, store, embeddings, onProgress });
+  const { DATA_DIR } = await import("../constants.js");
+  const { runWithEmbedLock, resolveEmbedLockWaitMs, formatWaitMessage, formatTimeoutMessage } = await import(
+    "./embed-lock.js"
+  );
+  const waitMs = resolveEmbedLockWaitMs();
+  let startedAt = Date.now();
+  let result: ReindexResult | undefined;
+  const outcome = await runWithEmbedLock({
+    dataDir: DATA_DIR,
+    root,
+    coalesce: false,
+    timeoutMs: waitMs,
+    onWait: (holder) => console.log(formatWaitMessage(holder, waitMs)),
+    run: async () => {
+      startedAt = Date.now();
+      result = await runReindex({ root, projectId, store, embeddings, onProgress });
+      return 0;
+    },
+    runPending: (pending) => syncOneRoot(pending, true),
+  });
+  if (outcome.kind !== "ran" || result === undefined) {
+    console.error(formatTimeoutMessage(outcome.kind === "ran" ? null : outcome.holder));
+    process.exit(1);
+  }
 
   clear();
 
