@@ -109,6 +109,8 @@ export async function buildRoutingReminder(
  */
 export async function execute(
   selfInstall: () => Promise<unknown> = async () => {
+    const { mayWriteGlobalState } = await import("../env/install-origin.js");
+    if (!mayWriteGlobalState("suggest-hook")) return false;
     const { DATA_DIR } = await import("../constants.js");
     const { selfInstallSuggestHook } = await import("./suggest-hook.js");
     return selfInstallSuggestHook({

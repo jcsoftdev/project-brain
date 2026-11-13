@@ -20,7 +20,7 @@ describe("CLI preamble repairs stale host configs", () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  async function runCli(): Promise<{ stdout: string; stderr: string }> {
+  async function runCli(force = true): Promise<{ stdout: string; stderr: string }> {
     const proc = Bun.spawn(["bun", "src/cli.ts", "--help"], {
       env: {
         ...process.env,
@@ -28,6 +28,8 @@ describe("CLI preamble repairs stale host configs", () => {
         // Isolate the assertion from the neighbouring preamble blocks.
         BRAIN_NO_UPDATE_CHECK: "1",
         BRAIN_NO_SKILL_REFRESH: "1",
+        // A source run repairs nothing unless forced (see env/install-origin.ts).
+        BRAIN_FORCE_SKILL_REFRESH: force ? "1" : "",
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -88,7 +90,20 @@ describe("CLI preamble repairs stale host configs", () => {
     expect(await Bun.file(configPath).text()).toBe(original);
   }, 30_000);
 
-  it("honors BRAIN_NO_CONFIG_REPAIR=1", async () => {
+  it("leaves a broken entry alone when run from source without the force flag", async () => {
+    const configPath = join(home, ".claude.json");
+    const original = JSON.stringify({
+      mcpServers: { "project-brain": { command: "bun", args: ["/opt/homebrew/bin/project-brain"] } },
+    });
+    await Bun.write(configPath, original);
+
+    const { stderr } = await runCli(false);
+
+    expect(stderr).not.toContain("fixed the MCP launch command");
+    expect(await Bun.file(configPath).text()).toBe(original);
+  }, 30_000);
+
+  it("honors BRAIN_NO_CONFIG_REPAIR=1, even over the force flag", async () => {
     const configPath = join(home, ".claude.json");
     const original = JSON.stringify({
       mcpServers: {
@@ -107,6 +122,7 @@ describe("CLI preamble repairs stale host configs", () => {
         BRAIN_NO_UPDATE_CHECK: "1",
         BRAIN_NO_SKILL_REFRESH: "1",
         BRAIN_NO_CONFIG_REPAIR: "1",
+        BRAIN_FORCE_SKILL_REFRESH: "1",
       },
       stdout: "pipe",
       stderr: "pipe",
