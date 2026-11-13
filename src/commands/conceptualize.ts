@@ -100,6 +100,12 @@ export async function execute(args: string[]): Promise<void> {
   const { createAnthropicClient } = await import("../llm/anthropic-client.js");
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
   const { readTableMeta } = await import("../store/meta.js");
+  const { featureEnabled } = await import("../features.js");
+
+  if (!featureEnabled("conceptualize")) {
+    console.log("Conceptualize: off (feature:conceptualize); nothing sent.");
+    return;
+  }
 
   const { root, onlyModule } = parseConceptualizeArgs(args);
 

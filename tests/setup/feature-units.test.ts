@@ -22,7 +22,7 @@ const ctxFor = (over: Partial<SetupContext> = {}): SetupContext =>
   ({ dataDir, installed: [], claudeSettingsPath: join(dir, ".claude", "settings.json"), routingConfigPath: join(dir, "none.json"), ...over }) as unknown as SetupContext;
 const unitOf = (id: string, ctx = ctxFor()) => allUnits(ctx).find((u) => u.id === id)!;
 
-const FEATURE_UNITS = ["feature:routing-skill", "feature:task-switch", "feature:search-gate", "config:context-slim", "config:mcp-prune"];
+const FEATURE_UNITS = ["feature:routing-skill", "feature:task-switch", "feature:search-gate", "feature:conceptualize", "config:context-slim", "config:mcp-prune"];
 
 describe("features.json", () => {
   it("is on without a file or with a corrupt one, off when written off, and the env opt-out wins", async () => {
@@ -54,6 +54,7 @@ describe("context-economy units", () => {
     ["feature:task-switch", "task-switch"],
     ["feature:search-gate", "search-gate"],
     ["feature:routing-skill", "routing-skill"],
+    ["feature:conceptualize", "conceptualize"],
   ] as const) {
     it(`${id}: current by default, unticking switches the feature off and ticking back on`, async () => {
       const unit = unitOf(id);
@@ -181,5 +182,32 @@ describe("setup flow", () => {
     const saved = await loadSelection(join(dataDir, "setup-selection.json"));
     for (const id of IDS) expect(saved?.selected).toContain(id);
     for (const f of ["task-switch", "search-gate", "routing-skill"] as const) expect(featureEnabled(f, dataDir, {})).toBe(true);
+  });
+});
+
+describe("conceptualize gate", () => {
+  const cli = join(import.meta.dir, "..", "..", "src", "cli.ts");
+  const run = (home: string, env: Record<string, string> = {}) =>
+    Bun.spawnSync(["bun", cli, "conceptualize", join(home, "not-a-project")], {
+      env: { ...process.env, HOME: home, BRAIN_NO_UPDATE_CHECK: "1", BRAIN_NO_SKILL_REFRESH: "1", BRAIN_NO_CONFIG_REPAIR: "1", ...env },
+    });
+
+  it("sends nothing and exits 0 when the feature is off, before touching the project", async () => {
+    await setFeature(join(dir, ".project-brain"), "conceptualize", false);
+    const off = run(dir);
+    expect(off.exitCode).toBe(0);
+    expect(off.stdout.toString()).toContain("Conceptualize: off");
+  });
+
+  it("honours PROJECT_BRAIN_CONCEPTUALIZE=0 without a features file", () => {
+    const off = run(dir, { PROJECT_BRAIN_CONCEPTUALIZE: "0" });
+    expect(off.exitCode).toBe(0);
+    expect(off.stdout.toString()).toContain("Conceptualize: off");
+  });
+
+  it("still runs by default (fails on the uninitialized root, proving the gate let it through)", () => {
+    const on = run(dir);
+    expect(on.exitCode).toBe(1);
+    expect(on.stderr.toString()).toContain("project not initialized");
   });
 });

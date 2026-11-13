@@ -8,7 +8,7 @@ import { writeFileAtomic } from "./atomic-write.js";
  * The context-economy features, each switched by its own setup unit. All are on until the user
  * unticks them; the setup selection is persisted here so hooks can read it at runtime.
  */
-export type FeatureId = "task-switch" | "routing-skill" | "search-gate" | "mcp-prune" | "context-slim";
+export type FeatureId = "task-switch" | "routing-skill" | "search-gate" | "mcp-prune" | "context-slim" | "conceptualize";
 
 type Env = Record<string, string | undefined>;
 
@@ -16,6 +16,7 @@ type Env = Record<string, string | undefined>;
 const ENV_OFF: Partial<Record<FeatureId, string>> = {
   "task-switch": "PROJECT_BRAIN_TASK_SWITCH",
   "mcp-prune": "PROJECT_BRAIN_MCP_PRUNE",
+  conceptualize: "PROJECT_BRAIN_CONCEPTUALIZE",
 };
 
 const featuresPath = (dataDir: string) => join(dataDir, "features.json");

@@ -348,7 +348,7 @@ describe("setup command", () => {
       // they are on until the user turns them off. config:reranker depends on whether
       // this machine already holds a Jev token, so it is left out of the comparison.
       expect(firstSeed.filter((id) => id !== "config:reranker").sort()).toEqual(
-        ["feature:routing-skill", "feature:search-gate", "feature:task-switch"]
+        ["feature:conceptualize", "feature:routing-skill", "feature:search-gate", "feature:task-switch"]
       );
 
       let secondSeed: string[] = ["unset"];

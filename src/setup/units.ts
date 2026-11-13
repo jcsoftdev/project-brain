@@ -1673,6 +1673,14 @@ export function featureUnits(): SetupUnit[] {
       description:
         "the per-prompt search skips acknowledgements, slash commands and pasted reports, keeps at most 5 hits, and with a reranker token drops hits scoring under 0.5; nothing extra leaves the machine",
     }),
+    featureUnit({
+      id: "feature:conceptualize",
+      feature: "conceptualize",
+      label: "Module docs after each commit",
+      description:
+        "the git post-commit hook runs `conceptualize`, which sends the commit message, each touched module's full diff (up to 5 modules) and its current concept doc to the Anthropic API when Anthropic credentials resolve; " +
+        "unticked, nothing is sent and the hook only syncs. PROJECT_BRAIN_CONCEPTUALIZE=0 also turns it off",
+    }),
   ];
 }
 
