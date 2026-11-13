@@ -206,6 +206,28 @@ describe("search command", () => {
       expect(output).toHaveLength(0);
     });
 
+    it("injects at the hook floor and drops the noise that cleared the old 0.5 floor", async () => {
+      const { runSearch, HOOK_MIN_SCORE } = await import("../../src/commands/search.js");
+      const scores: Record<string, number> = {
+        "src/retrieval/budget.ts": 0.61,
+        "odd/tasks/constraints.md": 0.56,
+        "src/just-below.ts": 0.64,
+        "src/at-floor.ts": 0.65,
+        "src/relevant.ts": 0.74,
+      };
+      const results = Object.keys(scores).map((source, i) =>
+        makeSearchResult({ id: `f${i}`, source, score: 0.5, content: `body${i} words${i} unique${i}` })
+      );
+
+      await runSearch(
+        { query: "floor query", project: "p", limit: 8, minScore: HOOK_MIN_SCORE },
+        { store: makeStore(results), embeddings: makeEmbeddings(true), reranker: stubReranker(scores) }
+      );
+
+      const injected = output.join("\n").split("\n").filter((l) => l.startsWith("- ")).map((l) => l.split(" ")[1]);
+      expect(injected.sort()).toEqual(["src/at-floor.ts", "src/relevant.ts"]);
+    });
+
     it("caps the number of printed hits at maxHits", async () => {
       const { runSearch } = await import("../../src/commands/search.js");
       const words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
