@@ -20,6 +20,7 @@ import { blockedToolCall, blockedTurnStart } from './feat-blocked'
 import type { BlockedPart } from './feat-blocked'
 import { footerSavings, readSavings, rowsSavings, savingsSessionStart, savingsTurnComplete } from './feat-savings'
 import type { SavingsPart } from './feat-savings'
+import { notifyCommand, notifyTurnComplete } from './feat-notify'
 
 import type {
   AgentRecord,
@@ -1698,7 +1699,7 @@ export const sessionStartOf = (stored: number, now: number, list: ToolEntry[], k
   stored > 0 ? stored : Math.min(now, ...list.map(one => one.startedAt), ...known.map(one => one.at))
 
 async function mainSessionStart($: Api, e: Parameters<Hook<'session.start'>>[1], next: Parameters<Hook<'session.start'>>[2]): Promise<Awaited<ReturnType<Hook<'session.start'>>>> {
-  await $.command.register({ name: 'activity', description: 'Abre el panel de actividad' })
+  await $.command.register({ name: 'activity', description: 'Abre el panel de actividad · notify on|off|test para las notificaciones del sistema' })
   const [stored, list, known] = await Promise.all([read($, sessionStart), read($, entries), read($, commits)])
   const now = await $.clock.now()
   await update($, sessionStart, () => sessionStartOf(stored, now, list, known))
@@ -1926,7 +1927,9 @@ export const register: Register = on => {
     return next({ ...e, props: { ...e.props, suffix: `${e.props.suffix} · ${dollars(usd)}` } })
   })
 
-  on('command.run', { command: 'activity' }, async $ => {
+  on('command.run', { command: 'activity' }, async ($, e) => {
+    const answered = await notifyCommand($ as Api, e.command, e.args)
+    if (answered) return answered
     const opened = await $.ui.open(PANE_ARGS).catch(() => undefined)
     if (opened?.isPlaced !== false) void paneOpened($ as Api).catch(() => undefined)
     return { text: opened?.isPlaced === false ? 'El panel de actividad espera a que haya espacio.' : 'Panel de actividad abierto.' }
@@ -2129,7 +2132,7 @@ export const register: Register = on => {
   })
   on('turn.complete', async ($, e, next) => {
     const once = onceNext(next as never)
-    return savingsTurnComplete($, e, ((s0: typeof e) => agentsTurnComplete($, s0, ((e0: typeof e) => ciTurnComplete($, e0, ((e1: typeof e) => contextTurnComplete($, e1, ((e2: typeof e) => progressTurnComplete($, e2, ((e3: typeof e) => mainTurnComplete($, e3, once as never).catch(() => once(e3))) as never)) as never)) as never)) as never)) as never)
+    return savingsTurnComplete($, e, ((s0: typeof e) => agentsTurnComplete($, s0, ((e0: typeof e) => ciTurnComplete($, e0, ((e1: typeof e) => contextTurnComplete($, e1, ((e2: typeof e) => progressTurnComplete($, e2, ((e3: typeof e) => notifyTurnComplete($, e3, ((e4: typeof e) => mainTurnComplete($, e4, once as never).catch(() => once(e4))) as never).catch(() => once(e3))) as never)) as never)) as never)) as never)) as never)
   })
   on('tool.call', async ($, e, next) => {
     const once = onceNext(next as never)

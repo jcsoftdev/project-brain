@@ -4,6 +4,7 @@ import type { Register } from 'claude-code'
 
 import type { Api, Row, Run, Span } from './register'
 import { clean, fit, gitTop, span } from './register'
+import { notify } from './feat-notify'
 
 export type CiJob = { name: string; status: string; conclusion: string; failedStep?: string }
 
@@ -140,6 +141,15 @@ export const toastOfRun = (run: Pick<CiRun, 'conclusion' | 'workflow'>): string 
   return `CI ${verdict === 'NEUTRAL' ? NEUTRAL_LABEL[run.conclusion] : verdict} · ${run.workflow}`
 }
 
+/** The one-line OS notification a finished run raises, naming the first failed job. */
+export const notifyLineOfRun = (run: Pick<CiRun, 'conclusion' | 'workflow' | 'jobs'>): string => {
+  const verdict = verdictOfRun(run)
+  if (verdict === 'PASS') return `✓ CI ${run.workflow} pasó`
+  if (verdict === 'NEUTRAL') return `– CI ${run.workflow} ${NEUTRAL_LABEL[run.conclusion]}`
+  const job = run.jobs?.find(one => one.conclusion !== '' && one.conclusion !== 'success' && !Object.hasOwn(NEUTRAL_LABEL, one.conclusion))
+  return `✗ CI ${run.workflow} falló${job ? ` · job ${job.name}` : ''}`
+}
+
 // ---------------------------------------------------------------- loading
 
 const call = (run: Run, argv: readonly string[], cwd: string) => run(argv, { cwd, timeoutMs: RUN_TIMEOUT_MS }).catch(() => undefined)
@@ -188,7 +198,10 @@ function refresh($: Api): Promise<void> {
     const [previous, now] = await Promise.all([read($, ciView), $.clock.now()])
     const next = await loadCi((argv, init) => $.process.run(argv, init), previous, now)
     await update($, ciView, () => next)
-    for (const run of finishedRuns(previous.runs, next.runs)) $.ui.toast(toastOfRun(run))
+    for (const run of finishedRuns(previous.runs, next.runs)) {
+      $.ui.toast(toastOfRun(run))
+      void notify($, { key: `ci:${run.id}`, text: notifyLineOfRun(run) }).catch(() => undefined)
+    }
   })()
     .catch(() => undefined)
     .finally(() => {
