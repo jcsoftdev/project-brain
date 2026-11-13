@@ -345,7 +345,7 @@ export const MODEL_ROUTING: ReadonlyArray<{
  * a user who accepted the section once kept that text forever, and every later
  * improvement stopped at their machine.
  */
-export const ROUTING_CONTENT_VERSION = 5;
+export const ROUTING_CONTENT_VERSION = 6;
 
 /** Bumped whenever the readable-replies block written into ~/.claude/CLAUDE.md changes, so setup reports it stale. */
 export const READABLE_REPLIES_VERSION = 1;

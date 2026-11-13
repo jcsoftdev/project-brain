@@ -9,8 +9,9 @@
  * Exit code 2 is the block channel, not `permissionDecision: "deny"`: the JSON
  * decision has been reported as ignored, while exit 2 blocks the call and hands
  * stderr to the model as the reason — which is exactly the retry prompt we
- * want. PreToolUse supports neither `additionalContext` nor `updatedInput`, so
- * blocking with a reason is the ONLY way this hook can teach anything.
+ * want. PreToolUse can also rewrite the call through `updatedInput` (see
+ * report-contract.ts), but a missing model is a choice only the caller can make,
+ * so this hook blocks with a reason instead of guessing one.
  */
 
 const SPAWN_TOOLS = new Set(["Task", "Agent"]);

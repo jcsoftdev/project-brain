@@ -616,6 +616,46 @@ export function removeCommitCheckHooks(existing: object | null): object {
   return { ...base, hooks };
 }
 
+const REPORT_CONTRACT_COMMAND = "project-brain report-contract";
+
+/**
+ * Add the hook that appends the report contract to every delegation prompt.
+ *
+ * Opt-in, unlike the routing reminder: it rewrites a tool call's input that the
+ * session wrote, which is a change only its owner can agree to.
+ *
+ * Pure, non-mutating and idempotent, like its siblings.
+ */
+export function upsertReportContractHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  addGroup(hooks, "PreToolUse", REPORT_CONTRACT_COMMAND, {
+    matcher: SPAWN_TOOL_MATCHER,
+    hooks: [{ type: "command", command: REPORT_CONTRACT_COMMAND, timeout: 5 }],
+  });
+
+  return { ...base, hooks };
+}
+
+/** The inverse of {@link upsertReportContractHook}, narrow for {@link removeRoutingHooks}' reason. */
+export function removeReportContractHook(existing: object | null): object {
+  const base: Record<string, unknown> =
+    existing !== null && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>) }
+      : {};
+
+  const hooks: Record<string, unknown> = { ...((base.hooks as Record<string, unknown>) ?? {}) };
+
+  dropGroups(hooks, "PreToolUse", [REPORT_CONTRACT_COMMAND]);
+
+  return { ...base, hooks };
+}
+
 const JEV_ENV_COMMAND = "project-brain jev-env";
 
 /**

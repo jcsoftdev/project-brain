@@ -349,6 +349,11 @@ switch (command) {
     await execute();
     break;
   }
+  case "report-contract": {
+    const { execute } = await import("./hooks/report-contract.js");
+    await execute();
+    break;
+  }
   case "worktree-hook": {
     const { execute } = await import("./hooks/worktree-hook.js");
     await execute(args);

@@ -11,6 +11,7 @@ import {
   type ResolvedRouting,
 } from "./model-routing-config.js";
 import type { AIToolRegistrar } from "../registrars/types.js";
+import { REPORT_CONTRACT } from "./report-contract.js";
 
 /**
  * Render the model-routing guidance for ONE host.
@@ -52,6 +53,7 @@ export async function getModelRoutingSection(
     .replace(/\{\{howToApply\}\}/g, routing.howToApply)
     .replace(/\{\{labelRule\}\}/g, renderLabelRule(routing.labelField))
     .replace(/\{\{advisorRule\}\}/g, routing.hostKey === "claude" ? ADVISOR_RULE : "")
+    .replace(/\{\{reportContract\}\}/g, REPORT_CONTRACT)
     .replace(/\{\{configPath\}\}/g, ROUTING_CONFIG_PATH);
 }
 

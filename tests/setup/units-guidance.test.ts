@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { join } from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { SetupContext } from "../../src/setup/units.js";
 import type { AIToolRegistrar } from "../../src/registrars/types.js";
@@ -117,7 +117,7 @@ describe("index maintenance hook unit", () => {
 });
 
 describe("guidance units", () => {
-  it("declares every guidance unit selected by default except commit-check, which defaults on only with a token", async () => {
+  it("declares every guidance unit selected by default except the report-contract rewrite and commit-check, which defaults on only with a token", async () => {
     const { guidanceUnits } = await import("../../src/setup/units.js");
     const ids = guidanceUnits().map((u) => u.id).sort();
 
@@ -127,6 +127,7 @@ describe("guidance units", () => {
       "hooks:browser-route",
       "hooks:commit-check",
       "hooks:index-maintenance",
+      "hooks:report-contract",
       "hooks:routing",
       "hooks:session-title",
       "hooks:style-guard",
@@ -135,7 +136,29 @@ describe("guidance units", () => {
       "hooks:worktree-sweep",
     ]);
     const optIn = guidanceUnits().filter((u) => !u.defaultSelected).map((u) => u.id);
-    expect(optIn).toEqual(["hooks:commit-check"]);
+    expect(optIn).toEqual(["hooks:report-contract", "hooks:commit-check"]);
+  });
+
+  it("report-contract hook goes absent -> current -> absent and keeps the routing guard beside it", async () => {
+    const { guidanceUnits } = await import("../../src/setup/units.js");
+    const ctx = await context();
+    await Bun.write(
+      ctx.claudeSettingsPath,
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Task|Agent", hooks: [{ type: "command", command: "project-brain routing-guard" }] }] } })
+    );
+    const unit = guidanceUnits().find((u) => u.id === "hooks:report-contract")!;
+
+    expect(await unit.inspect(ctx)).toBe("absent");
+    await unit.apply(ctx);
+    await unit.apply(ctx);
+    expect(await unit.inspect(ctx)).toBe("current");
+    const applied = JSON.parse(await readFile(ctx.claudeSettingsPath, "utf8"));
+    expect(applied.hooks.PreToolUse).toHaveLength(2);
+
+    await unit.remove(ctx);
+    expect(await unit.inspect(ctx)).toBe("absent");
+    const removed = JSON.parse(await readFile(ctx.claudeSettingsPath, "utf8"));
+    expect(removed.hooks.PreToolUse).toHaveLength(1);
   });
 });
 

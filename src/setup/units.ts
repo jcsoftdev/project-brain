@@ -613,6 +613,22 @@ export function guidanceUnits(): SetupUnit[] {
     }),
 
     hookUnit({
+      id: "hooks:report-contract",
+      label: "Report contract hook",
+      description:
+        "appends the report contract (verdict, changes, tests, risks, decisions, ~400 words, detail in a file) " +
+        "to every delegation prompt that does not already set its own output format (Claude Code only); " +
+        "opt-in because it rewrites the prompt the session wrote",
+      probe: "project-brain report-contract",
+      strictOf: () => false,
+      defaultSelected: false,
+      load: async () => {
+        const m = await import("../hooks/claude-settings.js");
+        return { upsert: m.upsertReportContractHook, remove: m.removeReportContractHook };
+      },
+    }),
+
+    hookUnit({
       id: "hooks:worktree",
       label: "Worktree hooks",
       description: "worktree identity on session start, index cleanup on removal",
