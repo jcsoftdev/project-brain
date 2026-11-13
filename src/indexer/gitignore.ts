@@ -132,6 +132,47 @@ export async function loadPatterns(root: string): Promise<string[]> {
   return walk(root);
 }
 
+/**
+ * The .gitignore patterns that can decide `relPaths`: those of the root and of
+ * every ancestor directory of each path, in the same parent-before-children
+ * order `loadPatterns` produces.
+ *
+ * Reads only those directories, so an incremental sync can apply the full
+ * walk's rules to a handful of changed files without walking the whole tree.
+ */
+export async function loadPatternsFor(root: string, relPaths: string[]): Promise<string[]> {
+  const dirs = new Set<string>([""]);
+  for (const relPath of relPaths) {
+    const segments = relPath.split("/").slice(0, -1);
+    for (let depth = 1; depth <= segments.length; depth++) {
+      dirs.add(segments.slice(0, depth).join("/"));
+    }
+  }
+  const ordered = [...dirs].sort((a, b) => {
+    const depthA = a === "" ? 0 : a.split("/").length;
+    const depthB = b === "" ? 0 : b.split("/").length;
+    return depthA - depthB || a.localeCompare(b);
+  });
+  const perDir = await Promise.all(
+    ordered.map((dir) => loadPatternsFromDir(dir === "" ? root : join(root, dir), root))
+  );
+  return perDir.flat();
+}
+
+/**
+ * Whether the full walk would skip `relPath`: the file itself or any directory
+ * above it matches the always-ignore list or a .gitignore pattern. The walk
+ * prunes a matched directory before reaching its files, so checking only the
+ * file path would let `build*`-style directory rules through.
+ */
+export function isIgnoredWithAncestors(relPath: string, patterns: string[]): boolean {
+  const segments = relPath.split("/");
+  for (let depth = 1; depth <= segments.length; depth++) {
+    if (shouldIgnore(segments.slice(0, depth).join("/"), patterns)) return true;
+  }
+  return false;
+}
+
 /** Simple glob pattern matching for gitignore-style patterns. */
 function matchPattern(filePath: string, pattern: string): boolean {
   // Directory pattern (ends with /). A globbed one must go through the regex

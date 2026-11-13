@@ -15,11 +15,12 @@
  * It also verifies that normal files INSIDE the root ARE indexed (regression
  * guard — the fix must not break the happy path).
  */
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, spyOn } from "bun:test";
 import { join } from "node:path";
 import { mkdtemp, rm, mkdir, writeFile, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { VECTOR_DIM } from "../../src/constants.js";
+import * as registry from "../../src/store/project-registry.js";
 import type { EmbeddingClient, VectorStore, Chunk, SearchResult } from "../../src/types.js";
 
 /** Minimal in-memory store — mirrors pattern from tests/commands/sync.test.ts */
@@ -147,6 +148,33 @@ describe("security: symlink-safe walk", () => {
     // The symlink dir itself is not treated as a directory source
     const hasSymlinkDir = sources.some((s) => s.includes("evil-dir-link"));
     expect(hasSymlinkDir).toBe(false);
+  });
+
+  it("S2d: an incremental (watcher) sync applies the same rule to the paths it is handed", async () => {
+    await writeFile(join(outside, "secret.ts"), "export const SECRET = 'leaked';");
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(join(root, "app.ts"), "export const FOO = 1;");
+    await symlink(join(outside, "secret.ts"), join(root, "src", "s.ts"));
+    await symlink(outside, join(root, "link"));
+
+    const registerSpy = spyOn(registry, "registerProject").mockResolvedValue(undefined as never);
+    try {
+      const store = makeMemoryStore();
+      const { runSync } = await import("../../src/commands/sync.js");
+      await runSync({
+        root,
+        projectId: "sec-incremental",
+        store,
+        embeddings: mockEmbeddings,
+        changedFiles: ["app.ts", "src/s.ts", "link/secret.ts"],
+      });
+
+      const allChunks = store.data.get("sec-incremental") ?? [];
+      expect([...new Set(allChunks.map((c) => c.source))]).toEqual(["app.ts"]);
+      expect(allChunks.some((c) => c.content.includes("SECRET"))).toBe(false);
+    } finally {
+      registerSpy.mockRestore();
+    }
   });
 
   it("S2c: normal files and directories inside root are still indexed", async () => {
