@@ -2,6 +2,8 @@
 
 Local-first MCP server that gives AI tools semantic memory of your codebase.
 
+The whole Claude Code flow on one page (every piece, how to turn it off, what leaves the machine, troubleshooting): [docs/flow-map.md](docs/flow-map.md).
+
 project-brain indexes your project files into a local LanceDB vector store using Ollama embeddings, and builds a SQLite **structural graph** (symbols + call edges) with a WASM tree-sitter parser. Once indexed, AI assistants connected via MCP can search your codebase **semantically** (by meaning) AND **structurally** (exact symbols, callers/callees, change blast-radius), track module documentation, and maintain knowledge that persists across sessions.
 
 ## Quick Start
