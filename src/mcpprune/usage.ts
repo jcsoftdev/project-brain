@@ -33,9 +33,21 @@ export interface Usage {
   recent: number;
   oldest: number | null;
   newest: number | null;
+  /** Tool ids Claude Code announced to the sessions, used or not: what each server offers. */
+  announced: Set<string>;
+  /** Server name → the newest instructions it gave the sessions, and when. */
+  instructions: Map<string, { text: string; at: number }>;
 }
 
-export const emptyUsage = (): Usage => ({ lastUsed: new Map(), sessions: 0, recent: 0, oldest: null, newest: null });
+export const emptyUsage = (): Usage => ({
+  lastUsed: new Map(),
+  sessions: 0,
+  recent: 0,
+  oldest: null,
+  newest: null,
+  announced: new Set(),
+  instructions: new Map(),
+});
 
 export function mergeUsage(into: Usage, from: Usage): Usage {
   for (const [tool, at] of from.lastUsed) if (at > (into.lastUsed.get(tool) ?? 0)) into.lastUsed.set(tool, at);
@@ -43,6 +55,8 @@ export function mergeUsage(into: Usage, from: Usage): Usage {
   into.recent += from.recent;
   if (from.oldest !== null) into.oldest = Math.min(into.oldest ?? from.oldest, from.oldest);
   if (from.newest !== null) into.newest = Math.max(into.newest ?? from.newest, from.newest);
+  for (const tool of from.announced) into.announced.add(tool);
+  for (const [server, seen] of from.instructions) keepNewest(into.instructions, server, seen);
   return into;
 }
 
@@ -66,6 +80,31 @@ async function walk(dir: string, top: boolean): Promise<Array<{ file: string; mt
 }
 
 const MARKER = '"name":"mcp__';
+const ANNOUNCED = "deferred_tools_delta";
+const INSTRUCTED = "mcp_instructions_delta";
+
+function keepNewest(map: Usage["instructions"], server: string, seen: { text: string; at: number }): void {
+  if (seen.at >= (map.get(server)?.at ?? -Infinity)) map.set(server, seen);
+}
+
+/** What a `deferred_tools_delta` or `mcp_instructions_delta` attachment tells about the servers a session had. */
+function announcements(line: string, usage: Usage, fallback: number): void {
+  try {
+    const obj = JSON.parse(line) as { timestamp?: unknown; attachment?: Record<string, unknown> };
+    const att = obj.attachment;
+    const at = typeof obj.timestamp === "string" && !Number.isNaN(Date.parse(obj.timestamp)) ? Date.parse(obj.timestamp) : fallback;
+    const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+    if (att?.type === ANNOUNCED) for (const n of strings(att.addedNames)) if (n.startsWith("mcp__")) usage.announced.add(n);
+    if (att?.type === INSTRUCTED) {
+      const blocks = strings(att.addedBlocks);
+      strings(att.addedNames).forEach((name, i) => {
+        if (blocks[i]) keepNewest(usage.instructions, name, { text: blocks[i]!, at });
+      });
+    }
+  } catch {
+    // A torn line says nothing.
+  }
+}
 
 function toolCalls(line: string, fallback: number): Array<[string, number]> {
   try {
@@ -82,8 +121,9 @@ function toolCalls(line: string, fallback: number): Array<[string, number]> {
 }
 
 /**
- * `tool_use` calls to MCP tools in one project's transcripts. Only transcripts
- * touched since `sinceMs` are read, since an older one cannot hold a newer call.
+ * `tool_use` calls to MCP tools in one project's transcripts, plus the tools and
+ * instructions those sessions were given. Only transcripts touched since
+ * `sinceMs` are read, since an older one cannot hold a newer call.
  */
 export async function scanUsage(projectsRoot: string, projectDir: string, sinceMs: number): Promise<Usage> {
   const usage = emptyUsage();
@@ -102,6 +142,7 @@ export async function scanUsage(projectsRoot: string, projectDir: string, sinceM
       continue;
     }
     for (const line of text.split("\n")) {
+      if (line.includes(ANNOUNCED) || line.includes(INSTRUCTED)) announcements(line, usage, f.mtime);
       if (!line.includes(MARKER)) continue;
       for (const [tool, at] of toolCalls(line, f.mtime)) if (at > (usage.lastUsed.get(tool) ?? 0)) usage.lastUsed.set(tool, at);
     }

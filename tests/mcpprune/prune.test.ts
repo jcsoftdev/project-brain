@@ -1,12 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computePlan } from "../../src/setup/plan.js";
+import { computePlan, initialChecked } from "../../src/setup/plan.js";
 import { allUnits, type SetupContext } from "../../src/setup/units.js";
-import { applyPrune, planPrune, repoKey, revertPrune, type PruneEnv } from "../../src/mcpprune/prune.js";
+import {
+  applyPrune,
+  AWAITING_JEV,
+  BASELINE_BACKUP,
+  hasPruneEntries,
+  MAX_JEV_REQUESTS,
+  planPrune,
+  pruneLockPath,
+  repoKey,
+  revertPrune,
+  type PruneEnv,
+} from "../../src/mcpprune/prune.js";
+import { acquirePidFileLock } from "../../src/commands/sync-lock.js";
 import { classifyTool } from "../../src/mcpprune/usage.js";
+import { jevFromProcess } from "../../src/mcpprune/judge.js";
+import { execute } from "../../src/commands/mcp.js";
 import { projectDirKey } from "../../src/toolcatalog/transcripts.js";
 
 const DAY = 86_400_000;
@@ -235,8 +249,49 @@ describe("applyPrune / revertPrune", () => {
       await rm(join(env.dataDir, "mcp-prune.json"), { force: true });
       await applyPrune({ ...env, now: Date.now() + i * 1000 }, await planPrune(env));
     }
-    const left = (await readdir(backups)).filter((n) => n.endsWith(".bak"));
+    const left = (await readdir(backups)).filter((n) => n.startsWith("claude.json.") && n.endsWith(".bak"));
     expect(left).toHaveLength(5);
+    expect(await readFile(join(backups, BASELINE_BACKUP), "utf-8")).not.toContain("disabledMcpServers");
+  });
+
+  it("revert holds the prune lock, so an apply cannot land mid-revert and go unrecorded", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10, ["mcp__beta__x"]);
+    await applyPrune(env, await planPrune(env));
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual(["alpha"]);
+
+    const midway: Array<Awaited<ReturnType<typeof applyPrune>>> = [];
+    const racing: PruneEnv = {
+      ...env,
+      beforeRename: async () => {
+        if (midway.length > 0) return;
+        midway.push(await applyPrune(env, [{ project: a, sessions: 10, candidates: [{ name: "beta", mcpJson: false }] }]));
+      },
+    };
+    const reverted = await revertPrune(racing);
+    expect(reverted.error).toBeUndefined();
+    expect(midway[0]!.locked).toBe(true);
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual([]);
+    expect(await hasPruneEntries(env)).toBe(false);
+  });
+
+  it("revert waits for a running prune, then tells the user to retry instead of skipping silently", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10);
+    await applyPrune(env, await planPrune(env));
+    const lock = await acquirePidFileLock(pruneLockPath(env));
+    try {
+      const started = Date.now();
+      const r = await revertPrune({ ...env, revertWaitMs: 300 });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+      expect(r.removed).toEqual([]);
+      expect(r.error).toContain("try again");
+    } finally {
+      await lock!.release();
+    }
+    expect((await revertPrune(env)).removed.map((e) => e.name)).toEqual(["alpha", "beta"]);
   });
 
   it("aborts without writing when the file keeps changing underneath", async () => {
@@ -326,5 +381,301 @@ describe("config:mcp-prune unit", () => {
     }
     expect((await readJson()).projects[a].disabledMcpServers).toBeUndefined();
     expect(await unit().inspect({ ...ctxFor(), claudeSettingsPath: join(root, "settings.json") })).toBe("unavailable");
+  });
+});
+
+describe("Jev at prune time", () => {
+  type Sent = { state: { project: Record<string, unknown>; servers: Record<string, { name: string; tools: string[]; instructions?: string }> } };
+
+  /** A TypeSafe stand-in that answers each server question from `scores`, keyed by server name. */
+  function fakeJev(scores: Record<string, number> | "down" | "slow") {
+    const requests: Sent[] = [];
+    const fetchFn = async (_url: string, init: RequestInit): Promise<Response> => {
+      const body = JSON.parse(String(init.body)) as Sent;
+      requests.push(body);
+      if (scores === "down") return new Response("boom", { status: 503 });
+      if (scores === "slow")
+        return new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(Object.assign(new Error("t"), { name: "TimeoutError" }))));
+      const answers = Object.fromEntries(Object.entries(body.state.servers).map(([k, s]) => [k, { type: "noul", noul: scores[s.name] ?? 0.5 }]));
+      return new Response(JSON.stringify({ answers }), { status: 200 });
+    };
+    return { jev: { token: "test-token", fetchFn }, requests };
+  }
+
+  async function announce(dir: string, tools: string[], instructions: Record<string, string> = {}): Promise<void> {
+    const tdir = join(root, ".claude", "projects", projectDirKey(dir));
+    await mkdir(tdir, { recursive: true });
+    const lines = [
+      { type: "attachment", attachment: { type: "deferred_tools_delta", addedNames: tools, removedNames: [] } },
+      { type: "attachment", attachment: { type: "mcp_instructions_delta", addedNames: Object.keys(instructions), addedBlocks: Object.values(instructions) } },
+    ];
+    await writeFile(join(tdir, `announce-${tools.length}-${Object.keys(instructions).length}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  }
+
+  async function register(...dirs: string[]): Promise<void> {
+    await mkdir(env.dataDir, { recursive: true });
+    const registry = Object.fromEntries(dirs.map((d, i) => [`p${i}`, { root: d, updatedAt: 1 }]));
+    await writeFile(join(env.dataDir, "projects.json"), JSON.stringify(registry));
+  }
+
+  /** A registered thin project whose sessions announced both servers' tools. */
+  async function thinProject(name: string): Promise<string> {
+    const a = await project(name);
+    await writeClaude([a]);
+    await transcripts(a, 1);
+    await announce(a, ["mcp__alpha__deploy", "mcp__beta__model_3d"]);
+    return a;
+  }
+
+  const cacheFile = () => join(env.dataDir, "mcp-prune-jev.json");
+
+  it("disables in a thin project only what Jev rates unneeded, sends no free text, and revert restores it", async () => {
+    const a = await project("shop");
+    await writeFile(join(a, "README.md"), "# Shop\nOPENAI_API_KEY=sk-live-abcdefghijklmnop");
+    await writeFile(join(a, "id_rsa_backup"), "x");
+    await writeFile(
+      join(a, "package.json"),
+      JSON.stringify({
+        name: "@acme-internal/project-nightingale-merger",
+        dependencies: { next: "1", "@acme-internal/payroll-sdk": "1" },
+        devDependencies: { typescript: "5" },
+      })
+    );
+    await writeClaude([a]);
+    await transcripts(a, 1);
+    await announce(a, ["mcp__alpha__deploy", "mcp__beta__model_3d"], {
+      beta: "Generates 3D models. Webhook https://hooks.slack.com/services/T0/B0/x API key AbC123xyz eyJhbGciOi.eyJzdWIi.c2lnbmF0dXJl",
+    });
+    await register(a);
+    const { jev, requests } = fakeJev({ alpha: 0.9, beta: 0.05 });
+
+    const [plan] = await planPrune({ ...env, jev, askJev: true }, [a]);
+    expect(plan!.basis).toBe("jev");
+    expect(plan!.candidates).toEqual([{ name: "beta", mcpJson: false, needed: 0.05 }]);
+    expect(requests).toHaveLength(1);
+    const question = (k: string) => ({
+      type: "noul",
+      instructions:
+        `A developer working in \`project\` will call tools of the MCP server \`servers.${k}\` ` +
+        `during their coding sessions there: what the server does fits the work this project involves.`,
+    });
+    expect(requests[0]).toEqual({
+      model: "jev-latest",
+      state: {
+        project: { languages: ["TypeScript"], frameworks: ["Next.js"], packageManager: null, dependencies: ["next", "typescript"] },
+        servers: { s0: { name: "alpha", tools: ["deploy"] }, s1: { name: "beta", tools: ["model_3d"] } },
+      },
+      questions: { s0: question("s0"), s1: question("s1") },
+    } as unknown as Sent);
+
+    const lines: string[] = [];
+    await execute(["prune"], { env: { ...env, jev }, cwd: a, log: (l) => lines.push(l) });
+    expect(lines[0]).toBe(`${a}: beta (Jev: unlikely to be needed here; 2 sessions of history, none of them used it)`);
+    expect(requests).toHaveLength(1);
+
+    await execute(["prune", "--apply"], { env: { ...env, jev }, cwd: a, log: () => {} });
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual(["beta"]);
+    await execute(["prune", "--revert"], { env, log: () => {} });
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual([]);
+  });
+
+  it("keeps every server Jev rates at or above the floor", async () => {
+    const a = await thinProject("app");
+    await register(a);
+    const { jev } = fakeJev({ alpha: 0.6, beta: 0.2 });
+    expect((await planPrune({ ...env, jev, askJev: true }, [a]))[0]!.candidates).toEqual([]);
+  });
+
+  it("falls back to skipping when Jev fails or there is no token, and does not retry a failed repo for a day", async () => {
+    const a = await thinProject("a");
+    await register(a);
+    const { jev, requests } = fakeJev("down");
+
+    const plans = await planPrune({ ...env, jev, askJev: true });
+    expect(plans.map((p) => p.skipped)).toEqual(["not enough history yet"]);
+    expect((await planPrune({ ...env, jev: null })).map((p) => p.skipped)).toEqual(["not enough history yet"]);
+    await planPrune({ ...env, jev, askJev: true });
+    expect(requests).toHaveLength(1);
+    expect((await applyPrune({ ...env, jev }, plans)).added).toEqual([]);
+    expect((await readJson()).projects[a].disabledMcpServers).toBeUndefined();
+  });
+
+  it("never asks about, or disables, a pinned, recently used, or undescribed server", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 2, ["mcp__beta__x"]);
+    await register(a);
+    const { jev, requests } = fakeJev({ alpha: 0, beta: 0 });
+    expect((await planPrune({ ...env, jev, askJev: true, allow: ["alpha"] }, [a]))[0]!.candidates).toEqual([]);
+    // alpha is neither pinned nor used here, but no session announced its tools or instructions.
+    expect((await planPrune({ ...env, jev, askJev: true }, [a]))[0]!.candidates).toEqual([]);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("never asks for an unregistered project, a project unused in the window, or a git directory", async () => {
+    const a = await thinProject("a");
+    const { jev, requests } = fakeJev({ alpha: 0, beta: 0 });
+    expect((await planPrune({ ...env, jev, askJev: true }, [a]))[0]!.skipped).toBe("not enough history yet");
+
+    const old = await project("old");
+    const bare = await project("repo.git");
+    await writeClaude([old, bare]);
+    await transcripts(old, 2, [], 60);
+    await transcripts(bare, 2);
+    await register(old, bare);
+    expect((await planPrune({ ...env, jev, askJev: true })).map((p) => p.skipped)).toEqual(["not enough history yet", "not enough history yet"]);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("plans from the cache only unless asked to apply: no request, no write", async () => {
+    const a = await thinProject("a");
+    await register(a);
+    const { jev, requests } = fakeJev({ alpha: 0.9, beta: 0.05 });
+
+    const [dry] = await planPrune({ ...env, jev }, [a]);
+    expect(dry!.skipped).toBe(AWAITING_JEV);
+    expect(dry!.awaitingJev).toBe(true);
+    expect(requests).toHaveLength(0);
+    expect(existsSync(cacheFile())).toBe(false);
+
+    await planPrune({ ...env, jev, askJev: true }, [a]);
+    expect((await planPrune({ ...env, jev }, [a]))[0]!.candidates.map((c) => c.name)).toEqual(["beta"]);
+    expect(requests).toHaveLength(1);
+  });
+
+  it("asks again when a server's tools change, after the TTL, and never shares answers across repos", async () => {
+    const a = await thinProject("a");
+    const b = await thinProject("b");
+    await writeClaude([a, b]);
+    await register(a, b);
+    const { jev, requests } = fakeJev({ alpha: 0.9, beta: 0.05 });
+    const now = Date.now();
+
+    await planPrune({ ...env, jev, askJev: true, now });
+    expect(requests).toHaveLength(2);
+    await planPrune({ ...env, jev, askJev: true, now });
+    expect(requests).toHaveLength(2);
+
+    await announce(a, ["mcp__beta__texture"]);
+    await planPrune({ ...env, jev, askJev: true, now }, [a]);
+    expect(requests).toHaveLength(3);
+    expect(Object.values(requests[2]!.state.servers).map((s) => s.name)).toEqual(["beta"]);
+
+    await planPrune({ ...env, jev, askJev: true, now: now + 31 * DAY, windowDays: 90 }, [b]);
+    expect(requests).toHaveLength(4);
+  });
+
+  it("stops asking once the run's deadline lapses and keeps what is unanswered", async () => {
+    const [a, b] = [await thinProject("a"), await thinProject("b")];
+    await writeClaude([a, b]);
+    await register(a, b);
+    const { jev, requests } = fakeJev("slow");
+    const started = Date.now();
+    const plans = await planPrune({ ...env, jev, askJev: true, jevDeadlineMs: 150 });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(requests).toHaveLength(1);
+    expect(plans.every((p) => p.candidates.length === 0)).toBe(true);
+  });
+
+  it("caps the requests of one run", async () => {
+    const dirs: string[] = [];
+    for (let i = 0; i < MAX_JEV_REQUESTS + 2; i++) dirs.push(await thinProject(`p${i}`));
+    await writeClaude(dirs);
+    await register(...dirs);
+    const { jev, requests } = fakeJev({ alpha: 0.9, beta: 0.05 });
+    const plans = await planPrune({ ...env, jev, askJev: true });
+    expect(requests).toHaveLength(MAX_JEV_REQUESTS);
+    expect(plans.filter((p) => p.candidates.length > 0)).toHaveLength(MAX_JEV_REQUESTS);
+  });
+
+  it("keeps a cache entry another run wrote while this one was asking", async () => {
+    const a = await thinProject("a");
+    await register(a);
+    const { jev } = fakeJev({ alpha: 0.9, beta: 0.05 });
+    const racing = {
+      token: jev.token,
+      fetchFn: async (url: string, init: RequestInit) => {
+        await mkdir(env.dataDir, { recursive: true });
+        await writeFile(cacheFile(), JSON.stringify({ answers: { "other\u0000x\u0000y": { at: Date.now(), needed: 0.5 } }, failed: {} }));
+        return jev.fetchFn(url, init);
+      },
+    };
+    await planPrune({ ...env, jev: racing, askJev: true }, [a]);
+    const keys = Object.keys(JSON.parse(await readFile(cacheFile(), "utf-8")).answers);
+    expect(keys).toContain("other\u0000x\u0000y");
+    expect(keys.filter((k) => k.startsWith(`${a}\u0000`))).toHaveLength(2);
+  });
+
+  /** Runs `body` with a token in the env, the opt-in env set to `optIn` (or unset), and global fetch counting calls. */
+  async function withTokenAndNoNetwork(optIn: string | undefined, body: (calls: () => number) => Promise<void>): Promise<void> {
+    const prev = { key: process.env.TYPESAFE_API_KEY, opt: process.env.PROJECT_BRAIN_MCP_PRUNE_JEV };
+    const realFetch = globalThis.fetch;
+    let calls = 0;
+    process.env.TYPESAFE_API_KEY = "env-token";
+    if (optIn === undefined) delete process.env.PROJECT_BRAIN_MCP_PRUNE_JEV;
+    else process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = optIn;
+    globalThis.fetch = (async () => {
+      calls++;
+      throw new Error("no network here");
+    }) as unknown as typeof fetch;
+    try {
+      await body(() => calls);
+    } finally {
+      globalThis.fetch = realFetch;
+      if (prev.key === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = prev.key;
+      if (prev.opt === undefined) delete process.env.PROJECT_BRAIN_MCP_PRUNE_JEV;
+      else process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = prev.opt;
+    }
+  }
+
+  const setupCtx = () => ({ dataDir: env.dataDir, installed: [], claudeSettingsPath: join(root, ".claude", "settings.json") }) as unknown as SetupContext;
+  const unitOf = (id: string) => allUnits(setupCtx()).find((u) => u.id === id)!;
+
+  it("is opt-in: never ticked on a first run or an upgrade, and never applied by one", () => {
+    const unit = unitOf("config:mcp-prune-jev");
+    expect(unit.defaultSelected).toBe(false);
+    expect(unit.autoOnUpgrade).toBe(false);
+    expect(initialChecked("absent", "unseen", unit.defaultSelected, false)).toBe(false);
+    expect(initialChecked("absent", "unseen", unit.defaultSelected, true)).toBe(false);
+  });
+
+  it("with the opt-in off, setup inspect and apply (as --apply-saved runs them) make no Jev request", async () => {
+    const a = await thinProject("a");
+    await register(a);
+    await withTokenAndNoNetwork(undefined, async (calls) => {
+      expect(await unitOf("config:mcp-prune-jev").inspect(setupCtx())).toBe("absent");
+      const prune = unitOf("config:mcp-prune");
+      expect(await prune.inspect(setupCtx())).toBe("current");
+      await prune.apply(setupCtx());
+      expect(calls()).toBe(0);
+      expect(existsSync(cacheFile())).toBe(false);
+      expect((await readJson()).projects[a].disabledMcpServers).toBeUndefined();
+    });
+  });
+
+  it("with the opt-in on, setup inspect still never calls Jev or writes, and reports a project awaiting Jev as pending", async () => {
+    const a = await thinProject("a");
+    await register(a);
+    await withTokenAndNoNetwork("1", async (calls) => {
+      expect(await unitOf("config:mcp-prune-jev").inspect(setupCtx())).toBe("current");
+      expect(await unitOf("config:mcp-prune").inspect(setupCtx())).toBe("absent");
+      expect(calls()).toBe(0);
+      expect(existsSync(cacheFile())).toBe(false);
+    });
+  });
+
+  it("needs the opt-in: env =1 enables, =0 disables and wins over a ticked unit", async () => {
+    await withTokenAndNoNetwork(undefined, async () => {
+      expect(await jevFromProcess(env.dataDir)).toBeNull();
+      await unitOf("config:mcp-prune-jev").apply(setupCtx());
+      expect(await jevFromProcess(env.dataDir)).toEqual({ token: "env-token" });
+      process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "0";
+      expect(await jevFromProcess(env.dataDir)).toBeNull();
+      expect(await unitOf("config:mcp-prune-jev").inspect(setupCtx())).toBe("unavailable");
+      await unitOf("config:mcp-prune-jev").remove(setupCtx());
+      process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "1";
+      expect(await jevFromProcess(env.dataDir)).toEqual({ token: "env-token" });
+    });
   });
 });

@@ -2,11 +2,20 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
-import { discoverMcpConfigs, normalizeServerName } from "../toolcatalog/config.js";
+import { discoverMcpConfigs, normalizeServerName, type McpServerConfig } from "../toolcatalog/config.js";
+import { readRegistry } from "../store/project-registry.js";
+import { judgeable, judgeServers, projectSignals, type JevSettings, type JudgeRun, type ServerBrief } from "./judge.js";
 import { classifyTool, emptyUsage, mergeUsage, scanUsage, type Usage } from "./usage.js";
 
 const DAY = 86_400_000;
 const KEEP_BACKUPS = 5;
+/** Below this probability of being needed, Jev's word disables a server in a project with thin history. */
+export const JEV_PRUNE_BELOW = 0.2;
+/** Repos Jev is asked about per run; cached answers do not count. */
+export const MAX_JEV_REQUESTS = 20;
+/** Wall-clock budget for all of a run's Jev requests; what is unanswered by then is kept. */
+export const JEV_RUN_DEADLINE_MS = 15_000;
+export const AWAITING_JEV = "not enough history yet; Jev will be asked on apply";
 export const DISABLED_KEY = "disabledMcpServers";
 export const DISABLED_JSON_KEY = "disabledMcpjsonServers";
 type ListKey = typeof DISABLED_KEY | typeof DISABLED_JSON_KEY;
@@ -24,6 +33,25 @@ export interface PruneEnv {
   minRecentSessions?: number;
   /** Server names never disabled, on top of the keep list in the state file. */
   allow?: string[];
+  /**
+   * When set, a project registered with project-brain whose history is too thin to
+   * judge by usage asks Jev, once per repo and cached, which of its unused servers it
+   * will need. Absent or failing: such a project is skipped, as it always was.
+   */
+  jev?: JevSettings | null;
+  /** True only when the plan is about to be applied: then Jev may be asked and its answers cached. Otherwise only cached answers count. */
+  askJev?: boolean;
+  /** Overrides {@link JEV_RUN_DEADLINE_MS}. */
+  jevDeadlineMs?: number;
+  /** Absolute wall-clock deadline for Jev, set by a caller that started its clock earlier; wins over `jevDeadlineMs`. */
+  jevDeadlineAt?: number;
+  /**
+   * Pool usage over the planned projects only instead of every project in `~/.claude.json`.
+   * Automatic runs set it so their scan stays small; worktrees then do not inherit siblings' history.
+   */
+  poolPlannedOnly?: boolean;
+  /** How long `revertPrune` waits for another prune to finish. Defaults to {@link REVERT_LOCK_WAIT_MS}. */
+  revertWaitMs?: number;
   /** Test seam: runs after the edit is computed and just before the rename of `~/.claude.json`. */
   beforeRename?: () => void | Promise<void>;
 }
@@ -32,6 +60,8 @@ export interface Candidate {
   name: string;
   /** Also listed in `.mcp.json`, so it goes in both disabled lists. */
   mcpJson: boolean;
+  /** Jev's probability that the project needs it, when Jev made the call. */
+  needed?: number;
 }
 
 export interface ProjectPlan {
@@ -39,6 +69,10 @@ export interface ProjectPlan {
   skipped?: string;
   sessions: number;
   candidates: Candidate[];
+  /** "jev" when history was too thin and Jev chose the candidates. */
+  basis?: "jev";
+  /** Jev's answer is not cached yet and this plan may not ask; applying would. */
+  awaitingJev?: true;
 }
 
 interface Entry {
@@ -183,15 +217,27 @@ async function plan(env: PruneEnv, only?: string[]): Promise<ProjectPlan[]> {
   const dirs = Object.keys(root.projects);
   const state = settlePending(root, await loadState(env));
   const since = sinceOf(env);
-  const { repoOf, usage: pooled } = await pool(env, dirs, since);
+  const { repoOf, usage: pooled } = await pool(env, env.poolPlannedOnly && only ? only.filter((d) => dirs.includes(d)) : dirs, since);
   const never = new Set(
     [...(env.allow ?? []), ...state.keep, ...vanishedFrom(root, state).map((e) => e.name), "project-brain"].map(normalizeServerName)
   );
 
+  const registered = env.jev ? new Set(Object.values(await readRegistry(env.dataDir)).map((e) => e.root)) : new Set<string>();
+  const run: JudgeRun | null = env.jev
+    ? {
+        jev: env.jev,
+        dataDir: env.dataDir,
+        now,
+        ask: env.askJev === true,
+        deadline: env.jevDeadlineAt ?? Date.now() + (env.jevDeadlineMs ?? JEV_RUN_DEADLINE_MS),
+        requestsLeft: MAX_JEV_REQUESTS,
+      }
+    : null;
   const plans: ProjectPlan[] = [];
   for (const project of only ?? dirs) {
     if (!dirs.includes(project)) continue;
-    const usage = pooled.get(repoOf.get(project)!)!;
+    const repo = repoOf.get(project)!;
+    const usage = pooled.get(repo)!;
     const base = { project, sessions: usage.sessions, candidates: [] };
     if (!existsSync(project)) {
       plans.push({ ...base, skipped: "directory no longer exists" });
@@ -199,29 +245,70 @@ async function plan(env: PruneEnv, only?: string[]): Promise<ProjectPlan[]> {
     }
     const spanDays = usage.oldest !== null && usage.newest !== null ? (usage.newest - usage.oldest) / DAY : 0;
     const longHistory = spanDays >= (env.minSpanDays ?? 14) && usage.recent >= (env.minRecentSessions ?? 3);
-    if (usage.sessions < (env.minSessions ?? 10) && !longHistory) {
+    const thin = usage.sessions < (env.minSessions ?? 10) && !longHistory;
+    const jevMayJudge = run && usage.recent > 0 && !insideGitDir(project) && (registered.has(project) || registered.has(repo));
+    if (thin && !jevMayJudge) {
       plans.push({ ...base, skipped: "not enough history yet" });
       continue;
     }
-    const configs = await discoverMcpConfigs({ home: env.home, projectDir: project });
-    const used = new Set(
-      [...usage.lastUsed.keys()].flatMap((t) => {
-        const c = classifyTool(t, [...configs.user, ...configs.project].map((s) => s.name));
-        return c ? [c.server] : [];
-      })
-    );
-    const inMcpJson = await mcpJsonNames(project);
-    const seen = new Set<string>();
-    const candidates = [...configs.user, ...configs.project]
-      .filter((s) => {
-        const n = normalizeServerName(s.name);
-        return !never.has(n) && !used.has(n) && !seen.has(n) && seen.add(n);
-      })
-      .map((s) => ({ name: s.name, mcpJson: inMcpJson.has(s.name) }));
-    plans.push({ ...base, candidates });
+    const unused = await unusedServers(env, project, usage, never);
+    if (!thin) {
+      plans.push({ ...base, candidates: unused });
+      continue;
+    }
+    const briefs = unused.map((s) => briefOf(s.name, usage)).filter(judgeable);
+    if (briefs.length === 0) {
+      plans.push({ ...base, candidates: [], basis: "jev" });
+      continue;
+    }
+    const verdict = await judgeServers(run!, repo, await projectSignals(existsSync(repo) ? repo : project), briefs);
+    if (!verdict) {
+      plans.push({ ...base, skipped: "not enough history yet" });
+      continue;
+    }
+    if ("pending" in verdict) {
+      plans.push({ ...base, skipped: AWAITING_JEV, awaitingJev: true });
+      continue;
+    }
+    const candidates = unused.flatMap((s) => {
+      const needed = verdict.needed.get(s.name);
+      return needed !== undefined && needed < JEV_PRUNE_BELOW ? [{ name: s.name, mcpJson: s.mcpJson, needed }] : [];
+    });
+    plans.push({ ...base, candidates, basis: "jev" });
   }
   return plans;
 }
+
+/** Enabled servers of `project` that its repo has not called within the window and that may be pruned at all. */
+async function unusedServers(env: PruneEnv, project: string, usage: Usage, never: Set<string>): Promise<Array<{ name: string; mcpJson: boolean }>> {
+  const configs = await discoverMcpConfigs({ home: env.home, projectDir: project });
+  const all: McpServerConfig[] = [...configs.user, ...configs.project];
+  const used = new Set(
+    [...usage.lastUsed.keys()].flatMap((t) => {
+      const c = classifyTool(t, all.map((s) => s.name));
+      return c ? [c.server] : [];
+    })
+  );
+  const inMcpJson = await mcpJsonNames(project);
+  const seen = new Set<string>();
+  return all
+    .filter((s) => {
+      const n = normalizeServerName(s.name);
+      return !never.has(n) && !used.has(n) && !seen.has(n) && seen.add(n);
+    })
+    .map((s) => ({ name: s.name, mcpJson: inMcpJson.has(s.name) }));
+}
+
+/** The tools and instructions the project's own sessions were given for `name`; only the tool names are ever sent. */
+function briefOf(name: string, usage: Usage): ServerBrief {
+  const prefix = `mcp__${normalizeServerName(name)}__`;
+  const tools = [...usage.announced].filter((t) => t.startsWith(prefix)).map((t) => t.slice(prefix.length)).sort();
+  const seen = usage.instructions.get(name);
+  return { name, tools, ...(seen ? { instructions: seen.text } : {}) };
+}
+
+/** A bare repo, a `.git` directory or a submodule's internals: never a project worth describing. */
+const insideGitDir = (dir: string): boolean => /(^|\/)\.git(\/|$)/.test(dir) || dir.endsWith(".git");
 
 const indentOf = (text: string): string | number => /^([ \t]+)"/m.exec(text)?.[1] ?? 2;
 
@@ -261,9 +348,17 @@ async function editClaudeJson(
   throw new Error(`${file} kept changing while it was being edited`);
 }
 
+/** The `~/.claude.json` from before the very first prune, kept for good beside the rotating backups. */
+export const BASELINE_BACKUP = "baseline-claude.json.bak";
+
 async function backup(env: PruneEnv, text: string): Promise<string> {
   const dir = join(env.dataDir, "mcp-prune");
   await mkdir(dir, { recursive: true });
+  const baseline = join(dir, BASELINE_BACKUP);
+  if (!existsSync(baseline)) {
+    await writeFile(baseline, text, { mode: 0o600 });
+    await chmod(baseline, 0o600);
+  }
   const file = join(dir, `claude.json.${new Date(env.now ?? Date.now()).toISOString().replace(/[:.]/g, "-")}.bak`);
   await writeFile(file, text, { mode: 0o600 });
   await chmod(file, 0o600);
@@ -276,6 +371,35 @@ export interface ApplyResult {
   added: Entry[];
   backup: string | null;
   error?: string;
+  /** Another prune held the machine-wide lock, so this one changed nothing. */
+  locked?: true;
+}
+
+/** One prune at a time per machine: setup, `mcp prune --apply`, init and maintain can overlap. */
+export const pruneLockPath = (env: PruneEnv) => join(env.dataDir, "mcp-prune.lock");
+
+/** How long an explicit revert waits for a running prune before telling the user to retry. */
+export const REVERT_LOCK_WAIT_MS = 30_000;
+const LOCK_POLL_MS = 200;
+
+/**
+ * Runs `work` holding the prune lock; resolves to null when another prune holds it for
+ * longer than `waitMs` (0, the default, means try once: automatic runs just skip).
+ */
+export async function withPruneLock<T>(env: PruneEnv, work: () => Promise<T>, waitMs = 0): Promise<T | null> {
+  const { acquirePidFileLock } = await import("../commands/sync-lock.js");
+  const giveUpAt = Date.now() + waitMs;
+  let lock = await acquirePidFileLock(pruneLockPath(env)).catch(() => null);
+  while (!lock && Date.now() < giveUpAt) {
+    await Bun.sleep(Math.min(LOCK_POLL_MS, Math.max(0, giveUpAt - Date.now())));
+    lock = await acquirePidFileLock(pruneLockPath(env)).catch(() => null);
+  }
+  if (!lock) return null;
+  try {
+    return await work();
+  } finally {
+    await lock.release().catch(() => {});
+  }
 }
 
 /**
@@ -284,6 +408,11 @@ export interface ApplyResult {
  * `--revert` sees everything that may have landed even if the process dies in between.
  */
 export async function applyPrune(env: PruneEnv, plans: ProjectPlan[]): Promise<ApplyResult> {
+  return (await withPruneLock(env, () => applyUnlocked(env, plans))) ?? { added: [], backup: null, locked: true };
+}
+
+/** {@link applyPrune} for a caller that already holds the prune lock. */
+export async function applyUnlocked(env: PruneEnv, plans: ProjectPlan[]): Promise<ApplyResult> {
   const work = plans.filter((p) => !p.skipped && p.candidates.length > 0);
   let base: State | null = null;
   let pendingSaved = false;
@@ -371,8 +500,17 @@ export interface RevertResult {
   error?: string;
 }
 
-/** Removes exactly the manifest's entries, keeps those servers off the prune list for good, and clears the manifest. */
+/**
+ * Removes exactly the manifest's entries, keeps those servers off the prune list for good, and clears the manifest.
+ * Holds the prune lock, waiting for a running prune rather than skipping: an apply landing mid-revert would
+ * disable a server the cleared manifest no longer records.
+ */
 export async function revertPrune(env: PruneEnv): Promise<RevertResult> {
+  const result = await withPruneLock(env, () => revertUnlocked(env), env.revertWaitMs ?? REVERT_LOCK_WAIT_MS);
+  return result ?? { removed: [], error: "another MCP prune is still running (setup, init or session-end maintenance); nothing was reverted, try again in a moment" };
+}
+
+async function revertUnlocked(env: PruneEnv): Promise<RevertResult> {
   try {
     const state = await loadState(env);
     if (state.disabled.length === 0) return { removed: [] };

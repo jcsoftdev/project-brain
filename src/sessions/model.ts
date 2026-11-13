@@ -74,10 +74,23 @@ export function parseProcessTable(output: string): ProcRow[] {
   });
 }
 
+/**
+ * Whether a process is Claude Code, judged by its executable path (spaces intact) and,
+ * for node-run CLIs, its arguments: the terminal `claude`, a versioned binary under
+ * `claude/versions/`, the desktop app's and IDE extensions' bundled `claude-code/`
+ * binaries, and `node .../@anthropic-ai/claude-code/` or `claude-agent-sdk/` scripts.
+ * Leans towards matching: callers that act on a match add their own exclusions.
+ */
+export function isClaudeProcess(exe: string, args = ""): boolean {
+  const isClaudePath = (path: string) => basename(path) === "claude" || path.includes("/claude/versions/") || path.includes("/claude-code/");
+  // A process may retitle itself (`claude bg-pty-host`), so the first word of its arguments counts too.
+  const argv0 = args.trim().split(/\s+/)[0] ?? "";
+  return isClaudePath(exe) || isClaudePath(argv0) || /@anthropic-ai\/claude-(code|agent-sdk)\//.test(args);
+}
+
 export function isSessionCommand(command: string): boolean {
   const [exe = "", firstArg = ""] = command.trim().split(/\s+/);
-  const isClaude = basename(exe) === "claude" || exe.includes("/claude/versions/");
-  return isClaude && !HELPER_ARGS.has(firstArg) && !command.includes("--chrome-native-host");
+  return isClaudeProcess(exe) && !HELPER_ARGS.has(firstArg) && !command.includes("--chrome-native-host");
 }
 
 export function liveChildCount(session: ProcRow, table: readonly ProcRow[]): number {

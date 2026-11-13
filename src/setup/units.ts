@@ -1616,7 +1616,7 @@ async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, 
  * Code's.
  */
 export function allUnits(ctx: SetupContext): SetupUnit[] {
-  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...claudeTuiUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit()];
+  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...claudeTuiUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit(), mcpPruneJevUnit()];
 }
 
 
@@ -1630,6 +1630,8 @@ function featureUnit(spec: {
   label: string;
   description: string;
   group?: SetupUnit["group"];
+  /** Never ticked by default, never applied by an upgrade: the user turns it on. */
+  optIn?: boolean;
 }): SetupUnit {
   const set = async (ctx: SetupContext, on: boolean) => {
     const { setFeature } = await import("../features.js");
@@ -1640,8 +1642,8 @@ function featureUnit(spec: {
     group: spec.group ?? "Other",
     label: spec.label,
     description: spec.description,
-    defaultSelected: true,
-    autoOnUpgrade: true,
+    defaultSelected: !spec.optIn,
+    autoOnUpgrade: !spec.optIn,
 
     async inspect(ctx): Promise<UnitState> {
       const { featureEnabled, featureEnvOptOut } = await import("../features.js");
@@ -1804,7 +1806,7 @@ function mcpPruneUnit(): SetupUnit {
     group: "Other",
     label: "Disable unused MCP servers",
     description:
-      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions, or 14 days of history with 3 sessions in the window; never project-brain), so their tool lists and instructions stop loading; `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out. Nothing leaves the machine",
+      "per project, switches off MCP servers that project has not called in 30 days (needs 10 sessions, or 14 days of history with 3 sessions in the window; never project-brain), so their tool lists and instructions stop loading; `project-brain mcp prune --revert` undoes it, PROJECT_BRAIN_MCP_PRUNE=0 opts out. Nothing leaves the machine unless you also tick the opt-in Jev assist",
     defaultSelected: true,
     autoOnUpgrade: true,
 
@@ -1814,7 +1816,10 @@ function mcpPruneUnit(): SetupUnit {
       const { featureEnabled, featureEnvOptOut } = await import("../features.js");
       if (featureEnvOptOut("mcp-prune")) return "unavailable";
       const { planPrune, hasPruneEntries, envFromProcess } = await import("../mcpprune/prune.js");
-      const pending = (await planPrune({ ...env, ...envFromProcess() })).some((p) => p.candidates.length > 0);
+      const { jevFromProcess } = await import("../mcpprune/judge.js");
+      // Cache only: inspect backs `status`, which must stay read-only and fast.
+      const full = { ...env, ...envFromProcess(), jev: await jevFromProcess(ctx.dataDir), askJev: false };
+      const pending = (await planPrune(full)).some((p) => p.candidates.length > 0 || p.awaitingJev);
       // Present once anything is disabled, so unticking the unit maps to removal and runs the revert.
       if (await hasPruneEntries(env)) return pending ? "stale" : "current";
       if (!featureEnabled("mcp-prune", ctx.dataDir)) return "absent";
@@ -1827,8 +1832,10 @@ function mcpPruneUnit(): SetupUnit {
       if (!env || featureEnvOptOut("mcp-prune")) return;
       await setFeature(ctx.dataDir, "mcp-prune", true);
       const { planPrune, applyPrune, envFromProcess } = await import("../mcpprune/prune.js");
-      const full = { ...env, ...envFromProcess() };
+      const { jevFromProcess } = await import("../mcpprune/judge.js");
+      const full = { ...env, ...envFromProcess(), jev: await jevFromProcess(ctx.dataDir), askJev: true };
       const result = await applyPrune(full, await planPrune(full));
+      if (result.locked) console.log("MCP prune skipped: another prune is running (init or session-end maintenance); the next setup or update retries.");
       if (result.error) console.warn(`Warning: MCP prune changed nothing: ${result.error}`);
       if (result.added.length === 0) return;
       const byProject = new Map<string, string[]>();
@@ -1844,9 +1851,24 @@ function mcpPruneUnit(): SetupUnit {
       const env = pruneEnvOf(ctx);
       if (!env) return;
       const { revertPrune } = await import("../mcpprune/prune.js");
-      await revertPrune(env);
+      const reverted = await revertPrune(env);
+      if (reverted.error) console.warn(`Warning: MCP prune revert: ${reverted.error}`);
     },
   };
+}
+
+/** Opt-in: lets prune ask Jev about projects with too little history, so it sends data the default prune never does. */
+function mcpPruneJevUnit(): SetupUnit {
+  return featureUnit({
+    id: "config:mcp-prune-jev",
+    feature: "mcp-prune-jev",
+    label: "Jev assist for MCP pruning (opt-in)",
+    description:
+      "opt-in, off unless ticked or PROJECT_BRAIN_MCP_PRUNE_JEV=1 (=0 forces it off); needs a TypeSafe token. When `mcp prune --apply`, setup or update prunes a project registered with project-brain whose history is too thin, " +
+      "it sends api.typesafe.ai each unused server's name and tool names plus the project's detected languages, frameworks, package manager and unscoped dependency names " +
+      "(never server instructions, scoped @org packages, the package name, README text or file names), and disables only servers Jev rates under 20%. With it on, `init` also prunes its own project and the SessionEnd maintenance job prunes registered projects, always between sessions",
+    optIn: true,
+  });
 }
 
 /** The global rules file beside the settings file, so a redirected settings path redirects it too. */
