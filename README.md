@@ -335,6 +335,7 @@ Every context-economy feature is its own unit in the `setup` checklist, ticked b
 | `config:mcp-prune` | disables MCP servers a project never uses | nothing |
 | `config:context-slim` | moves large user sections of CLAUDE.md into skills | nothing |
 | `tui:context-gate` | leaves out hook-injected context the prompt does not need | your prompt and the injected text it judges (head and tail of each piece), to api.typesafe.ai, with a TypeSafe token |
+| git post-commit hook (written by `init`, not a setup unit) | runs `sync --changed-only && conceptualize` in the background after every commit | the commit message, each touched module's full diff (up to 5 modules per commit) and that module's current concept doc, to the Anthropic API, only when Anthropic credentials resolve (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ant auth login`). No switch turns it off: remove the project-brain block from `.git/hooks/post-commit` (a later `init` adds it back) |
 
 `setup` asks which parts to install — one checklist per group (Hosts, Guidance,
 Skills, Claude TUI, Other), asked in order, so each question is about one kind of thing — and

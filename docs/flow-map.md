@@ -1,6 +1,6 @@
 # project-brain flow map
 
-One page for the whole Claude Code flow that project-brain builds around a session: what each piece does, where it lives, how to turn it on or off, what leaves the machine, and what to do when something breaks. It is written for coming back to this weeks later, so every path and switch below was checked against the code at `ac1ffce`.
+One page for the whole Claude Code flow that project-brain builds around a session: what each piece does, where it lives, how to turn it on or off, what leaves the machine, and what to do when something breaks. It is written for returning to this weeks later, so every path and switch below was checked against the code at `cd582bb`.
 
 ## Quick path
 
@@ -106,7 +106,7 @@ Defaults are what a first `setup` would tick. "Off" means unticking the unit in 
 |---|---|---|---|---|---|
 | Retrieval hook | `project-brain search --stdin` injects up to 5 relevant snippets from this project's index, skipping ones already in the transcript | `<project>/.claude/settings.json`, written by `project-brain init` | none (`init`) | Remove the hook from that file; `PROJECT_BRAIN_SEARCH_PROMPT_FILTER=0` searches every prompt instead | on after `init` |
 | Search gating | Skips acknowledgements, slash commands and pasted reports; caps hits; floors reranked scores at 0.5 | `src/hooks/` + `~/.project-brain/features.json` | `feature:search-gate` | Untick | on |
-| Skill and tool suggestions | `project-brain suggest --stdin`: Jev picks skills (70% floor, at most 10) and one MCP tool per prompt | global `UserPromptSubmit` hook in `~/.claude/settings.json`; config in `~/.project-brain/skills.json` | `hooks:suggest` | Untick (a marker in `suggest-hook.json` stops it coming back); `BRAIN_SKILL_PICKER=0`, `BRAIN_TOOL_PICKER=0`, or `"picker": false` | on (silent without a token) |
+| Skill and tool suggestions | `project-brain suggest --stdin`: Jev picks skills (70% floor, at most 10) and one MCP tool per prompt | global `UserPromptSubmit` hook in `~/.claude/settings.json`; config in `~/.project-brain/skills.json` | `hooks:suggest` | Untick (a marker in `suggest-hook.json` keeps it from returning); `BRAIN_SKILL_PICKER=0`, `BRAIN_TOOL_PICKER=0`, or `"picker": false` | on (silent without a token) |
 | Task-switch notice | One-line `/clear` or `/compact` hint once the context is over 30% full | rides the suggest hook | `feature:task-switch` | Untick; `PROJECT_BRAIN_TASK_SWITCH=0` | on |
 | Reranker | Jev reorders `search_context` and hook results | `src/rerank/`; token in `~/.project-brain/reranker.json` | `config:reranker` | Untick | off |
 
@@ -128,7 +128,7 @@ All three are written to `~/.project-brain/claude-plugins/` and registered in `~
 | Subagent skill picks | On every Agent spawn, `suggest --agent --stdin` picks skills for the task and prepends them to the subagent prompt; that subagent then gets a names-only listing | skill-listing mod (`agent.spawn`) | `tui:skill-listing` | Untick; `BRAIN_SKILL_PICKER=0` | off |
 | Strict routing guard | Blocks a spawn that names no model | `project-brain routing-guard` PreToolUse hook | `hooks:routing` with `--routing-hook-strict` | Run setup without the flag | off |
 | Coding rules guard | First code edit by any agent (session or subagent) injects the `brain-style` skill | `project-brain style-guard` PreToolUse hook | `hooks:style-guard` | Untick | on |
-| Subagent report contract (coming) | Fixed short report format, details in a file | (coming) | (coming) | (coming) | (coming) |
+| Subagent report contract | Asks every delegation for a verdict-first report: Verdict (PASS, BLOCKERS, PARTIAL, DONE), Changes, Tests (counts), Risks, Needs a decision; about 400 words, full detail in a file whose path goes in the report. The text is in the `brain-model-routing` skill (routing content version 6) and the SessionStart reminder. The opt-in hook appends it to each `Task` or `Agent` prompt through `updatedInput`, unless the prompt already carries it or sets its own output format | `src/rules/report-contract.ts`; `project-brain report-contract` PreToolUse hook (matcher `Task\|Agent`, `src/hooks/report-contract.ts`) in `~/.claude/settings.json` | `hooks:report-contract` (hook); the skill and reminder text ride `guidance:model-routing` and `hooks:routing` | Untick `hooks:report-contract` | hook off; skill and reminder on |
 
 ### Edit and commit guards
 
@@ -148,7 +148,9 @@ All three are written to `~/.project-brain/claude-plugins/` and registered in `~
 | MCP server | `project-brain serve` on stdio: the 21 tools (`search_context`, `search_code`, `find_symbol`, `find_callers`, `impact`, `trace_path`, `repo_map`, ...) | `~/.claude.json` `mcpServers["project-brain"]`; catalog in `src/constants.ts` `TOOL_CATALOG` | `host:claudecode` (one per host) | Untick the host | on |
 | Index maintenance | At session end, drops dead worktree indexes and compacts big idle ones | `project-brain maintain` SessionEnd hook | `hooks:index-maintenance` | Untick | on |
 | Worktree sweep | At session end, removes merged, clean, unused worktrees | `project-brain worktree sweep` SessionEnd hook | `hooks:worktree-sweep` | Untick | on |
-| Sync lock and Ollama log handling (coming) | One `sync` at a time per machine; smaller, rotated Ollama log | (coming) | (coming) | (coming) | (coming) |
+| Machine-wide embed lock | One embedding run (`sync`, `init`, `reindex`) at a time per machine, across every worktree. `sync --changed-only`, which the post-commit hook runs, records its root in `embed-pending/` and exits at once; the holder syncs each pending root before releasing. Manual `sync`, `init` and `reindex` wait up to 15 minutes, then exit 1 naming the holder | `src/commands/embed-lock.ts` (built on `src/commands/sync-lock.ts`); `~/.project-brain/embed.lock`, `~/.project-brain/embed-pending/` | none | No switch; `BRAIN_EMBED_LOCK_WAIT_MS` changes the wait | on |
+| Ollama log cap | Keeps the lane's `ollama-interactive.log` at 50 MB: the newest 50 MB move to `ollama-interactive.log.1` and the live file is truncated in place. Runs when the lane is installed, and at session start through `project-brain skill-usage --write` | `src/setup/log-cap.ts`; `~/.project-brain/ollama-interactive.log` | `service:ollama-interactive`; the session-start cap needs `tui:skill-listing` | none | on with the lane |
+| Default Ollama log hint | `project-brain health` warns when the default Ollama's own log is over 500 MB and prints the command that trims it; it never trims that log itself | `src/commands/health.ts`; checks `/opt/homebrew/var/log/ollama.log`, `/usr/local/var/log/ollama.log`, `~/.ollama/logs/server.log` | none | none | on |
 
 ### Context economy and housekeeping
 
@@ -159,9 +161,9 @@ All three are written to `~/.project-brain/claude-plugins/` and registered in `~
 | Auto-compact at 400K | Sets `autoCompactWindow` | `~/.claude/settings.json` | `config:auto-compact` | Untick | on |
 | No commit attribution | Removes Co-Authored-By trailers | `attribution` in `~/.claude/settings.json` | `config:no-commit-attribution` | Untick | off |
 | Host skills | `brain-*` skills | `~/.claude/skills/`, `~/.agents/skills/`, `~/.codex/skills/` | `skill:<name>` | Untick per skill | on |
-| Skill refresh guard in worktrees (coming) | Stops a worktree build from rewriting installed skills | (coming) | (coming) | (coming) | (coming) |
-| `project-brain status` (coming) | Everything pending across projects | (coming) | (coming) | (coming) | (coming) |
-| Completion notifications (coming) | Notifies when an agent, task or CI run ends | (coming) | (coming) | (coming) | (coming) |
+| Source-checkout guard | A CLI run from source (any entry point that is not the compiled binary: a worktree, a feature branch, the main checkout) never refreshes installed skills, repairs host MCP configs or self-installs the suggest hook | `src/env/install-origin.ts` (`mayWriteGlobalState`), called from `src/cli.ts` and `src/hooks/routing-rules.ts` | none | `BRAIN_FORCE_SKILL_REFRESH=1` unlocks all three from source. `BRAIN_NO_SKILL_REFRESH` and `BRAIN_NO_CONFIG_REPAIR` (any value) skip their step in any build and beat the force | on |
+| `project-brain status` | Read-only report of pending work across registered projects: unpushed commits, uncommitted changes in the main checkout, merged worktrees `worktree finish` would accept, setup units not enabled (declined ones left out), and npm version lag against `latest` and `next`. Each item comes with the command that resolves it. `--json` for scripts, `--project <id>` for one project | `src/commands/status.ts` | none (a command) | Do not run it | n/a |
+| Completion notifications | Desktop notification when a background task or agent ends, a CI run finishes, or a main turn of 2 minutes or more ends; items within 5 s coalesce into one. Uses the engine's `$.ui.notify`, falling back to `osascript` (macOS) or `notify-send` (Linux). There is no phone path from a terminal session | `templates/claude-tui/activity-pane/hooks/feat-notify.tsx`, part of the activity pane mod; the on/off state is the mod's `notify` atom | `tui:activity-pane` | `/activity notify off` (`on` to restore, `test` to send one, no argument to show the state) | on with the pane |
 
 The chrome-devtools units (`config:chrome-autoconnect`, `service:chrome-shared-server`) and `config:record-connection` are outside this flow; the README covers them.
 
@@ -181,7 +183,7 @@ Every outbound call project-brain makes. Ollama traffic stays on `127.0.0.1` and
 | TypeSafe, commit check | The staged diff (first 16,000 chars) | `git commit` from Claude Code | Token | Untick `hooks:commit-check` |
 | TypeSafe, OKF | `fix:` commit subjects, bodies and file paths (`okf candidates`); concept text plus code diff (`okf audit --judge --judge-model jev`) | Only when you run those commands | Token | Do not run them |
 | TypeSafe, health probe | A synthetic two-file sample, never your code | `project-brain health` | Token | none needed |
-| Anthropic API | The commit message and each touched module's diff | `conceptualize`, run by the git post-commit hook after every commit | Anthropic credentials (`ANTHROPIC_API_KEY` or `ant auth login`); without them it is skipped | Remove the post-commit hook |
+| Anthropic API (`BRAIN_CONCEPT_MODEL`, default `claude-haiku-5-5`) | The commit message, each touched module's full diff (`git show HEAD -- <module>/`, up to 5 modules per commit) and that module's current concept doc | `conceptualize`, run by the git post-commit hook after every commit, even when the sync itself was queued | Anthropic credentials (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ant auth login`); without them nothing is sent and the modules are skipped | No switch or variable exists. Remove the project-brain block from `.git/hooks/post-commit`; a later `project-brain init` adds it back |
 | Anthropic API | The concept prose and the code diff | `okf audit --judge` (default judge model) | Anthropic credentials | Do not pass `--judge` |
 | npm registry (`registry.npmjs.org`) | A GET for the latest version | At most once a day, in the background, from any command | none | `BRAIN_NO_UPDATE_CHECK=1` |
 | npm, bun, pnpm or yarn | Package download | `project-brain update` | none | Do not run it |
@@ -213,6 +215,9 @@ Every outbound call project-brain makes. Ollama traffic stays on `127.0.0.1` and
 | `ollama.json` | `interactiveHost` for the lane | Deleting turns the lane off |
 | `ollama-interactive.log` | Log of the lane service | Yes |
 | `lane/` | Lane verification verdicts | Yes; re-verified |
+| `ollama-interactive.log.1` | The previous 50 MB of the lane log, kept by the log cap | Yes |
+| `embed.lock` | Holder (pid) of the machine-wide embed lock | Not while a `sync`, `init` or `reindex` runs; a dead or hour-old holder's lock is taken over on its own |
+| `embed-pending/` | One marker per root queued behind the embed lock | Yes; those roots sync on their next commit or a manual `sync` |
 | `claude-plugins/` | The local marketplace with the mods and `previous-tui.json` | No; untick the units instead |
 | `architecture.json` | Global arch-guard config | Yes; never re-seeded |
 | `commit-check.json` | Commit check mode | Yes; back to warn |
@@ -246,10 +251,12 @@ Every outbound call project-brain makes. Ollama traffic stays on `127.0.0.1` and
 | Ollama slow while `sync` runs; hooks time out | `project-brain health` shows `lane: off` or `down` | Install `service:ollama-interactive`. Without it, single queries wait behind 64-chunk batches. `BRAIN_EMBED_BATCH_SIZE` lower makes the wait shorter |
 | The activity pane shows an old version after `setup` or `update` | The files under `~/.project-brain/claude-plugins/project-brain-activity/` are new, the running session is not | Run `/reload-plugins` in the session, or restart Claude Code. Mods load once per process |
 | Dev mods gone after `claude --continue` | Mods made with the plugin-authoring skill live in `~/.claude/dev-mods/<session-id>/`, and `--continue` starts a new session id | Copy the mod folder into the new session's folder, or install it permanently through a setup unit (the local marketplace) |
-| Installed skills changed to a branch's version | Any `project-brain` command refreshes stale skills (`src/cli.ts`, `refreshStaleSkills`); running a dev build from a worktree writes that branch's skills into `~/.claude/skills` | Run the installed `project-brain` once (for example `project-brain health`); it rewrites skills that differ from its own. The guard against this is (coming) |
+| Installed skills changed to a branch's version | Any `project-brain` command refreshes stale skills (`src/cli.ts`, `refreshStaleSkills`); running a dev build from a worktree writes that branch's skills into `~/.claude/skills` | Run the installed `project-brain` once (for example `project-brain health`); it rewrites skills that differ from its own. Since the source-checkout guard (`src/env/install-origin.ts`) a build run from source no longer does this unless `BRAIN_FORCE_SKILL_REFRESH=1` is set |
 | Status line broken after uninstalling a plugin | `statusLine` in `~/.claude/settings.json` still points at a script inside the removed plugin | Remove or repoint the `statusLine` key. project-brain never writes `statusLine` |
 | Suggestions never appear | `UserPromptSubmit` in `~/.claude/settings.json` has `project-brain suggest --stdin`; `suggest-hook.json` is not `opted-out` | Re-tick `hooks:suggest`. Without a token the hook is silent by design |
-| (coming) | `project-brain status` will list what is pending across projects | (coming) |
+| Not sure what is left undone across projects | `project-brain status` (or `--project <id>`) | Run the command printed next to each item |
+| `sync` seems not to run after a commit | `.project-brain/sync.log` says `another project-brain run is embedding ... queued <root>`; `~/.project-brain/embed.lock` names the holder; `~/.project-brain/embed-pending/` lists the queued roots | Nothing is lost: the holder syncs each queued root before it releases, and a dead holder's lock is taken over by the next run. A manual `project-brain sync` waits up to 15 minutes (`BRAIN_EMBED_LOCK_WAIT_MS`), then exits 1 naming the holder |
+| No desktop notification | `/activity notify` shows whether they are on; `/activity notify test` sends one and names the channel it used | `/activity notify on` if they were off. On macOS the `osascript` fallback posts as Script Editor: allow Script Editor in System Settings > Notifications. Turns under 2 minutes and interrupted turns never notify |
 
 ## Next step
 
