@@ -5,6 +5,10 @@ import { SYNC_LOG_RELATIVE_PATH } from "../commands/sync-status.js";
 const HOOK_MARKER = "# project-brain: auto-sync on commit";
 // Overwritten (not appended) each run, on purpose: it exists to show what the
 // LAST background sync did, not a growing history nobody rotates.
+// `conceptualize` still runs when the sync exits 0 without syncing (skipped
+// behind this root's lock, or queued behind the machine-wide embed lock): it
+// reads this commit's diff, not the index, and nothing re-runs it later, so
+// gating it on the sync would drop this commit's module docs for good.
 const HOOK_LINE =
   `{ project-brain sync --changed-only && project-brain conceptualize; } > ${SYNC_LOG_RELATIVE_PATH} 2>&1 &`;
 

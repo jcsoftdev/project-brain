@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import {
@@ -92,33 +92,115 @@ export async function waitForEmbedLock(opts: WaitForEmbedLockOptions): Promise<P
 }
 
 /** Record that `root` wants a changed-only sync once the current holder is done. */
-export async function markEmbedPending(dataDir: string, root: string, now: () => number = Date.now): Promise<void> {
+export async function markEmbedPending(
+  dataDir: string,
+  root: string,
+  now: () => number = Date.now
+): Promise<PendingEntry> {
   await mkdir(pendingDir(dataDir), { recursive: true });
-  await writeFile(pendingFile(dataDir, root), JSON.stringify({ root, at: now() }));
+  const target = pendingFile(dataDir, root);
+  // Written aside and renamed in, so a reader never sees a torn marker.
+  const tmp = `${target}.${randomUUID()}.tmp`;
+  const marker: PendingMarker = { root, at: now(), id: randomUUID() };
+  await writeFile(tmp, JSON.stringify(marker));
+  await rename(tmp, target);
+  return { file: target, marker };
+}
+
+export interface PendingMarker {
+  root: string;
+  at: number;
+  id: string;
+}
+
+export interface PendingEntry {
+  file: string;
+  marker: PendingMarker;
+}
+
+async function listPending(dataDir: string): Promise<PendingEntry[]> {
+  const dir = pendingDir(dataDir);
+  const names = (await readdir(dir).catch(() => [] as string[])).filter((n) => n.endsWith(".json"));
+  const entries: PendingEntry[] = [];
+  for (const name of names) {
+    const file = join(dir, name);
+    try {
+      const parsed = JSON.parse(await readFile(file, "utf-8"));
+      if (typeof parsed?.root === "string" && parsed.root !== "") entries.push({ file, marker: parsed });
+      else await unlink(file).catch(() => {});
+    } catch {
+      // Gone since the listing, or unreadable: nothing to run.
+    }
+  }
+  return entries;
+}
+
+export async function hasEmbedPending(dataDir: string): Promise<boolean> {
+  return (await readdir(pendingDir(dataDir)).catch(() => [] as string[])).some((n) => n.endsWith(".json"));
 }
 
 /**
- * Claim every pending root. Each marker is renamed before it is read, so two
- * drainers never both run the same root, and a marker written after the claim
- * survives for the next round.
+ * Remove a marker after its run, unless the root was queued again meanwhile.
+ * The file is moved aside before it is judged, so a newer marker that lands
+ * during the check is never deleted; if the moved one turns out to be newer it
+ * goes back, and overwriting a still-newer one loses nothing, since every
+ * marker for a root asks for the same run.
  */
-export async function drainEmbedPending(dataDir: string): Promise<string[]> {
-  const dir = pendingDir(dataDir);
-  const names = await readdir(dir).catch(() => [] as string[]);
-  const roots = new Set<string>();
-  for (const name of names.filter((n) => n.endsWith(".json"))) {
-    const claimed = join(dir, `${name}.${process.pid}.claimed`);
-    if (!(await rename(join(dir, name), claimed).then(() => true, () => false))) continue;
-    try {
-      const parsed = JSON.parse(await readFile(claimed, "utf-8"));
-      if (typeof parsed?.root === "string" && parsed.root !== "") roots.add(parsed.root);
-    } catch {
-      // A torn marker carries no root to run.
-    } finally {
-      await unlink(claimed).catch(() => {});
+async function settlePending(entry: PendingEntry): Promise<void> {
+  const aside = `${entry.file}.${randomUUID()}.settle`;
+  if (!(await rename(entry.file, aside).then(() => true, () => false))) return;
+  let moved: PendingMarker | null = null;
+  try {
+    moved = JSON.parse(await readFile(aside, "utf-8"));
+  } catch {
+    // unreadable: treat as ours
+  }
+  if (moved && moved.id !== entry.marker.id) await rename(aside, entry.file).catch(() => {});
+  else await unlink(aside).catch(() => {});
+}
+
+/**
+ * Run every pending root once, for up to MAX_DRAIN_ROUNDS rounds. Only the
+ * embed-lock holder calls this, so no two drainers overlap. A marker is
+ * removed after its root's run rather than before, so a holder that crashes
+ * mid-drain leaves the rest queued for the next holder instead of losing them.
+ */
+async function drainPending(dataDir: string, runPending: (root: string) => Promise<number>): Promise<string[]> {
+  const drained: string[] = [];
+  for (let round = 0; round < MAX_DRAIN_ROUNDS; round++) {
+    const entries = await listPending(dataDir);
+    if (entries.length === 0) break;
+    for (const entry of entries) {
+      drained.push(entry.marker.root);
+      try {
+        await runPending(entry.marker.root);
+      } catch {
+        // Someone else's root failing must not fail the run that drained it.
+      }
+      await settlePending(entry);
     }
   }
-  return [...roots];
+  return drained;
+}
+
+/** The roots still queued, for tests and display. */
+export async function pendingEmbedRoots(dataDir: string): Promise<string[]> {
+  return (await listPending(dataDir)).map((e) => e.marker.root);
+}
+
+/** How often a holder re-stamps the lock, for the whole hold. */
+export const EMBED_LOCK_REFRESH_MS = 5 * 60_000;
+
+/** Hold `lock` for `work`, re-stamping it on a timer so a long hold never reads as abandoned. */
+async function holding<T>(lock: PidFileLock, refreshMs: number, work: () => Promise<T>): Promise<T> {
+  const timer = setInterval(() => void lock.refresh(), refreshMs);
+  timer.unref?.();
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+    await lock.release();
+  }
 }
 
 export type EmbedRunOutcome =
@@ -134,49 +216,50 @@ export interface RunWithEmbedLockOptions extends WaitForEmbedLockOptions {
   run: (root: string, changedOnly: boolean) => Promise<number>;
   /** Runs a coalesced root's changed-only sync. Defaults to `run(root, true)`. */
   runPending?: (root: string) => Promise<number>;
+  /** Lock re-stamp interval. Defaults to EMBED_LOCK_REFRESH_MS. */
+  refreshMs?: number;
 }
 
 /**
  * Run `run(root)` under the machine-wide embed lock, then drain the roots that
- * coalesced behind it. The lock is held across the drain and re-stamped before
- * each run, so a long queue never ages into looking abandoned.
+ * coalesced behind it.
+ *
+ * A marker can land after the last drain and before the release. Its writer
+ * then failed to take the lock only because we still held it, so after every
+ * release the holder looks again and, if anything is queued, takes the lock
+ * back and drains once more. Whoever wins that acquire owns the queue.
  */
 export async function runWithEmbedLock(opts: RunWithEmbedLockOptions): Promise<EmbedRunOutcome> {
   let lock = await acquireEmbedLock(opts);
   if (!lock) {
     if (opts.coalesce) {
-      await markEmbedPending(opts.dataDir, opts.root, opts.now);
-      // Re-check: the holder may have drained and released between our failed
-      // acquire and the marker landing, which would strand the marker.
+      const queued = await markEmbedPending(opts.dataDir, opts.root, opts.now);
+      // Re-check: the holder may have released between our failed acquire and
+      // the marker landing, and its post-release look may have missed it.
       lock = await acquireEmbedLock(opts);
       if (!lock) return { kind: "queued", holder: await readEmbedLockHolder(opts.dataDir) };
-      await unlink(pendingFile(opts.dataDir, opts.root)).catch(() => {}); // we run it now
+      await settlePending(queued); // we run it now
     } else {
       lock = await waitForEmbedLock(opts);
       if (!lock) return { kind: "timeout", holder: await readEmbedLockHolder(opts.dataDir) };
     }
   }
 
+  const refreshMs = opts.refreshMs ?? EMBED_LOCK_REFRESH_MS;
+  const runPending = opts.runPending ?? ((root: string) => opts.run(root, true));
   const drained: string[] = [];
-  try {
-    const exitCode = await opts.run(opts.root, opts.coalesce);
-    for (let round = 0; round < MAX_DRAIN_ROUNDS; round++) {
-      const roots = await drainEmbedPending(opts.dataDir);
-      if (roots.length === 0) break;
-      for (const root of roots) {
-        await lock.refresh();
-        drained.push(root);
-        try {
-          await (opts.runPending ? opts.runPending(root) : opts.run(root, true));
-        } catch {
-          // Someone else's root failing must not fail the run that drained it.
-        }
-      }
-    }
-    return { kind: "ran", exitCode, drained };
-  } finally {
-    await lock.release();
+  const exitCode = await holding(lock, refreshMs, async () => {
+    const code = await opts.run(opts.root, opts.coalesce);
+    drained.push(...(await drainPending(opts.dataDir, runPending)));
+    return code;
+  });
+
+  while (await hasEmbedPending(opts.dataDir)) {
+    const again = await acquireEmbedLock(opts);
+    if (!again) break; // the new holder owns the queue now
+    drained.push(...(await holding(again, refreshMs, () => drainPending(opts.dataDir, runPending))));
   }
+  return { kind: "ran", exitCode, drained };
 }
 
 /** One line for a run that coalesced behind another. */

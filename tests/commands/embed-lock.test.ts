@@ -7,7 +7,7 @@ import {
   embedLockPath,
   runWithEmbedLock,
   markEmbedPending,
-  drainEmbedPending,
+  pendingEmbedRoots,
   resolveEmbedLockWaitMs,
   EMBED_LOCK_WAIT_MS,
 } from "../../src/commands/embed-lock.js";
@@ -163,7 +163,7 @@ describe("runWithEmbedLock — coalescing hook-triggered runs", () => {
     if (outcome.kind !== "ran") return;
     expect(outcome.drained.sort()).toEqual(["/a", "/b"]);
     expect(calls.slice(1).sort()).toEqual([["/a", true], ["/b", true]]);
-    expect(await drainEmbedPending(dataDir)).toEqual([]);
+    expect(await pendingEmbedRoots(dataDir)).toEqual([]);
     expect(existsSync(embedLockPath(dataDir))).toBe(false);
   });
 
@@ -185,6 +185,89 @@ describe("runWithEmbedLock — coalescing hook-triggered runs", () => {
 
     expect(outcome).toMatchObject({ kind: "ran", exitCode: 0 });
     expect(ran.sort()).toEqual(["/a", "/broken", "/fine"]);
+  });
+
+  it("removes a marker only after its root ran, so a crash mid-drain loses nothing", async () => {
+    await markEmbedPending(dataDir, "/b");
+    await markEmbedPending(dataDir, "/c");
+    const seen: Array<[string, string[]]> = [];
+
+    await runWithEmbedLock({
+      dataDir,
+      root: "/a",
+      coalesce: false,
+      run: async () => 0,
+      runPending: async (root) => {
+        seen.push([root, (await pendingEmbedRoots(dataDir)).sort()]);
+        return 0;
+      },
+    });
+
+    // Whichever ran first, both markers were still on disk while it ran.
+    expect(seen[0]![1]).toEqual(["/b", "/c"]);
+    expect(await pendingEmbedRoots(dataDir)).toEqual([]);
+  });
+
+  it("runs a root again when it is re-queued during its own drained run", async () => {
+    await markEmbedPending(dataDir, "/b");
+    const ran: string[] = [];
+
+    await runWithEmbedLock({
+      dataDir,
+      root: "/a",
+      coalesce: false,
+      run: async () => 0,
+      runPending: async (root) => {
+        ran.push(root);
+        if (ran.length === 1) await markEmbedPending(dataDir, "/b");
+        return 0;
+      },
+    });
+
+    expect(ran).toEqual(["/b", "/b"]);
+    expect(await pendingEmbedRoots(dataDir)).toEqual([]);
+  });
+
+  it("drains markers left past the round cap by re-taking the lock after release", async () => {
+    await markEmbedPending(dataDir, "/b");
+    let runs = 0;
+
+    await runWithEmbedLock({
+      dataDir,
+      root: "/a",
+      coalesce: false,
+      run: async () => 0,
+      runPending: async () => {
+        // Re-queue itself five times: more than one hold's three rounds.
+        if (++runs < 5) await markEmbedPending(dataDir, "/b");
+        return 0;
+      },
+    });
+
+    expect(runs).toBe(5);
+    expect(await pendingEmbedRoots(dataDir)).toEqual([]);
+  });
+
+  it("re-stamps the lock on a timer for the whole hold, including the primary run", async () => {
+    const stamps: number[] = [];
+    let clock = 1_000;
+
+    await runWithEmbedLock({
+      dataDir,
+      root: "/a",
+      coalesce: false,
+      refreshMs: 5,
+      now: () => clock,
+      run: async () => {
+        stamps.push(JSON.parse(readFileSync(embedLockPath(dataDir), "utf-8")).at);
+        clock = 2_000;
+        await new Promise((r) => setTimeout(r, 40));
+        stamps.push(JSON.parse(readFileSync(embedLockPath(dataDir), "utf-8")).at);
+        return 0;
+      },
+    });
+
+    expect(stamps).toEqual([1_000, 2_000]);
   });
 
   it("routes coalesced roots through runPending when the holder is not a sync", async () => {
