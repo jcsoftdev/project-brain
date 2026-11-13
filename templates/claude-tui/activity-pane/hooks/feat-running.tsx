@@ -4,6 +4,7 @@ import type { Register } from 'claude-code'
 
 import type { Api, Row, Span, Tone } from './register'
 import { ICONS, clean, fit, shortName, span } from './register'
+import { notify } from './feat-notify'
 
 export type RunningKind = 'bash' | 'monitor' | 'agent' | 'workflow'
 export type RunningStatus = 'running' | 'completed' | 'failed' | 'killed'
@@ -329,6 +330,19 @@ export const toastOf = (task: RunningTask): string => {
   return `✓ Terminó: ${label} · ${took}`
 }
 
+const KIND_NAME: Record<RunningKind, string> = { bash: 'Comando', monitor: 'Monitor', agent: 'Agente', workflow: 'Workflow' }
+
+/** The one-line OS notification a finished task raises: what it was, how it ended, its verdict. */
+export const notifyLineOf = (task: RunningTask): string => {
+  const took = elapsed((task.endedAt ?? task.startedAt) - task.startedAt)
+  const what = `${KIND_NAME[task.kind]} '${fit(clean(task.label), 60)}'`
+  if (task.status === 'killed') return `◼ ${what} se detuvo · ${took}`
+  const verdict = verdictOfTask(task)
+  const code = task.status === 'failed' && task.exitCode !== undefined ? ` (código ${task.exitCode})` : ''
+  const ok = verdict !== 'FAIL'
+  return `${ok ? '✓' : '✗'} ${what} ${ok ? 'terminó' : 'falló'}${code}${verdict ? ` · ${verdict}` : ''} · ${took}`
+}
+
 // ---------------------------------------------------------------- engine
 
 export async function readRunning($: Api): Promise<RunningPart> {
@@ -344,6 +358,7 @@ function announce($: Api, ended: RunningTask[]): void {
     } catch {
       // A refused toast loses only the toast.
     }
+    void notify($, { key: `task:${task.id}`, text: notifyLineOf(task) }).catch(() => undefined)
   }
 }
 

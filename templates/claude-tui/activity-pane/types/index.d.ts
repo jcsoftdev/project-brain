@@ -193,6 +193,9 @@ declare module 'claude-code' {
         lane?: { state: 'up' | 'mismatch' | 'dead' | 'pending' | 'off'; reason?: string; at?: number }
       }>
       // feat:savings:end
+      // feat:notify:start
+      notify: Shaped<boolean>
+      // feat:notify:end
     }
   }
 }
