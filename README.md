@@ -657,6 +657,16 @@ project-brain health
 
 Also reports the outcome of the last background sync (`.project-brain/sync-status.json`) as a `Last sync:` line — `ok`, `aborted` (the watchdog gave up on a wedged job), `failed`, or `crashed` (the process died mid-run without ever writing a terminal outcome). Anything short of a clean `ok` points at `.project-brain/sync.log`, where the post-commit hook's `sync`/`conceptualize` output actually lands (overwritten on each run, so it always reflects the last one). The `check_health` MCP tool surfaces the same data as a `lastSync` field.
 
+### `status`
+
+Everything left pending across every registered project, in one read-only report. It never changes anything.
+
+```bash
+project-brain status [--json] [--project <id>]
+```
+
+For each project it lists commits not yet pushed (a branch ahead of its upstream, or a local branch with no upstream that has commits not on the default branch), uncommitted changes in the main checkout, and linked worktrees that `worktree finish` would accept (merged, clean, idle). Globally it lists setup units that are available but not enabled (ones you declined are left out), and compares the installed version with npm's `latest` and `next` dist-tags, flagging when `latest` lags `next`. Each pending item comes with the command that resolves it. A clean project prints nothing; when nothing at all is pending it prints one `All clear` line. Repositories with no remote are not checked for unpushed commits, and the npm lookup gives up after 3 s.
+
 ### `bench` — measure retrieval quality
 
 Published embedding leaderboards score a different corpus and a different task. A percent-or-two delta on someone else's benchmark says nothing about whether YOUR queries still surface the right file after changing model, dimension or chunking — so `bench` measures against ground truth from *this* repository instead.

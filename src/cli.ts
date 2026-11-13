@@ -139,6 +139,10 @@ Commands:
   sessions           List running Claude Code sessions (memory, idle time, children) [--json]
                        --prune [--idle <dur>]  close idle ones (default 24h); dry run unless --yes
                        --force-children / --include-unknown  lift the live-child / unknown-activity guards
+  status             Everything pending across registered projects, read-only: unpushed commits,
+                       uncommitted changes, merged worktrees safe to remove, setup units not enabled,
+                       and the installed version against npm latest/next. Prints the fixing command.
+                       [--json] [--project <id>]
   worktree           Show this worktree's brain + port identity, create/finish worktrees, or reclaim dead ones
                        status [--json]   identity for project-brain and mcp-port-registry
                        prune [--dry-run] drop indexes of worktrees git no longer lists
@@ -485,6 +489,14 @@ switch (command) {
   case "sessions": {
     const { execute } = await import("./commands/sessions.js");
     process.exit(await execute(args));
+    break;
+  }
+
+  case "status": {
+    const { execute } = await import("./commands/status.js");
+    await execute(args);
+    // A setup unit that outran its inspection budget is still running; the report is already printed.
+    process.exit();
     break;
   }
 
