@@ -1,10 +1,16 @@
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { readFile, readdir, mkdir } from "node:fs/promises";
 import { isAlwaysIgnored } from "../indexer/always-ignore.js";
 import type { Dirent } from "node:fs";
 import { computeHash } from "../indexer/hash.js";
 import { chunkContent } from "../indexer/parser.js";
-import { shouldIgnore, loadPatterns } from "../indexer/gitignore.js";
+import {
+  shouldIgnore,
+  loadPatterns,
+  loadPatternsFor,
+  isIgnoredWithAncestors,
+} from "../indexer/gitignore.js";
+import { isLinkedWorktreeRoot, isInsideNestedWorktree } from "../indexer/worktree-boundary.js";
 import { readIndexableText, isDocExtension } from "../indexer/extract-text.js";
 import {
   WATCHER_ALWAYS_IGNORE,
@@ -266,6 +272,17 @@ async function listAllFiles(
     return results;
   }
 
+  // A linked worktree nested in the checkout is another branch's copy of the
+  // whole repository, with its own index. Checked here, where the entries are
+  // already listed, so an ordinary directory costs no extra syscall.
+  if (
+    dir !== root &&
+    entries.some((e) => e.name === ".git" && e.isFile()) &&
+    (await isLinkedWorktreeRoot(dir))
+  ) {
+    return results;
+  }
+
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
     const relPath = fullPath.slice(root.length + 1).replace(/\\/g, "/");
@@ -301,6 +318,40 @@ async function listAllFiles(
   }
 
   return results;
+}
+
+/**
+ * Apply the full walk's exclusion rules to an explicit file list — the
+ * watcher's changed paths — and return the absolute paths that survive.
+ *
+ * The incremental path used to index whatever it was handed. The MCP server's
+ * recursive watcher on a checkout reports every write below it, including the
+ * agent worktrees under `.claude/worktrees/`, so each file an agent touched in
+ * its worktree landed in the PARENT checkout's index as
+ * `.claude/worktrees/<name>/<path>` — and gitignored files the same way.
+ * Only the .gitignore files on each path's ancestor chain are read, never the
+ * whole tree, so a watcher save stays cheap.
+ */
+async function filterChangedFiles(root: string, changedFiles: string[]): Promise<string[]> {
+  const candidates = changedFiles
+    .map((f) => (isAbsolute(f) ? f : join(root, f)))
+    .map((abs) => ({ abs, relPath: relative(root, abs).replace(/\\/g, "/") }))
+    .filter(
+      ({ relPath }) =>
+        relPath !== "" && relPath !== ".." && !relPath.startsWith("../") && !isAbsolute(relPath)
+    );
+  const patterns = await loadPatternsFor(
+    root,
+    candidates.map((c) => c.relPath)
+  );
+  const worktreeCache = new Map<string, boolean>();
+  const kept: string[] = [];
+  for (const { abs, relPath } of candidates) {
+    if (isAlwaysIgnored(relPath) || isIgnoredWithAncestors(relPath, patterns)) continue;
+    if (await isInsideNestedWorktree(root, relPath, worktreeCache)) continue;
+    kept.push(abs);
+  }
+  return kept;
 }
 
 /**
@@ -387,9 +438,7 @@ export async function runSync(options: SyncOptions): Promise<SyncResult> {
     onProgress?.({ phase: "scanning", current: 0, total: 0 });
     let filePaths: string[];
     if (changedFiles && changedFiles.length > 0) {
-      filePaths = changedFiles.map((f) =>
-        f.startsWith("/") ? f : join(root, f)
-      );
+      filePaths = await filterChangedFiles(root, changedFiles);
     } else {
       const gitignorePatterns = await loadPatterns(root);
       filePaths = await listAllFiles(root, root, gitignorePatterns);
