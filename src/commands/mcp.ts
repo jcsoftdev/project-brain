@@ -52,6 +52,10 @@ export async function execute(args: string[], opts: McpOptions = {}): Promise<nu
     return 0;
   }
   const r = await applyPrune(env, plans);
+  if (r.locked) {
+    log("Another MCP prune is running (setup, init or session-end maintenance); nothing changed. Try again in a moment.");
+    return 1;
+  }
   if (r.error) log(`Apply failed, nothing changed or recorded: ${r.error}`);
   for (const e of r.added) log(`Disabled ${e.name} in ${e.project}`);
   if (r.added.length > 0) log(`\nBackup: ${r.backup}\nUndo with: project-brain mcp prune --revert. Takes effect on the next Claude Code session.`);

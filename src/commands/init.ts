@@ -38,6 +38,10 @@ export interface InitOptions {
   dbPath?: string;
   /** Progress callback forwarded to runReindex. */
   onProgress?: (p: SyncProgress) => void;
+  /** Directory holding `.claude.json` for the opt-in MCP prune. Defaults to the home directory. */
+  claudeHome?: string;
+  /** Test seam: the Jev request of the opt-in MCP prune. */
+  jevFetch?: import("../typesafe/client.js").TypesafeFetchFn;
 }
 
 export interface InitResult {
@@ -53,6 +57,8 @@ export interface InitResult {
   indexStats?: ReindexResult;
   /** What writeProjectRules changed in CLAUDE.md. Absent when skipRules is true or the write threw. */
   rulesSummary?: SectionWriteSummary;
+  /** One line about the opt-in MCP prune; absent when it is off or changed nothing. */
+  mcpPrune?: { line: string; failed?: true };
 }
 
 /**
@@ -115,6 +121,11 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
     const { registerProject } = await import("../store/project-registry.js");
     await registerProject(options.dataDir ?? DATA_DIR, projectId, root);
   }
+
+  // 5c. Opt-in Jev assist: prune this project's MCP servers now, so its next session
+  // starts without the ones it will not need. Bounded by the prune's own deadline;
+  // never fails init.
+  const mcpPrune = await pruneThisProject(root, options);
 
   // 6. Detect modules
   const modules = await detectModules(root);
@@ -286,7 +297,24 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
     indexWarning,
     indexStats,
     ...(rulesSummary ? { rulesSummary } : {}),
+    ...(mcpPrune ? { mcpPrune } : {}),
   };
+}
+
+/** The opt-in MCP prune for `root`'s repo; nothing at all when the opt-in is off. Never throws. */
+async function pruneThisProject(root: string, options: InitOptions): Promise<InitResult["mcpPrune"]> {
+  try {
+    const { DATA_DIR } = await import("../constants.js");
+    const { autoPrune } = await import("../mcpprune/auto.js");
+    const r = await autoPrune({ root, dataDir: options.dataDir ?? DATA_DIR, home: options.claudeHome, fetchFn: options.jevFetch });
+    if (!r.ran) return undefined;
+    if (r.error) return { line: `MCP prune skipped: ${r.error}`, failed: true };
+    if (r.added.length === 0) return undefined;
+    const names = [...new Set(r.added.map((e) => e.name))].join(", ");
+    return { line: `MCP:        disabled ${names} for the next session (undo: project-brain mcp prune --revert)` };
+  } catch (e) {
+    return { line: `MCP prune skipped: ${e instanceof Error ? e.message : String(e)}`, failed: true };
+  }
 }
 
 /** CLI entry point for the init command. */
@@ -342,6 +370,10 @@ export async function execute(args: string[]): Promise<void> {
 
   // T6: report the CLAUDE.md rewrite instead of leaving it silent.
   if (result.rulesSummary) console.log(formatSectionWriteSummary(result.rulesSummary));
+  if (result.mcpPrune) {
+    const dim = result.mcpPrune.failed && process.stdout.isTTY;
+    console.log(dim ? `\x1b[2m${result.mcpPrune.line}\x1b[22m` : result.mcpPrune.line);
+  }
 
   console.log("\nInitialization complete. Run `project-brain sync` to index files.");
 }

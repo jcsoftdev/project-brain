@@ -354,6 +354,23 @@ export interface ApplyResult {
   added: Entry[];
   backup: string | null;
   error?: string;
+  /** Another prune held the machine-wide lock, so this one changed nothing. */
+  locked?: true;
+}
+
+/** One prune at a time per machine: setup, `mcp prune --apply`, init and maintain can overlap. */
+export const pruneLockPath = (env: PruneEnv) => join(env.dataDir, "mcp-prune.lock");
+
+/** Runs `work` holding the prune lock; resolves to null when another prune holds it. */
+export async function withPruneLock<T>(env: PruneEnv, work: () => Promise<T>): Promise<T | null> {
+  const { acquirePidFileLock } = await import("../commands/sync-lock.js");
+  const lock = await acquirePidFileLock(pruneLockPath(env)).catch(() => null);
+  if (!lock) return null;
+  try {
+    return await work();
+  } finally {
+    await lock.release().catch(() => {});
+  }
 }
 
 /**
@@ -362,6 +379,11 @@ export interface ApplyResult {
  * `--revert` sees everything that may have landed even if the process dies in between.
  */
 export async function applyPrune(env: PruneEnv, plans: ProjectPlan[]): Promise<ApplyResult> {
+  return (await withPruneLock(env, () => applyUnlocked(env, plans))) ?? { added: [], backup: null, locked: true };
+}
+
+/** {@link applyPrune} for a caller that already holds the prune lock. */
+export async function applyUnlocked(env: PruneEnv, plans: ProjectPlan[]): Promise<ApplyResult> {
   const work = plans.filter((p) => !p.skipped && p.candidates.length > 0);
   let base: State | null = null;
   let pendingSaved = false;

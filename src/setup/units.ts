@@ -1864,7 +1864,7 @@ function mcpPruneJevUnit(): SetupUnit {
     description:
       "opt-in, off unless ticked or PROJECT_BRAIN_MCP_PRUNE_JEV=1 (=0 forces it off); needs a TypeSafe token. When `mcp prune --apply`, setup or update prunes a project registered with project-brain whose history is too thin, " +
       "it sends api.typesafe.ai each unused server's name and tool names plus the project's detected languages, frameworks, package manager and unscoped dependency names " +
-      "(never server instructions, scoped @org packages, the package name, README text or file names), and disables only servers Jev rates under 20%",
+      "(never server instructions, scoped @org packages, the package name, README text or file names), and disables only servers Jev rates under 20%. With it on, `init` also prunes its own project and the SessionEnd maintenance job prunes registered projects, always between sessions",
     optIn: true,
   });
 }

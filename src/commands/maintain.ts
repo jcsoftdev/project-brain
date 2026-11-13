@@ -10,6 +10,10 @@ Housekeeping that keeps ~/.project-brain from growing without bound:
   2. compacts the largest idle indexes (>= 256 MB, at most 2 per run, 60 s budget,
      at most once per 24 h each), skipping any that a process has open
      and the current project's own
+  3. only with the opt-in Jev assist for MCP pruning (config:mcp-prune-jev or
+     PROJECT_BRAIN_MCP_PRUNE_JEV=1) and a TypeSafe token: prunes the MCP servers of
+     registered projects (at most 20 Jev requests, 15 s), silently; sessions already
+     running keep their servers, the next one starts without the pruned ones
 
 Prints one line only when it reclaimed disk. --background returns at once and
 does the work in a detached process. Run by the default-on SessionEnd hook.
@@ -34,6 +38,21 @@ async function currentProjectKey(): Promise<string | null> {
     return root ? sanitizeProject(await resolveProjectId(root)) : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Step 3: the opt-in MCP prune across registered projects. Between sessions only:
+ * SessionEnd runs maintain after the session is gone. Silent and never throws.
+ */
+export async function maintainMcpPrune(
+  opts: import("../mcpprune/auto.js").AutoPruneOptions = { dataDir: DATA_DIR }
+): Promise<import("../mcpprune/auto.js").AutoPruneResult | null> {
+  try {
+    const { autoPrune } = await import("../mcpprune/auto.js");
+    return await autoPrune(opts);
+  } catch {
+    return null; // best-effort; setup and update prune too
   }
 }
 
@@ -63,6 +82,8 @@ export async function maintainCommand(args: string[]): Promise<void> {
   } catch {
     // dead-worktree reclamation is best-effort; compaction is independent of it
   }
+
+  await maintainMcpPrune();
 
   const result = await autoCompact(
     defaultAutoCompactDeps({ dbPath: DB_PATH, dataDir: DATA_DIR, ownProject: await currentProjectKey() })

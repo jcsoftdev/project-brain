@@ -164,6 +164,7 @@ Commands:
                           projects send server + tool names, stack and unscoped dependency names to TypeSafe)
                        --all     every project in ~/.claude.json
                        --apply   disable them for that project only (backup first); may ask Jev
+                         (with the opt-in, init and session-end maintain also prune, between sessions)
                        --revert  re-enable exactly what --apply disabled
   tool-catalog refresh  Rebuild the MCP tool catalog behind the "Suggested tool" hints
   skill-usage        Count skill invocations in the last 30 days of Claude Code transcripts, no changes
