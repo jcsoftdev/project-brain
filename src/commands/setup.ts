@@ -5,6 +5,7 @@ import { detectEnvironment, type Environment } from "../env/detect.js";
 import { getRegistrars, type AIToolRegistrar } from "../registrars/types.js";
 import { UnparseableConfigError, standardServerEntry } from "../registrars/json-config.js";
 import {
+  parseConceptProviderFlag,
   parseRecordConnectionFlag,
   parseRerankerTokenFlag,
   parseRoutingHookFlag,
@@ -55,6 +56,10 @@ export interface SetupOptions {
    * `src/interactive.js`. See `SetupContext.promptRerankerToken`.
    */
   promptRerankerToken?: () => Promise<string | null>;
+  /** The conceptualize backend from `--concept-provider`. Unset keeps the saved one. */
+  conceptProvider?: SetupContext["conceptProvider"];
+  /** Injectable for testing. See `SetupContext.promptConceptProvider`. */
+  promptConceptProvider?: SetupContext["promptConceptProvider"];
   /**
    * Injectable for testing; defaults to `<dataDir>/record-config.json`, NOT a
    * fixed homedir() constant — tying it to the already-injected `dataDir` is
@@ -300,6 +305,8 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     routingConfigPath: options.routingConfigPath,
     rerankerToken: options.rerankerToken,
     promptRerankerToken: options.promptRerankerToken,
+    conceptProvider: options.conceptProvider,
+    promptConceptProvider: options.promptConceptProvider,
   };
 
   // Preserved from the previous implementation: UnparseableConfigError from a
@@ -520,6 +527,12 @@ export async function execute(args: string[]): Promise<void> {
   const routingHook = parseRoutingHookFlag(args);
   const worktreeHook = parseWorktreeHookFlag(args);
   const rerankerToken = parseRerankerTokenFlag(args);
+  const concept = parseConceptProviderFlag(args);
+  if (concept.error) {
+    console.error(concept.error);
+    process.exit(1);
+    return;
+  }
 
   // The id list needs a context, and a context needs detection — so this runs
   // a detection-only pass first. Cheap: `isInstalled()` is a file stat per host.
@@ -551,7 +564,14 @@ export async function execute(args: string[]): Promise<void> {
         : "")
   );
 
-  const result = await runSetup({ recordConnection, routingHook, worktreeHook, units, rerankerToken });
+  const result = await runSetup({
+    recordConnection,
+    routingHook,
+    worktreeHook,
+    units,
+    rerankerToken,
+    conceptProvider: concept.provider,
+  });
 
   console.log(`Environment:`);
   console.log(`  Bun: ${result.env.bun}`);
@@ -604,6 +624,15 @@ export async function execute(args: string[]): Promise<void> {
         ? " (your logged-in Chrome via chrome://inspect — full browser control)"
         : " (fresh, logged-out Chrome profile)") +
       `, CDP port ${result.recordConnection.cdpPort}.`
+  );
+
+  const { resolveConceptSettings, CONCEPT_PROVIDER_DISCLOSURE } = await import("../llm/concept-provider.js");
+  const conceptSettings = resolveConceptSettings({ dataDir: result.dataDir });
+  console.log(
+    "invalid" in conceptSettings
+      ? `\nModule docs backend: unusable (${conceptSettings.invalid}); conceptualize sends nothing until it is fixed with --concept-provider.`
+      : `\nModule docs backend: ${conceptSettings.provider} (${conceptSettings.model}); ` +
+          `what leaves the machine: ${CONCEPT_PROVIDER_DISCLOSURE[conceptSettings.provider]}. Change it with --concept-provider.`
   );
 
   if (result.manualInstructions.length > 0) {

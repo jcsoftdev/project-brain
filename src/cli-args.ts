@@ -89,6 +89,22 @@ export function parseRerankerTokenFlag(args: string[]): string | undefined {
 }
 
 /**
+ * Resolve `--concept-provider <anthropic|ollama|claude-code>`: which backend
+ * writes the module docs. Undefined when absent, so setup keeps the saved one.
+ * A value naming no backend is an error rather than a silent default, since the
+ * choice decides what leaves the machine.
+ */
+export function parseConceptProviderFlag(
+  args: string[]
+): { provider?: import("./llm/concept-provider.js").ConceptProvider; error?: string } {
+  const raw = parseStringFlag(args, "--concept-provider");
+  if (raw === undefined) return {};
+  const value = raw.trim().toLowerCase();
+  if (value === "anthropic" || value === "ollama" || value === "claude-code") return { provider: value };
+  return { error: `--concept-provider must be anthropic, ollama or claude-code (got "${raw}")` };
+}
+
+/**
  * Collect positional (non-flag) arguments, skipping both a valued flag AND
  * its following value. Flags not listed in `valuedFlags` are simply excluded
  * from the positionals themselves — they are not treated as consuming a

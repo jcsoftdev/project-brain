@@ -70,6 +70,15 @@ export interface SetupContext {
   ) => Promise<string[] | null>;
   /** Set when re-applying a saved selection: an MCP entry that already exists is not rewritten. */
   keepRegistration?: boolean;
+  /** The conceptualize backend from `--concept-provider`; unset keeps what `concept.json` holds. */
+  conceptProvider?: import("../llm/concept-provider.js").ConceptProvider;
+  /**
+   * Injectable for testing; defaults to `promptConceptProvider` from `src/interactive.js`, which
+   * only prompts in a genuine interactive session. Null keeps the saved backend, else anthropic.
+   */
+  promptConceptProvider?: (
+    current: import("../llm/concept-provider.js").ConceptProvider
+  ) => Promise<import("../llm/concept-provider.js").ConceptProvider | null>;
 }
 
 /**
@@ -1678,10 +1687,55 @@ export function featureUnits(): SetupUnit[] {
       feature: "conceptualize",
       label: "Module docs after each commit",
       description:
-        "the git post-commit hook runs `conceptualize`, which sends the commit message, each touched module's full diff (up to 5 modules) and its current concept doc to the Anthropic API when Anthropic credentials resolve; " +
-        "unticked, nothing is sent and the hook only syncs. PROJECT_BRAIN_CONCEPTUALIZE=0 also turns it off",
+        "the git post-commit hook runs `conceptualize`, which hands the commit message, each touched module's full diff (up to 5 modules) and its current concept doc to the chosen backend: " +
+        "anthropic sends them to the Anthropic API (needs Anthropic credentials); claude-code sends them to Anthropic through your Claude Code login on your subscription quota; ollama keeps them on this machine. " +
+        "Unticked, nothing is sent and the hook only syncs. PROJECT_BRAIN_CONCEPTUALIZE=0 also turns it off",
     }),
+    conceptProviderUnit(),
   ];
+}
+
+/**
+ * Which backend writes the module docs, persisted in `concept.json`. Chosen with
+ * `--concept-provider`, or asked once when the unit is first applied in an
+ * interactive run; `BRAIN_CONCEPT_PROVIDER` still outranks the file at runtime.
+ */
+export function conceptProviderUnit(): SetupUnit {
+  return {
+    id: "config:concept-provider",
+    group: "Other",
+    label: "Module-docs backend",
+    description:
+      "which backend `conceptualize` uses: anthropic (Anthropic API, needs credentials), claude-code (`claude -p` with haiku on your Claude Code login — the diffs still go to Anthropic) " +
+      "or ollama (qwen3.5:4b on the local Ollama — nothing leaves the machine). Change it with --concept-provider; unticked, anthropic applies",
+    defaultSelected: true,
+
+    async inspect(ctx): Promise<UnitState> {
+      const { readConceptConfig } = await import("../llm/concept-provider.js");
+      const saved = readConceptConfig(ctx.dataDir);
+      // A requested backend the file does not hold is pending work, ticked or not yet offered.
+      if (ctx.conceptProvider && saved?.provider !== ctx.conceptProvider) return "stale";
+      return saved?.provider ? "current" : "absent";
+    },
+
+    async apply(ctx): Promise<void> {
+      const { readConceptConfig, writeConceptConfig, DEFAULT_CONCEPT_PROVIDER } = await import("../llm/concept-provider.js");
+      const saved = readConceptConfig(ctx.dataDir);
+      let provider = ctx.conceptProvider;
+      if (!provider) {
+        const prompt = ctx.promptConceptProvider ?? (await import("../interactive.js")).promptConceptProvider;
+        provider = (await prompt(saved?.provider ?? DEFAULT_CONCEPT_PROVIDER)) ?? saved?.provider ?? DEFAULT_CONCEPT_PROVIDER;
+      }
+      // A model chosen for another backend would not run on this one.
+      const model = saved?.provider === provider ? saved.model : undefined;
+      await writeConceptConfig(ctx.dataDir, model ? { provider, model } : { provider });
+    },
+
+    async remove(ctx): Promise<void> {
+      const { conceptConfigPath } = await import("../llm/concept-provider.js");
+      await rm(conceptConfigPath(ctx.dataDir), { force: true });
+    },
+  };
 }
 
 /** Moves big user-written CLAUDE.md sections into skills; managed blocks are never touched. */

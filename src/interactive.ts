@@ -105,6 +105,27 @@ export async function promptRerankerToken(): Promise<string | null> {
   return answer;
 }
 
+/**
+ * The conceptualize backend, for the `config:concept-provider` unit. Each option says what leaves
+ * the machine. Null when not interactive or cancelled, which keeps the saved backend.
+ */
+export async function promptConceptProvider(
+  current: import("./llm/concept-provider.js").ConceptProvider
+): Promise<import("./llm/concept-provider.js").ConceptProvider | null> {
+  if (!isInteractive()) return null;
+  const clack = await import("@clack/prompts");
+  const answer = await clack.select({
+    message: "Which backend writes the module docs after each commit?",
+    initialValue: current,
+    options: [
+      { value: "anthropic" as const, label: "anthropic", hint: "Anthropic API; needs Anthropic credentials" },
+      { value: "claude-code" as const, label: "claude-code", hint: "claude -p with haiku on your Claude Code login; diffs go to Anthropic, uses your quota" },
+      { value: "ollama" as const, label: "ollama", hint: "qwen3.5:4b on the local Ollama; nothing leaves the machine" },
+    ],
+  });
+  return clack.isCancel(answer) ? null : answer;
+}
+
 export interface GeneralSkillOption {
   name: string;
   /** Recent invocations, shown as a suggestion; it never ticks the box by itself. */

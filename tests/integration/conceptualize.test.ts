@@ -7,8 +7,11 @@ import { LanceDbStore } from "../../src/store/lancedb.js";
 import { VECTOR_DIM } from "../../src/constants.js";
 import { handleSearch } from "../../src/tools/search.js";
 import { runConceptualize } from "../../src/commands/conceptualize.js";
+import { acquirePidFileLock } from "../../src/commands/sync-lock.js";
+import { readConceptDoc } from "../../src/concept/store.js";
+import { existsSync } from "node:fs";
 import type { EmbeddingClient, ToolDeps } from "../../src/types.js";
-import type { LlmClient } from "../../src/llm/anthropic-client.js";
+import { LlmUnavailableError, type LlmClient } from "../../src/llm/client.js";
 
 function git(root: string, args: string[]): void {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf-8" });
@@ -95,5 +98,82 @@ describe("Integration: conceptualize", () => {
 
     expect(result.processed).toContain("billing");
     expect(result.skipped).toEqual([]);
+  });
+
+  it("skips every module with one line, without retrying, when the backend is missing", async () => {
+    await mkdir(join(root, "billing"), { recursive: true });
+    await writeFile(join(root, "billing", "invoice.ts"), "export function invoice() {}\n");
+    await writeFile(join(root, "auth", "login.ts"), "export function login() { return 1; }\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "feat: touch two modules"]);
+
+    let calls = 0;
+    const missing: LlmClient = {
+      complete: async () => {
+        calls++;
+        throw new LlmUnavailableError("`claude` is not on PATH");
+      },
+    };
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => void lines.push(args.join(" "));
+    try {
+      const result = await runConceptualize({ root, projectId: "testproj" }, { store, embeddings: mockEmbeddings, llm: missing });
+      expect(result.processed).toEqual([]);
+      expect(result.skipped).toEqual(["auth", "billing"]);
+    } finally {
+      console.error = original;
+    }
+    expect(calls).toBe(1);
+    expect(lines).toEqual(["[project-brain] conceptualize: `claude` is not on PATH; skipped 2 module(s): auth, billing"]);
+  });
+
+  it("never writes a malformed or truncated doc", async () => {
+    let calls = 0;
+    const malformed: LlmClient = {
+      complete: async () => {
+        calls++;
+        return "## Purpose\n\nHandles auth.\n\n## Key Files\n\nlogin.ts\n\n## Depend";
+      },
+    };
+    const original = console.error;
+    console.error = () => {};
+    try {
+      const result = await runConceptualize({ root, projectId: "testproj" }, { store, embeddings: mockEmbeddings, llm: malformed });
+      expect(result).toEqual({ processed: [], skipped: ["auth"] });
+    } finally {
+      console.error = original;
+    }
+    expect(calls).toBe(2);
+    expect(await readConceptDoc("testproj", "auth", store)).toBe("");
+  });
+
+  it("skips with one line while another run holds the conceptualize lock", async () => {
+    const lockPath = join(dbDir, "conceptualize.lock");
+    const held = await acquirePidFileLock(lockPath);
+    expect(held).not.toBeNull();
+    let calls = 0;
+    const counting: LlmClient = {
+      complete: async (p) => {
+        calls++;
+        return mockLlm.complete(p);
+      },
+    };
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => void lines.push(args.join(" "));
+    try {
+      const busy = await runConceptualize({ root, projectId: "testproj", lockPath }, { store, embeddings: mockEmbeddings, llm: counting });
+      expect(busy).toEqual({ processed: [], skipped: ["auth"] });
+      expect(calls).toBe(0);
+      expect(lines).toEqual([`[project-brain] conceptualize: another run is in progress (pid ${process.pid}); skipped 1 module(s): auth`]);
+    } finally {
+      console.error = original;
+      await held!.release();
+    }
+
+    const free = await runConceptualize({ root, projectId: "testproj", lockPath }, { store, embeddings: mockEmbeddings, llm: counting });
+    expect(free.processed).toEqual(["auth"]);
+    expect(existsSync(lockPath)).toBe(false);
   });
 });
