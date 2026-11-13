@@ -105,7 +105,7 @@ Defaults are what a first `setup` would tick. "Off" means unticking the unit in 
 | Piece | What it does | Where it lives | Unit | Turn it off | Default |
 |---|---|---|---|---|---|
 | Retrieval hook | `project-brain search --stdin` injects up to 5 relevant snippets from this project's index, skipping ones already in the transcript | `<project>/.claude/settings.json`, written by `project-brain init` | none (`init`) | Remove the hook from that file; `PROJECT_BRAIN_SEARCH_PROMPT_FILTER=0` searches every prompt instead | on after `init` |
-| Search gating | Skips acknowledgements, slash commands and pasted reports; caps hits; floors reranked scores at 0.5 | `src/hooks/` + `~/.project-brain/features.json` | `feature:search-gate` | Untick | on |
+| Search gating | Skips acknowledgements, slash commands and pasted reports; caps hits; floors reranked scores at 0.65 | `src/hooks/` + `~/.project-brain/features.json` | `feature:search-gate` | Untick | on |
 | Skill and tool suggestions | `project-brain suggest --stdin`: Jev picks skills (70% floor, at most 10) and one MCP tool per prompt | global `UserPromptSubmit` hook in `~/.claude/settings.json`; config in `~/.project-brain/skills.json` | `hooks:suggest` | Untick (a marker in `suggest-hook.json` keeps it from returning); `BRAIN_SKILL_PICKER=0`, `BRAIN_TOOL_PICKER=0`, or `"picker": false` | on (silent without a token) |
 | Task-switch notice | One-line `/clear` or `/compact` hint once the context is over 30% full | rides the suggest hook | `feature:task-switch` | Untick; `PROJECT_BRAIN_TASK_SWITCH=0` | on |
 | Reranker | Jev reorders `search_context` and hook results | `src/rerank/`; token in `~/.project-brain/reranker.json` | `config:reranker` | Untick | off |

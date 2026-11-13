@@ -43,11 +43,13 @@ export function parseHookStdin(raw: string): { prompt: string; transcriptPath?: 
 }
 
 /**
- * Hook gating defaults. Reranked scores in practice span ~0.2-0.85, so 0.5 keeps confident hits
- * only. Without a reranker the store scales its best hit to 1.0, so the floor means nothing there
- * and only the cap applies.
+ * Hook gating defaults. Measured with scripts/calibrate-hook-floor.ts on 30 real prompts (163 labelled
+ * hits): at 0.5 under half of what got injected helped (precision 0.44); 0.65 lifts that to 0.62 and
+ * drops 22 of 36 noisy hits, while the relevant hits it loses all scored under 0.6. Without a
+ * reranker the store scales its best hit to 1.0, so the floor means nothing there and only the cap
+ * applies.
  */
-export const HOOK_MIN_SCORE = 0.5;
+export const HOOK_MIN_SCORE = 0.65;
 export const HOOK_MAX_HITS = 5;
 
 function envNumber(name: string, fallback: number, valid: (n: number) => boolean): number {
