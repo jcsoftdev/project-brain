@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../../src/commands/init.js";
@@ -48,8 +48,11 @@ async function writeClaude(projects: string[]): Promise<void> {
   await writeFile(join(root, ".claude.json"), JSON.stringify({ mcpServers: SERVERS, projects: entries }, null, 2));
 }
 
-const init = (dir: string, jevFetch = fakeFetch) =>
-  runInit({ root: dir, dataDir, claudeHome: root, jevFetch, skipGitHook: true, skipIndex: true, skipRules: true, skipClaudeHook: true });
+/** No Claude Code process is running anywhere. */
+const noProcesses = async (): Promise<string[]> => [];
+
+const init = (dir: string, jevFetch = fakeFetch, claudeCwds = noProcesses) =>
+  runInit({ root: dir, dataDir, claudeHome: root, jevFetch, claudeCwds, skipGitHook: true, skipIndex: true, skipRules: true, skipClaudeHook: true });
 
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "pb-mcp-auto-")));
@@ -132,7 +135,7 @@ describe("automatic runs", () => {
     await registerProject(dataDir, "live", live);
     await registerProject(dataDir, "idle", idle);
 
-    await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch });
+    await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch, listCwds: noProcesses });
     expect(requests).toBe(1);
     const json = await readJson();
     expect(json.projects[live].disabledMcpServers).toBeUndefined();
@@ -144,12 +147,65 @@ describe("automatic runs", () => {
     expect(manual[0]!.candidates.map((c) => c.name)).toEqual(["beta"]);
   });
 
+  it("skip a project where Claude Code is running, even idle for hours, matched by real path", async () => {
+    process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "1";
+    const [running, idle] = [await thinProject("running"), await thinProject("idle")];
+    const linked = join(root, "linked-running");
+    await symlink(running, linked);
+    // Claude Code keys transcripts by the path it was opened with: the symlink.
+    const tdir = join(root, ".claude", "projects", projectDirKey(linked));
+    await mkdir(tdir, { recursive: true });
+    await writeFile(join(tdir, "s1.jsonl"), await readFile(join(root, ".claude", "projects", projectDirKey(running), "s1.jsonl"), "utf-8"));
+    const old = new Date(Date.now() - 86_400_000);
+    await utimes(join(tdir, "s1.jsonl"), old, old);
+    await writeClaude([linked, idle]);
+    await registerProject(dataDir, "running", linked);
+    await registerProject(dataDir, "idle", idle);
+    // The session's cwd is a subdirectory of the real path; the project is registered through the symlink.
+    await mkdir(join(running, "src"), { recursive: true });
+    const cwds = async () => [join(running, "src")];
+
+    await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch, listCwds: cwds });
+    expect(requests).toBe(1);
+    const json = await readJson();
+    expect(json.projects[linked].disabledMcpServers).toBeUndefined();
+    expect(json.projects[idle].disabledMcpServers).toEqual(["beta"]);
+
+    // Once that session is gone, the same project is pruned: the skip came from the running process.
+    await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch, listCwds: noProcesses });
+    expect((await readJson()).projects[linked].disabledMcpServers).toEqual(["beta"]);
+  });
+
+  it("skip every project when running sessions cannot be determined", async () => {
+    process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "1";
+    const a = await thinProject("a");
+    await writeClaude([a]);
+    await registerProject(dataDir, "a", a);
+    const failing = async (): Promise<string[]> => {
+      throw new Error("lsof timed out");
+    };
+    expect(await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch, listCwds: failing })).toEqual({ ran: false, reason: "nothing to plan" });
+    expect((await init(a, fakeFetch, failing)).mcpPrune).toBeUndefined();
+    expect(requests).toBe(0);
+    expect((await readJson()).projects[a].disabledMcpServers).toBeUndefined();
+  });
+
+  it("skip a project whose transcript folder cannot be found", async () => {
+    process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "1";
+    const a = await thinProject("a");
+    await rm(join(root, ".claude", "projects", projectDirKey(a)), { recursive: true });
+    await writeClaude([a]);
+    await registerProject(dataDir, "a", a);
+    expect(await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch, listCwds: noProcesses })).toEqual({ ran: false, reason: "nothing to plan" });
+    expect(requests).toBe(0);
+  });
+
   it("make no request when features.json is corrupt", async () => {
     const a = await thinProject("a");
     await writeClaude([a]);
     await registerProject(dataDir, "a", a);
     await writeFile(join(dataDir, "features.json"), "{broken");
-    expect(await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch })).toEqual({ ran: false, reason: "off" });
+    expect(await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch, listCwds: noProcesses })).toEqual({ ran: false, reason: "off" });
     expect((await init(a)).mcpPrune).toBeUndefined();
     expect(requests).toBe(0);
   });
@@ -176,7 +232,7 @@ describe("maintain with the opt-in Jev assist", () => {
     await registerProject(dataDir, "a", a);
     await registerProject(dataDir, "b", b);
 
-    const r = await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch });
+    const r = await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch, listCwds: noProcesses });
     expect(r?.ran).toBe(true);
     expect(requests).toBe(2);
     const json = await readJson();
@@ -189,7 +245,7 @@ describe("maintain with the opt-in Jev assist", () => {
     const a = await thinProject("a");
     await writeClaude([a]);
     await registerProject(dataDir, "a", a);
-    expect(await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch })).toEqual({ ran: false, reason: "off" });
+    expect(await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch, listCwds: noProcesses })).toEqual({ ran: false, reason: "off" });
     expect(requests).toBe(0);
   });
 
@@ -202,7 +258,7 @@ describe("maintain with the opt-in Jev assist", () => {
     const lock = await acquirePidFileLock(pruneLockPath(env));
     expect(lock).not.toBeNull();
     try {
-      expect(await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch })).toEqual({ ran: false, reason: "locked" });
+      expect(await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch, listCwds: noProcesses })).toEqual({ ran: false, reason: "locked" });
       expect(requests).toBe(0);
       const applied = await applyPrune(env, await planPrune({ ...env, minSessions: 1 }, [a]));
       expect(applied.locked).toBe(true);
@@ -210,6 +266,6 @@ describe("maintain with the opt-in Jev assist", () => {
     } finally {
       await lock!.release();
     }
-    expect((await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch }))?.ran).toBe(true);
+    expect((await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch, listCwds: noProcesses }))?.ran).toBe(true);
   });
 });

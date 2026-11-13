@@ -42,6 +42,8 @@ export interface InitOptions {
   claudeHome?: string;
   /** Test seam: the Jev request of the opt-in MCP prune. */
   jevFetch?: import("../typesafe/client.js").TypesafeFetchFn;
+  /** Test seam: working directories of running Claude Code sessions, for the opt-in MCP prune. */
+  claudeCwds?: import("../mcpprune/live.js").ClaudeCwdLister;
 }
 
 export interface InitResult {
@@ -306,7 +308,7 @@ async function pruneThisProject(root: string, options: InitOptions): Promise<Ini
   try {
     const { DATA_DIR } = await import("../constants.js");
     const { autoPrune } = await import("../mcpprune/auto.js");
-    const r = await autoPrune({ root, dataDir: options.dataDir ?? DATA_DIR, home: options.claudeHome, fetchFn: options.jevFetch });
+    const r = await autoPrune({ root, dataDir: options.dataDir ?? DATA_DIR, home: options.claudeHome, fetchFn: options.jevFetch, listCwds: options.claudeCwds });
     if (!r.ran) return undefined;
     if (r.error) return { line: `MCP prune skipped: ${r.error}`, failed: true };
     if (r.added.length === 0) return undefined;

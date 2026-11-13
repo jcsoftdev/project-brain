@@ -1,11 +1,12 @@
 import { homedir } from "node:os";
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { projectDirKey } from "../toolcatalog/transcripts.js";
 import { featureEnabled, featureEnvOptOut } from "../features.js";
 import { readRegistry } from "../store/project-registry.js";
 import type { TypesafeFetchFn } from "../typesafe/client.js";
 import { jevFromProcess } from "./judge.js";
+import { listClaudeCwds, type ClaudeCwdLister } from "./live.js";
 import { applyUnlocked, envFromProcess, JEV_RUN_DEADLINE_MS, planPrune, repoKey, withPruneLock, type ApplyResult, type PruneEnv } from "./prune.js";
 
 /** A transcript written this recently means Claude Code may still be running there. */
@@ -19,6 +20,8 @@ export interface AutoPruneOptions {
   root?: string;
   /** Test seam for the Jev request. */
   fetchFn?: TypesafeFetchFn;
+  /** Test seam: working directories of running Claude Code sessions. */
+  listCwds?: ClaudeCwdLister;
 }
 
 export type AutoPruneResult =
@@ -27,23 +30,34 @@ export type AutoPruneResult =
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
+const realOrNull = (path: string) => realpath(path).catch(() => null);
+
 /**
- * True when a session in `dir` wrote its transcript within {@link LIVE_SESSION_MS}. A live
- * Claude Code process can rewrite `~/.claude.json` from memory, which would silently undo the
- * prune and then read as the user re-enabling the server.
+ * True unless `dir` is provably idle: no running Claude Code process works in it or below
+ * it, and its transcripts are older than {@link LIVE_SESSION_MS}. A live Claude Code process
+ * can rewrite `~/.claude.json` from memory, which would silently undo the prune and then read
+ * as the user re-enabling the server. Fails closed: an unresolvable project path or an
+ * unreadable transcript directory counts as live. `cwds` are real paths.
  */
-async function hasLiveSession(home: string, dir: string, now: number): Promise<boolean> {
-  const tdir = join(home, ".claude", "projects", projectDirKey(dir));
-  const names = await readdir(tdir).catch(() => [] as string[]);
+async function maybeLive(home: string, dir: string, cwds: string[], now: number): Promise<boolean> {
+  const real = await realOrNull(dir);
+  if (!real) return true;
+  if (cwds.some((c) => c === real || c.startsWith(`${real}/`))) return true;
+  let names: string[];
+  try {
+    names = await readdir(join(home, ".claude", "projects", projectDirKey(dir)));
+  } catch {
+    return true;
+  }
   for (const n of names.filter((n) => n.endsWith(".jsonl"))) {
-    const mtime = await stat(join(tdir, n)).then((s) => s.mtimeMs, () => 0);
+    const mtime = await stat(join(home, ".claude", "projects", projectDirKey(dir), n)).then((s) => s.mtimeMs, () => now);
     if (now - mtime < LIVE_SESSION_MS) return true;
   }
   return false;
 }
 
-/** The `~/.claude.json` project dirs this run covers: `root` alone, or every registered one; never one with a live session. */
-async function scope(home: string, dataDir: string, root?: string): Promise<string[]> {
+/** The `~/.claude.json` project dirs this run covers: `root` alone, or every registered one; never one that may be live. */
+async function scope(home: string, dataDir: string, root: string | undefined, listCwds: ClaudeCwdLister): Promise<string[]> {
   let dirs: string[] = [];
   try {
     const parsed = JSON.parse(await readFile(join(home, ".claude.json"), "utf-8")) as unknown;
@@ -57,15 +71,23 @@ async function scope(home: string, dataDir: string, root?: string): Promise<stri
     const registered = new Set(Object.values(await readRegistry(dataDir)).map((e) => e.root));
     picked = dirs.filter((d) => registered.has(d) || registered.has(repoKey(d)));
   }
+  if (picked.length === 0) return [];
+  let cwds: string[];
+  try {
+    cwds = await Promise.all((await listCwds()).map(async (c) => (await realOrNull(c)) ?? c));
+  } catch {
+    return []; // cannot tell which sessions run: skip every project
+  }
   const now = Date.now();
-  const live = await Promise.all(picked.map((d) => hasLiveSession(home, d, now)));
+  const live = await Promise.all(picked.map((d) => maybeLive(home, d, cwds, now)));
   return picked.filter((_, i) => !live[i]);
 }
 
 /**
  * Prune between sessions, without the user running setup: `init` calls it for its own
- * project directory, the SessionEnd maintenance job for every registered one. Projects
- * with a live session are left for a later run. The Jev deadline starts before the scan. It only runs when
+ * project directory, the SessionEnd maintenance job for every registered one. A project
+ * with a running Claude Code session (or a transcript written in the last 10 minutes, or
+ * when that cannot be told) is left for a later run. The Jev deadline starts before the scan. It only runs when
  * the opt-in Jev assist is on, a token exists and MCP prune itself is on, so turning
  * the opt-in off leaves both commands doing exactly what they did before. Holds the
  * machine-wide prune lock across plan and apply, and skips when another prune has it.
@@ -88,7 +110,7 @@ export async function autoPrune(opts: AutoPruneOptions): Promise<AutoPruneResult
       poolPlannedOnly: true,
     };
     const result = await withPruneLock(env, async (): Promise<AutoPruneResult> => {
-      const only = await scope(env.home, env.dataDir, opts.root);
+      const only = await scope(env.home, env.dataDir, opts.root, opts.listCwds ?? listClaudeCwds);
       if (only.length === 0) return { ran: false, reason: "nothing to plan" };
       return { ran: true, ...(await applyUnlocked(env, await planPrune(env, only))) };
     });
