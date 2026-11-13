@@ -41,14 +41,43 @@ export function isConceptProvider(value: unknown): value is ConceptProvider {
   return typeof value === "string" && (CONCEPT_PROVIDERS as readonly string[]).includes(value);
 }
 
-export function readConceptConfig(dataDir: string = DATA_DIR): ConceptConfig | null {
+export type ConceptConfigState =
+  | { state: "missing" }
+  | { state: "invalid"; reason: string }
+  | { state: "ok"; config: ConceptConfig & { provider: ConceptProvider } };
+
+/**
+ * A file that exists but cannot be trusted is `invalid`, never `missing`: the
+ * owner who wrote `"ollama"` chose to keep diffs local, and reading a typo or a
+ * truncated file as "use the default" would send them to Anthropic.
+ */
+export function loadConceptConfig(dataDir: string = DATA_DIR): ConceptConfigState {
+  const path = conceptConfigPath(dataDir);
+  let text: string;
   try {
-    const raw = JSON.parse(readFileSync(conceptConfigPath(dataDir), "utf8")) as Record<string, unknown>;
-    const model = typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined;
-    return { provider: isConceptProvider(raw.provider) ? raw.provider : undefined, model };
+    text = readFileSync(path, "utf8");
   } catch {
-    return null;
+    return { state: "missing" };
   }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { state: "invalid", reason: `${path} is not valid JSON` };
+  }
+  const record = (typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const provider = typeof record.provider === "string" ? record.provider.trim().toLowerCase() : undefined;
+  if (!isConceptProvider(provider)) {
+    return { state: "invalid", reason: `${path} names no known provider (${JSON.stringify(record.provider ?? null)})` };
+  }
+  const model = typeof record.model === "string" && record.model.trim() ? record.model.trim() : undefined;
+  return { state: "ok", config: model ? { provider, model } : { provider } };
+}
+
+/** The saved choice when it is usable; null when missing or invalid. For setup, which rewrites it. */
+export function readConceptConfig(dataDir: string = DATA_DIR): ConceptConfig | null {
+  const loaded = loadConceptConfig(dataDir);
+  return loaded.state === "ok" ? loaded.config : null;
 }
 
 export async function writeConceptConfig(dataDir: string, config: ConceptConfig): Promise<void> {
@@ -59,27 +88,36 @@ export async function writeConceptConfig(dataDir: string, config: ConceptConfig)
 export interface ConceptSettings {
   provider: ConceptProvider;
   model: string;
-  /** An env value that named no known provider and was passed over. */
-  ignoredProvider?: string;
 }
+
+export type ConceptResolution = ConceptSettings | { invalid: string };
 
 /**
  * Provider: `BRAIN_CONCEPT_PROVIDER`, then `concept.json`, then anthropic.
  * Model: `BRAIN_CONCEPT_MODEL`, then the file's model, then the provider's default.
  * The file's model belongs to the file's provider, so an env override of the
  * provider never inherits it — an ollama tag handed to `claude --model` fails.
+ *
+ * An unknown env value, or a file that exists but is unusable, resolves to
+ * `invalid` rather than to anthropic: falling back could send diffs off the
+ * machine for an owner who chose the local backend. A valid env provider
+ * decides on its own, so a broken file does not block it.
  */
 export function resolveConceptSettings(
   opts: { env?: Record<string, string | undefined>; dataDir?: string } = {}
-): ConceptSettings {
+): ConceptResolution {
   const env = opts.env ?? process.env;
-  const config = readConceptConfig(opts.dataDir ?? DATA_DIR);
   const rawEnv = env[CONCEPT_PROVIDER_ENV]?.trim().toLowerCase();
-  const envProvider = isConceptProvider(rawEnv) ? rawEnv : undefined;
-  const provider = envProvider ?? config?.provider ?? DEFAULT_CONCEPT_PROVIDER;
-  const configModel = config && (config.provider ?? DEFAULT_CONCEPT_PROVIDER) === provider ? config.model : undefined;
+  if (rawEnv && !isConceptProvider(rawEnv)) {
+    return { invalid: `${CONCEPT_PROVIDER_ENV}="${rawEnv}" is not anthropic, ollama or claude-code` };
+  }
+  const loaded = loadConceptConfig(opts.dataDir ?? DATA_DIR);
+  if (!rawEnv && loaded.state === "invalid") return { invalid: loaded.reason };
+  const config = loaded.state === "ok" ? loaded.config : null;
+  const provider = (rawEnv as ConceptProvider | undefined) ?? config?.provider ?? DEFAULT_CONCEPT_PROVIDER;
+  const configModel = config?.provider === provider ? config.model : undefined;
   const model = env[CONCEPT_MODEL_ENV]?.trim() || configModel || DEFAULT_CONCEPT_MODELS[provider];
-  return { provider, model, ...(rawEnv && !envProvider ? { ignoredProvider: rawEnv } : {}) };
+  return { provider, model };
 }
 
 export async function createConceptLlm(settings: ConceptSettings): Promise<LlmClient> {

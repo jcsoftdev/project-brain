@@ -48,6 +48,16 @@ export const JEV_JUDGE_MIN_CONFIDENCE = 0.6;
  */
 export const JEV_ARCH_VIOLATION_MIN_PROBABILITY = 0.8;
 
+/**
+ * Context budget of one concept-doc generation. 32k tokens is the largest
+ * window the ollama backend asks for; the prompt is capped to fit it with the
+ * output budget, so a huge diff can never push the instructions out.
+ */
+export const CONCEPT_MAX_CONTEXT_TOKENS = 32768;
+export const CONCEPT_OUTPUT_TOKENS = 2048;
+/** Conservative for code and diffs, which tokenize denser than prose. */
+export const CONCEPT_CHARS_PER_TOKEN = 2.5;
+
 /** Max modules conceptualized per commit; the rest are logged as pending. */
 export const CONCEPT_MODULE_CAP = 5;
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONCEPT_LLM_MODEL } from "../../src/constants.js";
@@ -40,12 +40,27 @@ describe("resolveConceptSettings", () => {
     ).toEqual({ provider: "ollama", model: "qwen3:14b" });
   });
 
-  it("passes over an unknown env provider and says so", async () => {
+  it("never falls back to anthropic from an unknown env provider", async () => {
     await writeConceptConfig(dataDir, { provider: "ollama" });
-    expect(resolveConceptSettings({ env: { BRAIN_CONCEPT_PROVIDER: "openai" }, dataDir })).toEqual({
+    const resolved = resolveConceptSettings({ env: { BRAIN_CONCEPT_PROVIDER: "openai" }, dataDir });
+    expect(resolved).toEqual({ invalid: expect.stringContaining('BRAIN_CONCEPT_PROVIDER="openai"') });
+  });
+
+  it("reads the file's provider case-insensitively", async () => {
+    await writeFile(join(dataDir, "concept.json"), JSON.stringify({ provider: " Ollama " }));
+    expect(resolveConceptSettings({ env: {}, dataDir })).toEqual({ provider: "ollama", model: "qwen3.5:4b" });
+  });
+
+  it("refuses a truncated file or one naming no known provider, instead of defaulting", async () => {
+    for (const content of ['{"provider":"oll', JSON.stringify({ provider: "openai" }), JSON.stringify({ model: "x" })]) {
+      await writeFile(join(dataDir, "concept.json"), content);
+      const resolved = resolveConceptSettings({ env: {}, dataDir });
+      expect("invalid" in resolved, content).toBe(true);
+    }
+    // A valid env provider decides on its own.
+    expect(resolveConceptSettings({ env: { BRAIN_CONCEPT_PROVIDER: "ollama" }, dataDir })).toEqual({
       provider: "ollama",
       model: "qwen3.5:4b",
-      ignoredProvider: "openai",
     });
   });
 

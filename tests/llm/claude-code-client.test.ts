@@ -4,6 +4,7 @@ import { LlmUnavailableError } from "../../src/llm/client.js";
 import {
   claudeCodeArgv,
   createClaudeCodeClient,
+  spawnRunner,
   type CommandRunner,
   type RunRequest,
   type RunResult,
@@ -29,7 +30,15 @@ describe("createClaudeCodeClient", () => {
       model: "haiku",
       run,
       which,
-      env: { PATH: "/bin", CLAUDECODE: "1", CLAUDE_CODE_SESSION_ID: "abc", CLAUDE_CONFIG_DIR: "/cfg" },
+      env: {
+        PATH: "/bin",
+        CLAUDECODE: "1",
+        CLAUDE_CODE_SESSION_ID: "abc",
+        CLAUDE_CONFIG_DIR: "/cfg",
+        ANTHROPIC_API_KEY: "sk-ant-x",
+        ANTHROPIC_AUTH_TOKEN: "tok",
+        ANTHROPIC_BASE_URL: "https://proxy.example",
+      },
     });
 
     expect(await llm.complete(prompt)).toBe("## Purpose\n\nx");
@@ -66,11 +75,11 @@ describe("createClaudeCodeClient", () => {
     }
   });
 
-  it("fails plainly on a timeout or another error, so the module is retried", async () => {
+  it("treats a timeout as unavailable, and another error as plain so the module is retried", async () => {
     const timed = fakeRunner({ timedOut: true, exitCode: 143 });
     const run = createClaudeCodeClient({ model: "haiku", run: timed.run, which, timeoutMs: 5000 }).complete("p");
     await expect(run).rejects.toThrow("timed out after 5s");
-    await expect(run).rejects.not.toBeInstanceOf(LlmUnavailableError);
+    await expect(run).rejects.toBeInstanceOf(LlmUnavailableError);
     expect(timed.calls[0].req.timeoutMs).toBe(5000);
 
     const broken = fakeRunner({ exitCode: 2, stderr: "API Error: 529 overloaded" });
@@ -81,5 +90,31 @@ describe("createClaudeCodeClient", () => {
 
   it("puts the model where claude expects it", () => {
     expect(flagValue(claudeCodeArgv("sonnet"), "--model")).toBe("sonnet");
+  });
+});
+
+describe("spawnRunner", () => {
+  const req = (over: Partial<RunRequest> = {}): RunRequest => ({
+    stdin: "",
+    env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    cwd: tmpdir(),
+    timeoutMs: 10_000,
+    ...over,
+  });
+
+  it("still reports the exit code and stderr when the child exits before reading stdin", async () => {
+    const result = await spawnRunner(
+      ["sh", "-c", "echo 'Not logged in · Please run /login' >&2; exit 1"],
+      req({ stdin: "x".repeat(8 * 1024 * 1024) })
+    );
+    expect(result).toMatchObject({ exitCode: 1, timedOut: false });
+    expect(result.stderr).toContain("Not logged in");
+  });
+
+  it("kills the whole process group on timeout, so a grandchild cannot hold stdout open", async () => {
+    const started = Date.now();
+    const result = await spawnRunner(["sh", "-c", "sleep 30 & sleep 30"], req({ timeoutMs: 200 }));
+    expect(result.timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 });

@@ -1,23 +1,26 @@
-import { OLLAMA_HOST } from "../constants.js";
+import {
+  CONCEPT_CHARS_PER_TOKEN,
+  CONCEPT_MAX_CONTEXT_TOKENS,
+  CONCEPT_OUTPUT_TOKENS,
+  OLLAMA_HOST,
+} from "../constants.js";
 import { LlmUnavailableError, stripThinking, type LlmClient } from "./client.js";
 
 export const OLLAMA_CONCEPT_TIMEOUT_MS = 180_000;
 
-/** Longest concept doc a local model may write; the prompt asks for five short sections. */
-const MAX_OUTPUT_TOKENS = 2048;
 const MIN_NUM_CTX = 8192;
-const MAX_NUM_CTX = 32768;
 
 /**
  * Ollama otherwise runs the model at its default context and silently cuts a
  * long prompt from the front, which drops the instructions. Sized from the
- * prompt (about three characters a token for code) plus the output budget, in
- * powers of two so repeated runs reuse a loaded model instead of reloading it.
+ * prompt plus the output budget, in powers of two so repeated runs reuse a
+ * loaded model instead of reloading it. `buildConceptPrompt` caps the prompt so
+ * the largest window always holds it.
  */
 export function conceptNumCtx(prompt: string): number {
-  const needed = Math.ceil(prompt.length / 3) + MAX_OUTPUT_TOKENS;
+  const needed = Math.ceil(prompt.length / CONCEPT_CHARS_PER_TOKEN) + CONCEPT_OUTPUT_TOKENS;
   let ctx = MIN_NUM_CTX;
-  while (ctx < needed && ctx < MAX_NUM_CTX) ctx *= 2;
+  while (ctx < needed && ctx < CONCEPT_MAX_CONTEXT_TOKENS) ctx *= 2;
   return ctx;
 }
 
@@ -50,14 +53,15 @@ export function createOllamaClient(opts: OllamaClientOptions): LlmClient {
           stream: false,
           ...(think === undefined ? {} : { think }),
           keep_alive: "2m",
-          options: { num_ctx: conceptNumCtx(prompt), num_predict: MAX_OUTPUT_TOKENS, temperature: 0.2 },
+          options: { num_ctx: conceptNumCtx(prompt), num_predict: CONCEPT_OUTPUT_TOKENS, temperature: 0.2 },
         }),
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
       const name = (err as { name?: string })?.name;
+      // A model that took this long on one module takes as long on the next: give up the run.
       if (name === "TimeoutError" || name === "AbortError") {
-        throw new Error(`Ollama generation timed out after ${Math.round(timeoutMs / 1000)}s`);
+        throw new LlmUnavailableError(`Ollama generation timed out after ${Math.round(timeoutMs / 1000)}s`);
       }
       throw new LlmUnavailableError(`Ollama not reachable at ${host}`);
     }
@@ -80,7 +84,10 @@ export function createOllamaClient(opts: OllamaClientOptions): LlmClient {
       if (!response.ok) {
         throw new Error(`Ollama ${response.status}: ${errorText.slice(0, 200)}`);
       }
-      const body = (await response.json()) as { message?: { content?: unknown } };
+      const body = (await response.json()) as { message?: { content?: unknown }; done_reason?: unknown };
+      if (body.done_reason === "length") {
+        throw new Error(`Ollama stopped at the ${CONCEPT_OUTPUT_TOKENS}-token output limit; the doc would be cut off`);
+      }
       const content = body.message?.content;
       if (typeof content !== "string") throw new Error("Ollama returned no message content");
       return stripThinking(content);

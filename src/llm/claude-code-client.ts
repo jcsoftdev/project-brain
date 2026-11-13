@@ -64,6 +64,11 @@ const PARENT_SESSION_ENV = [
   "CLAUDE_CODE_BRIDGE_SESSION_ID",
   "CLAUDE_PID",
   "CLAUDE_JOB_DIR",
+  // With any of these, claude bills an API key or another endpoint instead of the
+  // subscription login, which is not what the claude-code backend discloses.
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
 ];
 
 export function claudeCodeEnv(env: Record<string, string | undefined> = process.env): Record<string, string> {
@@ -91,16 +96,37 @@ export interface RunRequest {
 
 export type CommandRunner = (argv: string[], req: RunRequest) => Promise<RunResult>;
 
+/**
+ * Detached, so the child leads its own process group and a timeout kills the
+ * whole group: a grandchild left holding stdout would otherwise keep the read
+ * below open after `claude` itself is gone.
+ */
 export const spawnRunner: CommandRunner = async (argv, req) => {
-  const proc = Bun.spawn(argv, { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: req.env, cwd: req.cwd });
+  const proc = Bun.spawn(argv, {
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+    env: req.env,
+    cwd: req.cwd,
+    detached: true,
+  });
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
-    proc.kill();
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+    } catch {
+      proc.kill("SIGKILL");
+    }
   }, req.timeoutMs);
   try {
-    proc.stdin.write(req.stdin);
-    await proc.stdin.end();
+    try {
+      proc.stdin.write(req.stdin);
+      await proc.stdin.end();
+    } catch {
+      // EPIPE: the child exited before reading, e.g. logged out. Its exit code and
+      // output below say why; the write error itself says nothing.
+    }
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -140,7 +166,8 @@ export function createClaudeCodeClient(opts: ClaudeCodeClientOptions): LlmClient
         cwd: tmpdir(),
         timeoutMs,
       });
-      if (result.timedOut) throw new Error(`claude -p timed out after ${Math.round(timeoutMs / 1000)}s`);
+      // The next module would take as long: give up the run rather than retry.
+      if (result.timedOut) throw new LlmUnavailableError(`claude -p timed out after ${Math.round(timeoutMs / 1000)}s`);
       if (result.exitCode !== 0) {
         const reason = (result.stderr.trim() || result.stdout.trim()).split("\n")[0] ?? "";
         if (UNAVAILABLE.test(reason)) throw new LlmUnavailableError(`claude -p: ${reason}`);

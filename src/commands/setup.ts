@@ -629,8 +629,10 @@ export async function execute(args: string[]): Promise<void> {
   const { resolveConceptSettings, CONCEPT_PROVIDER_DISCLOSURE } = await import("../llm/concept-provider.js");
   const conceptSettings = resolveConceptSettings({ dataDir: result.dataDir });
   console.log(
-    `\nModule docs backend: ${conceptSettings.provider} (${conceptSettings.model}); ` +
-      `what leaves the machine: ${CONCEPT_PROVIDER_DISCLOSURE[conceptSettings.provider]}. Change it with --concept-provider.`
+    "invalid" in conceptSettings
+      ? `\nModule docs backend: unusable (${conceptSettings.invalid}); conceptualize sends nothing until it is fixed with --concept-provider.`
+      : `\nModule docs backend: ${conceptSettings.provider} (${conceptSettings.model}); ` +
+          `what leaves the machine: ${CONCEPT_PROVIDER_DISCLOSURE[conceptSettings.provider]}. Change it with --concept-provider.`
   );
 
   if (result.manualInstructions.length > 0) {

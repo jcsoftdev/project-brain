@@ -19,7 +19,15 @@ export interface ConceptualizeOptions {
   root: string;
   projectId: string;
   onlyModule?: string;
+  /**
+   * Machine-wide single-flight. A rebase fires post-commit once per commit, and
+   * every run would otherwise start its own generation at once; a run that finds
+   * the lock held skips with one line. Unset (tests) runs unlocked.
+   */
+  lockPath?: string;
 }
+
+export const CONCEPT_LOCK_FILE = "conceptualize.lock";
 
 export interface ConceptualizeResult {
   processed: string[];
@@ -31,7 +39,7 @@ export async function runConceptualize(
   opts: ConceptualizeOptions,
   deps: ConceptualizeDeps
 ): Promise<ConceptualizeResult> {
-  const { root, projectId, onlyModule } = opts;
+  const { root, onlyModule } = opts;
 
   const modules = await detectModules(root);
   const changedFiles = getChangedFiles(root);
@@ -41,6 +49,32 @@ export async function runConceptualize(
   const selected = onlyModule ? [onlyModule] : touched.slice(0, CONCEPT_MODULE_CAP);
   const overflow = onlyModule ? [] : touched.slice(CONCEPT_MODULE_CAP);
 
+  if (!opts.lockPath) return conceptualizeModules(opts, deps, selected, overflow);
+
+  const { acquirePidFileLock, readPidFileLockHolder } = await import("./sync-lock.js");
+  const lock = await acquirePidFileLock(opts.lockPath);
+  if (!lock) {
+    const holder = await readPidFileLockHolder(opts.lockPath);
+    const all = [...selected, ...overflow];
+    console.error(
+      `[project-brain] conceptualize: another run is in progress${holder ? ` (pid ${holder.pid})` : ""}; skipped ${all.length} module(s)${all.length ? `: ${all.join(", ")}` : ""}`
+    );
+    return { processed: [], skipped: all };
+  }
+  try {
+    return await conceptualizeModules(opts, deps, selected, overflow);
+  } finally {
+    await lock.release();
+  }
+}
+
+async function conceptualizeModules(
+  opts: ConceptualizeOptions,
+  deps: ConceptualizeDeps,
+  selected: string[],
+  overflow: string[]
+): Promise<ConceptualizeResult> {
+  const { root, projectId } = opts;
   const commitMessage = getCommitMessage(root);
   const processed: string[] = [];
   const skipped: string[] = [];
@@ -132,10 +166,9 @@ export async function execute(args: string[]): Promise<void> {
   }
 
   const settings = resolveConceptSettings();
-  if (settings.ignoredProvider) {
-    console.error(
-      `[project-brain] conceptualize: BRAIN_CONCEPT_PROVIDER="${settings.ignoredProvider}" is not anthropic, ollama or claude-code; using ${settings.provider}`
-    );
+  if ("invalid" in settings) {
+    console.error(`[project-brain] conceptualize: ${settings.invalid}; nothing sent. Fix it or run \`project-brain setup --concept-provider <anthropic|ollama|claude-code>\`.`);
+    return;
   }
   const base = await createConceptLlm(settings);
   const llm = settings.provider === "ollama" ? yieldToEmbeds(base, { embedHolder: () => liveEmbedHolder() }) : base;
@@ -148,7 +181,11 @@ export async function execute(args: string[]): Promise<void> {
     autoPull: false,
   });
 
-  const result = await runConceptualize({ root, projectId, onlyModule }, { store, embeddings, llm });
+  const { DATA_DIR } = await import("../constants.js");
+  const result = await runConceptualize(
+    { root, projectId, onlyModule, lockPath: join(DATA_DIR, CONCEPT_LOCK_FILE) },
+    { store, embeddings, llm }
+  );
 
   console.log(
     `Conceptualize: ${result.processed.length} module(s) updated${

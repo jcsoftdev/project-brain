@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { LlmUnavailableError, stripThinking } from "../../src/llm/client.js";
 import { conceptNumCtx, createOllamaClient } from "../../src/llm/ollama-client.js";
+import { CONCEPT_PROMPT_MAX_CHARS } from "../../src/concept/prompt.js";
 
 type Call = { url: string; body: any; signal: AbortSignal | undefined };
 
@@ -61,17 +62,25 @@ describe("createOllamaClient", () => {
     await expect(createOllamaClient({ model: "m", fetch: fetchFn }).complete("p")).rejects.toBeInstanceOf(LlmUnavailableError);
   });
 
-  it("times out as a plain error, so the module is retried rather than the run abandoned", async () => {
+  it("treats a timeout as unavailable, so the run stops instead of retrying every module", async () => {
     const fetchFn = ((_url: string, init: RequestInit) =>
       new Promise((_, reject) => init.signal!.addEventListener("abort", () => reject(init.signal!.reason)))) as unknown as typeof fetch;
     const run = createOllamaClient({ model: "m", fetch: fetchFn, timeoutMs: 20 }).complete("p");
     await expect(run).rejects.toThrow("timed out");
-    await expect(run).rejects.not.toBeInstanceOf(LlmUnavailableError);
+    await expect(run).rejects.toBeInstanceOf(LlmUnavailableError);
   });
 
-  it("grows the context with the prompt, capped", () => {
+  it("rejects a reply cut off at the output limit", async () => {
+    const { fetchFn } = fakeFetch(() =>
+      Response.json({ message: { content: "## Purpose\n\nhalf a sen" }, done_reason: "length" })
+    );
+    await expect(createOllamaClient({ model: "m", fetch: fetchFn }).complete("p")).rejects.toThrow("output limit");
+  });
+
+  it("grows the context with the prompt, capped, and the capped prompt always fits the cap", () => {
     expect(conceptNumCtx("x".repeat(100))).toBe(8192);
     expect(conceptNumCtx("x".repeat(30_000))).toBe(16384);
     expect(conceptNumCtx("x".repeat(1_000_000))).toBe(32768);
+    expect(conceptNumCtx("x".repeat(CONCEPT_PROMPT_MAX_CHARS))).toBe(32768);
   });
 });
