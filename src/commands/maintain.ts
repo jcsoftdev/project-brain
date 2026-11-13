@@ -56,8 +56,26 @@ export async function maintainMcpPrune(
   }
 }
 
+/** The housekeeping steps, injectable so a test can run the command without touching real indexes. */
+export interface MaintainSteps {
+  pruneWorktrees: () => Promise<unknown>;
+  mcpPrune: () => Promise<unknown>;
+  /** Compacts and returns the line to print, if any. */
+  compact: () => Promise<string | null>;
+}
+
+export const defaultMaintainSteps = (): MaintainSteps => ({
+  pruneWorktrees: async () => {
+    const { pruneWorktrees } = await import("./worktree.js");
+    await pruneWorktrees();
+  },
+  mcpPrune: () => maintainMcpPrune(),
+  compact: async () =>
+    summarize(await autoCompact(defaultAutoCompactDeps({ dbPath: DB_PATH, dataDir: DATA_DIR, ownProject: await currentProjectKey() }))),
+});
+
 /** Never throws and never exits non-zero: it runs inside a host's hook. */
-export async function maintainCommand(args: string[]): Promise<void> {
+export async function maintainCommand(args: string[], steps: MaintainSteps = defaultMaintainSteps()): Promise<void> {
   if (args.includes("--help") || args.includes("-h")) {
     console.log(MAINTAIN_USAGE);
     return;
@@ -77,17 +95,13 @@ export async function maintainCommand(args: string[]): Promise<void> {
   lifetime.unref();
 
   try {
-    const { pruneWorktrees } = await import("./worktree.js");
-    await pruneWorktrees();
+    await steps.pruneWorktrees();
   } catch {
     // dead-worktree reclamation is best-effort; compaction is independent of it
   }
 
-  await maintainMcpPrune();
+  await steps.mcpPrune().catch(() => {});
 
-  const result = await autoCompact(
-    defaultAutoCompactDeps({ dbPath: DB_PATH, dataDir: DATA_DIR, ownProject: await currentProjectKey() })
-  );
-  const line = summarize(result);
+  const line = await steps.compact();
   if (line) console.log(line);
 }

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runInit } from "../../src/commands/init.js";
-import { maintainMcpPrune } from "../../src/commands/maintain.js";
+import { maintainCommand, maintainMcpPrune } from "../../src/commands/maintain.js";
 import { acquirePidFileLock } from "../../src/commands/sync-lock.js";
 import { applyPrune, planPrune, pruneLockPath } from "../../src/mcpprune/prune.js";
 import { registerProject } from "../../src/store/project-registry.js";
@@ -30,13 +30,12 @@ const failingFetch = async (): Promise<Response> => {
   return new Response("down", { status: 503 });
 };
 
-/** A project Claude Code has seen once, whose session announced both servers' tools. */
-async function thinProject(name: string): Promise<string> {
+/** A project Claude Code has seen once, a day ago, whose session announced both servers' tools. */
+async function thinProject(name: string, at = new Date(Date.now() - 86_400_000)): Promise<string> {
   const dir = join(root, "work", name);
   await mkdir(dir, { recursive: true });
   const tdir = join(root, ".claude", "projects", projectDirKey(dir));
   await mkdir(tdir, { recursive: true });
-  const at = new Date(Date.now() - 86_400_000);
   const line = { type: "attachment", timestamp: at.toISOString(), attachment: { type: "deferred_tools_delta", addedNames: ["mcp__alpha__deploy", "mcp__beta__model_3d"] } };
   const file = join(tdir, "s1.jsonl");
   await writeFile(file, `${JSON.stringify(line)}\n`);
@@ -101,6 +100,71 @@ describe("init with the opt-in Jev assist", () => {
     expect(result.projectId.length).toBeGreaterThan(0);
     expect(result.mcpPrune).toBeUndefined();
     expect((await readJson()).projects[a].disabledMcpServers).toBeUndefined();
+  });
+});
+
+describe("automatic runs", () => {
+  it("init in a worktree prunes only that worktree, never the main checkout", async () => {
+    process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "1";
+    const main = await thinProject("repo");
+    const wt = join(main, ".claude", "worktrees", "wt");
+    await mkdir(wt, { recursive: true });
+    const tdir = join(root, ".claude", "projects", projectDirKey(wt));
+    await mkdir(tdir, { recursive: true });
+    const at = new Date(Date.now() - 86_400_000);
+    const line = { type: "attachment", attachment: { type: "deferred_tools_delta", addedNames: ["mcp__alpha__deploy", "mcp__beta__model_3d"] } };
+    await writeFile(join(tdir, "s.jsonl"), `${JSON.stringify(line)}\n`);
+    await utimes(join(tdir, "s.jsonl"), at, at);
+    await writeClaude([main, wt]);
+    await registerProject(dataDir, "repo", main);
+
+    await init(wt);
+    expect(requests).toBe(1);
+    const json = await readJson();
+    expect(json.projects[wt].disabledMcpServers).toEqual(["beta"]);
+    expect(json.projects[main].disabledMcpServers).toBeUndefined();
+  });
+
+  it("skip a project whose session is still live, which manual runs do not", async () => {
+    process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "1";
+    const [live, idle] = [await thinProject("live", new Date()), await thinProject("idle")];
+    await writeClaude([live, idle]);
+    await registerProject(dataDir, "live", live);
+    await registerProject(dataDir, "idle", idle);
+
+    await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch });
+    expect(requests).toBe(1);
+    const json = await readJson();
+    expect(json.projects[live].disabledMcpServers).toBeUndefined();
+    expect(json.projects[idle].disabledMcpServers).toEqual(["beta"]);
+    expect((await init(live)).mcpPrune).toBeUndefined();
+    expect(requests).toBe(1);
+
+    const manual = await planPrune({ home: root, dataDir, jev: { token: "t", fetchFn: fakeFetch }, askJev: true }, [live]);
+    expect(manual[0]!.candidates.map((c) => c.name)).toEqual(["beta"]);
+  });
+
+  it("make no request when features.json is corrupt", async () => {
+    const a = await thinProject("a");
+    await writeClaude([a]);
+    await registerProject(dataDir, "a", a);
+    await writeFile(join(dataDir, "features.json"), "{broken");
+    expect(await maintainMcpPrune({ dataDir, home: root, fetchFn: fakeFetch })).toEqual({ ran: false, reason: "off" });
+    expect((await init(a)).mcpPrune).toBeUndefined();
+    expect(requests).toBe(0);
+  });
+
+  it("maintain runs the MCP prune step between its other steps", async () => {
+    const calls: string[] = [];
+    await maintainCommand([], {
+      pruneWorktrees: async () => calls.push("worktrees"),
+      mcpPrune: async () => calls.push("mcp-prune"),
+      compact: async () => {
+        calls.push("compact");
+        return null;
+      },
+    });
+    expect(calls).toEqual(["worktrees", "mcp-prune", "compact"]);
   });
 });
 

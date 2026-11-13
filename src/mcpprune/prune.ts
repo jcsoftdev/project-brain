@@ -43,6 +43,15 @@ export interface PruneEnv {
   askJev?: boolean;
   /** Overrides {@link JEV_RUN_DEADLINE_MS}. */
   jevDeadlineMs?: number;
+  /** Absolute wall-clock deadline for Jev, set by a caller that started its clock earlier; wins over `jevDeadlineMs`. */
+  jevDeadlineAt?: number;
+  /**
+   * Pool usage over the planned projects only instead of every project in `~/.claude.json`.
+   * Automatic runs set it so their scan stays small; worktrees then do not inherit siblings' history.
+   */
+  poolPlannedOnly?: boolean;
+  /** How long `revertPrune` waits for another prune to finish. Defaults to {@link REVERT_LOCK_WAIT_MS}. */
+  revertWaitMs?: number;
   /** Test seam: runs after the edit is computed and just before the rename of `~/.claude.json`. */
   beforeRename?: () => void | Promise<void>;
 }
@@ -208,7 +217,7 @@ async function plan(env: PruneEnv, only?: string[]): Promise<ProjectPlan[]> {
   const dirs = Object.keys(root.projects);
   const state = settlePending(root, await loadState(env));
   const since = sinceOf(env);
-  const { repoOf, usage: pooled } = await pool(env, dirs, since);
+  const { repoOf, usage: pooled } = await pool(env, env.poolPlannedOnly && only ? only.filter((d) => dirs.includes(d)) : dirs, since);
   const never = new Set(
     [...(env.allow ?? []), ...state.keep, ...vanishedFrom(root, state).map((e) => e.name), "project-brain"].map(normalizeServerName)
   );
@@ -220,7 +229,7 @@ async function plan(env: PruneEnv, only?: string[]): Promise<ProjectPlan[]> {
         dataDir: env.dataDir,
         now,
         ask: env.askJev === true,
-        deadline: Date.now() + (env.jevDeadlineMs ?? JEV_RUN_DEADLINE_MS),
+        deadline: env.jevDeadlineAt ?? Date.now() + (env.jevDeadlineMs ?? JEV_RUN_DEADLINE_MS),
         requestsLeft: MAX_JEV_REQUESTS,
       }
     : null;
@@ -339,9 +348,17 @@ async function editClaudeJson(
   throw new Error(`${file} kept changing while it was being edited`);
 }
 
+/** The `~/.claude.json` from before the very first prune, kept for good beside the rotating backups. */
+export const BASELINE_BACKUP = "baseline-claude.json.bak";
+
 async function backup(env: PruneEnv, text: string): Promise<string> {
   const dir = join(env.dataDir, "mcp-prune");
   await mkdir(dir, { recursive: true });
+  const baseline = join(dir, BASELINE_BACKUP);
+  if (!existsSync(baseline)) {
+    await writeFile(baseline, text, { mode: 0o600 });
+    await chmod(baseline, 0o600);
+  }
   const file = join(dir, `claude.json.${new Date(env.now ?? Date.now()).toISOString().replace(/[:.]/g, "-")}.bak`);
   await writeFile(file, text, { mode: 0o600 });
   await chmod(file, 0o600);
@@ -361,10 +378,22 @@ export interface ApplyResult {
 /** One prune at a time per machine: setup, `mcp prune --apply`, init and maintain can overlap. */
 export const pruneLockPath = (env: PruneEnv) => join(env.dataDir, "mcp-prune.lock");
 
-/** Runs `work` holding the prune lock; resolves to null when another prune holds it. */
-export async function withPruneLock<T>(env: PruneEnv, work: () => Promise<T>): Promise<T | null> {
+/** How long an explicit revert waits for a running prune before telling the user to retry. */
+export const REVERT_LOCK_WAIT_MS = 30_000;
+const LOCK_POLL_MS = 200;
+
+/**
+ * Runs `work` holding the prune lock; resolves to null when another prune holds it for
+ * longer than `waitMs` (0, the default, means try once: automatic runs just skip).
+ */
+export async function withPruneLock<T>(env: PruneEnv, work: () => Promise<T>, waitMs = 0): Promise<T | null> {
   const { acquirePidFileLock } = await import("../commands/sync-lock.js");
-  const lock = await acquirePidFileLock(pruneLockPath(env)).catch(() => null);
+  const giveUpAt = Date.now() + waitMs;
+  let lock = await acquirePidFileLock(pruneLockPath(env)).catch(() => null);
+  while (!lock && Date.now() < giveUpAt) {
+    await Bun.sleep(Math.min(LOCK_POLL_MS, Math.max(0, giveUpAt - Date.now())));
+    lock = await acquirePidFileLock(pruneLockPath(env)).catch(() => null);
+  }
   if (!lock) return null;
   try {
     return await work();
@@ -471,8 +500,17 @@ export interface RevertResult {
   error?: string;
 }
 
-/** Removes exactly the manifest's entries, keeps those servers off the prune list for good, and clears the manifest. */
+/**
+ * Removes exactly the manifest's entries, keeps those servers off the prune list for good, and clears the manifest.
+ * Holds the prune lock, waiting for a running prune rather than skipping: an apply landing mid-revert would
+ * disable a server the cleared manifest no longer records.
+ */
 export async function revertPrune(env: PruneEnv): Promise<RevertResult> {
+  const result = await withPruneLock(env, () => revertUnlocked(env), env.revertWaitMs ?? REVERT_LOCK_WAIT_MS);
+  return result ?? { removed: [], error: "another MCP prune is still running (setup, init or session-end maintenance); nothing was reverted, try again in a moment" };
+}
+
+async function revertUnlocked(env: PruneEnv): Promise<RevertResult> {
   try {
     const state = await loadState(env);
     if (state.disabled.length === 0) return { removed: [] };

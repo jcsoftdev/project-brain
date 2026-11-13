@@ -1835,6 +1835,7 @@ function mcpPruneUnit(): SetupUnit {
       const { jevFromProcess } = await import("../mcpprune/judge.js");
       const full = { ...env, ...envFromProcess(), jev: await jevFromProcess(ctx.dataDir), askJev: true };
       const result = await applyPrune(full, await planPrune(full));
+      if (result.locked) console.log("MCP prune skipped: another prune is running (init or session-end maintenance); the next setup or update retries.");
       if (result.error) console.warn(`Warning: MCP prune changed nothing: ${result.error}`);
       if (result.added.length === 0) return;
       const byProject = new Map<string, string[]>();
@@ -1850,7 +1851,8 @@ function mcpPruneUnit(): SetupUnit {
       const env = pruneEnvOf(ctx);
       if (!env) return;
       const { revertPrune } = await import("../mcpprune/prune.js");
-      await revertPrune(env);
+      const reverted = await revertPrune(env);
+      if (reverted.error) console.warn(`Warning: MCP prune revert: ${reverted.error}`);
     },
   };
 }

@@ -5,7 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { computePlan, initialChecked } from "../../src/setup/plan.js";
 import { allUnits, type SetupContext } from "../../src/setup/units.js";
-import { applyPrune, AWAITING_JEV, MAX_JEV_REQUESTS, planPrune, repoKey, revertPrune, type PruneEnv } from "../../src/mcpprune/prune.js";
+import {
+  applyPrune,
+  AWAITING_JEV,
+  BASELINE_BACKUP,
+  hasPruneEntries,
+  MAX_JEV_REQUESTS,
+  planPrune,
+  pruneLockPath,
+  repoKey,
+  revertPrune,
+  type PruneEnv,
+} from "../../src/mcpprune/prune.js";
+import { acquirePidFileLock } from "../../src/commands/sync-lock.js";
 import { classifyTool } from "../../src/mcpprune/usage.js";
 import { jevFromProcess } from "../../src/mcpprune/judge.js";
 import { execute } from "../../src/commands/mcp.js";
@@ -237,8 +249,49 @@ describe("applyPrune / revertPrune", () => {
       await rm(join(env.dataDir, "mcp-prune.json"), { force: true });
       await applyPrune({ ...env, now: Date.now() + i * 1000 }, await planPrune(env));
     }
-    const left = (await readdir(backups)).filter((n) => n.endsWith(".bak"));
+    const left = (await readdir(backups)).filter((n) => n.startsWith("claude.json.") && n.endsWith(".bak"));
     expect(left).toHaveLength(5);
+    expect(await readFile(join(backups, BASELINE_BACKUP), "utf-8")).not.toContain("disabledMcpServers");
+  });
+
+  it("revert holds the prune lock, so an apply cannot land mid-revert and go unrecorded", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10, ["mcp__beta__x"]);
+    await applyPrune(env, await planPrune(env));
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual(["alpha"]);
+
+    const midway: Array<Awaited<ReturnType<typeof applyPrune>>> = [];
+    const racing: PruneEnv = {
+      ...env,
+      beforeRename: async () => {
+        if (midway.length > 0) return;
+        midway.push(await applyPrune(env, [{ project: a, sessions: 10, candidates: [{ name: "beta", mcpJson: false }] }]));
+      },
+    };
+    const reverted = await revertPrune(racing);
+    expect(reverted.error).toBeUndefined();
+    expect(midway[0]!.locked).toBe(true);
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual([]);
+    expect(await hasPruneEntries(env)).toBe(false);
+  });
+
+  it("revert waits for a running prune, then tells the user to retry instead of skipping silently", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 10);
+    await applyPrune(env, await planPrune(env));
+    const lock = await acquirePidFileLock(pruneLockPath(env));
+    try {
+      const started = Date.now();
+      const r = await revertPrune({ ...env, revertWaitMs: 300 });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+      expect(r.removed).toEqual([]);
+      expect(r.error).toContain("try again");
+    } finally {
+      await lock!.release();
+    }
+    expect((await revertPrune(env)).removed.map((e) => e.name)).toEqual(["alpha", "beta"]);
   });
 
   it("aborts without writing when the file keeps changing underneath", async () => {
