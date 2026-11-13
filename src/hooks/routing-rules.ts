@@ -27,6 +27,7 @@ import { ROUTING_TIERS, DEFAULT_HOST_MODELS, ROUTING_CONTENT_VERSION } from "../
 import { loadRoutingConfig } from "../rules/model-routing-config.js";
 import { readWrittenRoutingVersion } from "../registrars/routing-section.js";
 import { ROUTING_SKILL_NAME } from "../rules/model-routing.js";
+import { REPORT_CONTRACT_LINE } from "../rules/report-contract.js";
 import { fencedForGate } from "./gate-fence.js";
 
 /** A current section in pointer form names the skill; the inline form carries the table instead. */
@@ -58,10 +59,11 @@ export async function buildRoutingReminder(
       hookSpecificOutput: {
         hookEventName: "SessionStart",
         additionalContext: fencedForGate(
-          (await rulesPointToSkill(resolvedRulesPath))
+          ((await rulesPointToSkill(resolvedRulesPath))
             ? `Model routing for delegated agents: load the \`${ROUTING_SKILL_NAME}\` skill before any Agent/Task call.`
             : 'Model routing for delegated agents: the "Model routing for delegated agents" table ' +
-                "in this project's rules file is current — follow it; not repeated here."
+                "in this project's rules file is current — follow it; not repeated here.") +
+            `\n${REPORT_CONTRACT_LINE}`
         ),
       },
     });
@@ -91,6 +93,7 @@ export async function buildRoutingReminder(
       "(`haiku: locate auth handler`) so the choice is visible. Raise reasoning effort " +
       "before raising tier. Delegate only when the work is 4+ files or a read-then-write " +
       "pair; 1-3 files to decide is cheaper inline.",
+    REPORT_CONTRACT_LINE,
   ].join("\n");
 
   return JSON.stringify({

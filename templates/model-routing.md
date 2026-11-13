@@ -25,6 +25,16 @@ cheaper inline. Delegate when the work is 4+ files of exploration, or any
 read-then-write pair where the reading would otherwise land in your context and
 stay there.
 
+### Close every delegation with the report contract
+
+A sub-agent's hand-back stays in your context until it compacts, so ask for a
+short one and keep the detail on disk. End the delegation prompt with this
+block, unless the prompt already sets its own output format (JSON, a schema):
+
+```
+{{reportContract}}
+```
+
 ### Escalate, don't start deep
 
 Run the cheapest tier the task table allows. On a failed or empty result,

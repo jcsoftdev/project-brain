@@ -190,7 +190,8 @@ describe("routing-rules payload — dedup against a written rules-file section",
     const payload = JSON.parse(await buildRoutingReminder(undefined, rulesPath));
     const context: string = payload.hookSpecificOutput.additionalContext;
 
-    expect(context.length).toBeLessThan(300);
+    // The pointer plus the one-line report contract; the table alone runs to thousands.
+    expect(context.length).toBeLessThan(600);
     expect(context).not.toContain("Tier");
     expect(context).not.toContain("| Task | Tier");
   });

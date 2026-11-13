@@ -549,6 +549,8 @@ Override the table in `~/.project-brain/model-routing.json`:
 
 Add `--routing-hook-strict` for enforcement: a `PreToolUse` hook that blocks a spawn naming no model and tells the model to re-issue it with one. Off by default — inheriting the session model is sometimes the right call, and the guard fails open on any payload it cannot parse. `--no-routing-hook` skips both.
 
+**Report contract.** The skill and the `SessionStart` reminder both ask every delegation to close with a fixed hand-back: verdict (PASS / BLOCKERS / PARTIAL / DONE), changes, test counts, risks and open decisions, in about 400 words, with the full detail written to a file whose path the report gives. A long hand-back stays in the parent's context until it compacts, so the detail belongs on disk. `project-brain setup --with=hooks:report-contract` adds a `PreToolUse` hook that appends the contract to each delegation prompt through `updatedInput`. It never appends twice and leaves alone any prompt that sets its own output shape (JSON, YAML, a schema, an output format, a word cap). It is off by default because it rewrites a prompt the session wrote.
+
 #### Coding rules guard
 
 A `PreToolUse` hook on `Edit`, `Write` and `MultiEdit` that hands an agent the installed `brain-style` skill the first time it edits a code file, so the rules arrive when code is written rather than when a prompt is typed. It reaches sub-agents too: Claude Code fires `PreToolUse` inside them, and the hook keys its once-only memory by session and agent. It is selected by default in `setup` because it is local and warn-only: it exits 0 and adds the rules as `additionalContext`, and fails open on anything it cannot read.
