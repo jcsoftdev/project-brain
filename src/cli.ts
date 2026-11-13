@@ -45,6 +45,10 @@ const SKIPS_PREAMBLE = [
 ];
 
 if (!SKIPS_PREAMBLE.includes(command as string)) {
+  // A checkout run from source (a worktree, a feature branch) must not write its
+  // unreleased skills or configs into the owner's global state. See env/install-origin.ts.
+  const { mayWriteGlobalState } = await import("./env/install-origin.js");
+
   try {
     const { notifyIfUpdateAvailable } = await import("./notifier.js");
     notifyIfUpdateAvailable();
@@ -59,8 +63,9 @@ if (!SKIPS_PREAMBLE.includes(command as string)) {
   // Comparing what is on disk against what is in this binary is the only check
   // that works for every install channel. Only refreshes directories setup
   // already created, and only while it can prove they are ours — it never
-  // installs. Opt out with BRAIN_NO_SKILL_REFRESH=1.
-  if (!process.env.BRAIN_NO_SKILL_REFRESH) {
+  // installs. Opt out with BRAIN_NO_SKILL_REFRESH=1; from source, opt in with
+  // BRAIN_FORCE_SKILL_REFRESH=1.
+  if (mayWriteGlobalState("skill-refresh")) {
     try {
       const { refreshStaleSkills, knownSkillRoots } = await import("./rules/skills.js");
       const { join } = await import("node:path");
@@ -89,8 +94,9 @@ if (!SKIPS_PREAMBLE.includes(command as string)) {
   // because it runs the binary directly and never reads the MCP config.
   //
   // stderr, like the blocks above: `serve` reaches here too, and stdout is the
-  // JSON-RPC channel. Opt out with BRAIN_NO_CONFIG_REPAIR=1.
-  if (!process.env.BRAIN_NO_CONFIG_REPAIR) {
+  // JSON-RPC channel. Opt out with BRAIN_NO_CONFIG_REPAIR=1; from source, opt in
+  // with BRAIN_FORCE_SKILL_REFRESH=1.
+  if (mayWriteGlobalState("config-repair")) {
     try {
       const { repairAllConfigs } = await import("./registrars/repair.js");
       const repaired = await repairAllConfigs();

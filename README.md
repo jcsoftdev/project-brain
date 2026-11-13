@@ -162,7 +162,7 @@ bun build ./src/cli.ts ./src/parser/worker.ts --compile --outfile project-brain
 
 ### Keeping the host skills current
 
-Skills live in your assistant's global skills directory, not in the package, so upgrading the binary does not move them. project-brain compares the installed skill content against what the running binary carries and refreshes any directory it originally created — whichever way you upgraded. It never creates one (that is `setup`'s job) and never touches a directory it cannot prove it wrote. Opt out with `BRAIN_NO_SKILL_REFRESH=1`.
+Skills live in your assistant's global skills directory, not in the package, so upgrading the binary does not move them. project-brain compares the installed skill content against what the running binary carries and refreshes any directory it originally created — whichever way you upgraded. It never creates one (that is `setup`'s job) and never touches a directory it cannot prove it wrote. Opt out with `BRAIN_NO_SKILL_REFRESH=1`. A checkout run from source (`bun src/cli.ts`, in a worktree or not) never refreshes skills, repairs host configs or adds hooks, so a branch cannot push unreleased content into your sessions; set `BRAIN_FORCE_SKILL_REFRESH=1` to allow those writes anyway.
 
 ## Usage modes
 
