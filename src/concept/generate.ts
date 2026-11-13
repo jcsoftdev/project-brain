@@ -1,5 +1,5 @@
 import { buildConceptPrompt, type ConceptPromptInput } from "./prompt.js";
-import type { LlmClient } from "../llm/anthropic-client.js";
+import type { LlmClient } from "../llm/client.js";
 
 /** Generates the updated conceptual markdown for a module via the LLM client. */
 export async function generateConceptDoc(

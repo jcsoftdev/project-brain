@@ -8,7 +8,7 @@ import { VECTOR_DIM } from "../../src/constants.js";
 import { handleSearch } from "../../src/tools/search.js";
 import { runConceptualize } from "../../src/commands/conceptualize.js";
 import type { EmbeddingClient, ToolDeps } from "../../src/types.js";
-import type { LlmClient } from "../../src/llm/anthropic-client.js";
+import { LlmUnavailableError, type LlmClient } from "../../src/llm/client.js";
 
 function git(root: string, args: string[]): void {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf-8" });
@@ -95,5 +95,33 @@ describe("Integration: conceptualize", () => {
 
     expect(result.processed).toContain("billing");
     expect(result.skipped).toEqual([]);
+  });
+
+  it("skips every module with one line, without retrying, when the backend is missing", async () => {
+    await mkdir(join(root, "billing"), { recursive: true });
+    await writeFile(join(root, "billing", "invoice.ts"), "export function invoice() {}\n");
+    await writeFile(join(root, "auth", "login.ts"), "export function login() { return 1; }\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "feat: touch two modules"]);
+
+    let calls = 0;
+    const missing: LlmClient = {
+      complete: async () => {
+        calls++;
+        throw new LlmUnavailableError("`claude` is not on PATH");
+      },
+    };
+    const lines: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => void lines.push(args.join(" "));
+    try {
+      const result = await runConceptualize({ root, projectId: "testproj" }, { store, embeddings: mockEmbeddings, llm: missing });
+      expect(result.processed).toEqual([]);
+      expect(result.skipped).toEqual(["auth", "billing"]);
+    } finally {
+      console.error = original;
+    }
+    expect(calls).toBe(1);
+    expect(lines).toEqual(["[project-brain] conceptualize: `claude` is not on PATH; skipped 2 module(s): auth, billing"]);
   });
 });

@@ -6,7 +6,7 @@ import { getChangedFiles, getCommitMessage, getModuleDiff } from "../git/commit-
 import { bucketChangedFilesByModule } from "../concept/bucket.js";
 import { readConceptDoc, writeConceptDoc } from "../concept/store.js";
 import { generateConceptDoc } from "../concept/generate.js";
-import type { LlmClient } from "../llm/anthropic-client.js";
+import { LlmUnavailableError, type LlmClient } from "../llm/client.js";
 import { CONCEPT_MODULE_CAP } from "../constants.js";
 
 export interface ConceptualizeDeps {
@@ -45,7 +45,7 @@ export async function runConceptualize(
   const processed: string[] = [];
   const skipped: string[] = [];
 
-  for (const module of selected) {
+  for (const [index, module] of selected.entries()) {
     try {
       const diff = getModuleDiff(root, `${module}/`);
       const existingDoc = await readConceptDoc(projectId, module, deps.store);
@@ -54,7 +54,8 @@ export async function runConceptualize(
       for (let attempt = 0; attempt < 2 && markdown === null; attempt++) {
         try {
           markdown = await generateConceptDoc({ module, commitMessage, diff, existingDoc }, deps.llm);
-        } catch {
+        } catch (err) {
+          if (err instanceof LlmUnavailableError) throw err;
           markdown = null;
         }
       }
@@ -68,6 +69,12 @@ export async function runConceptualize(
       await writeConceptDoc(projectId, module, markdown, deps);
       processed.push(module);
     } catch (err) {
+      if (err instanceof LlmUnavailableError) {
+        const rest = selected.slice(index);
+        skipped.push(...rest);
+        console.error(`[project-brain] conceptualize: ${err.message}; skipped ${rest.length} module(s): ${rest.join(", ")}`);
+        break;
+      }
       skipped.push(module);
       console.error(`[project-brain] conceptualize: skipped module "${module}": ${err}`);
     }
@@ -97,7 +104,10 @@ export function parseConceptualizeArgs(args: string[]): { root: string; onlyModu
 export async function execute(args: string[]): Promise<void> {
   const { LanceDbStore } = await import("../store/lancedb.js");
   const { createEmbeddingClient } = await import("../embeddings/factory.js");
-  const { createAnthropicClient } = await import("../llm/anthropic-client.js");
+  const { createConceptLlm, liveEmbedHolder, resolveConceptSettings, yieldToEmbeds } = await import(
+    "../llm/concept-provider.js"
+  );
+  const { CONCEPT_CHILD_ENV } = await import("../llm/claude-code-client.js");
   const { DB_PATH, OLLAMA_HOST } = await import("../constants.js");
   const { readTableMeta } = await import("../store/meta.js");
   const { featureEnabled } = await import("../features.js");
@@ -106,6 +116,8 @@ export async function execute(args: string[]): Promise<void> {
     console.log("Conceptualize: off (feature:conceptualize); nothing sent.");
     return;
   }
+  // A commit made from inside a `claude -p` this command started must not start another.
+  if (process.env[CONCEPT_CHILD_ENV] === "1") return;
 
   const { root, onlyModule } = parseConceptualizeArgs(args);
 
@@ -119,7 +131,14 @@ export async function execute(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const llm = createAnthropicClient();
+  const settings = resolveConceptSettings();
+  if (settings.ignoredProvider) {
+    console.error(
+      `[project-brain] conceptualize: BRAIN_CONCEPT_PROVIDER="${settings.ignoredProvider}" is not anthropic, ollama or claude-code; using ${settings.provider}`
+    );
+  }
+  const base = await createConceptLlm(settings);
+  const llm = settings.provider === "ollama" ? yieldToEmbeds(base, { embedHolder: () => liveEmbedHolder() }) : base;
 
   const dbPath = process.env.BRAIN_DATA_DIR || DB_PATH;
   const store = new LanceDbStore(dbPath);
