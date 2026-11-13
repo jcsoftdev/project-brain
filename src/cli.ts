@@ -130,6 +130,8 @@ Commands:
                          chrome://inspect (full browser control — see brain-record/SKILL.md).
                          Default is a fresh, logged-out profile.
                        --record-cdp-port <n>  CDP port brain-record connects to (default: 9222)
+                       --concept-provider <anthropic|ollama|claude-code>  backend for the post-commit
+                         module docs (default anthropic; ollama keeps the diffs on this machine)
   browser login      Sign in once on the shared headless browser's dedicated Chrome profile
   init               Initialize project (detect stack, index, install hook)
   sync               Incremental sync (re-index changed files)
