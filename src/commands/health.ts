@@ -293,4 +293,7 @@ export async function execute(args: string[]): Promise<void> {
     const when = new Date(result.lastError.timestamp).toISOString();
     console.log(`  ⚠ Last error: [${result.lastError.phase}] ${result.lastError.message} (${when})`);
   }
+  const { findOversizedOllamaLog, formatOllamaLogHint } = await import("../setup/log-cap.js");
+  const bigLog = await findOversizedOllamaLog();
+  if (bigLog) console.log(`  ${formatOllamaLogHint(bigLog)}`);
 }

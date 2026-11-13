@@ -4,6 +4,7 @@ import { mkdir, rm } from "node:fs/promises";
 import type { AIToolRegistrar } from "../registrars/types.js";
 import { resolveRerankerToken } from "../rerank/token.js";
 import { profileDir } from "./chrome-profile.js";
+import { INTERACTIVE_LOG_FILE } from "./log-cap.js";
 
 /**
  * What one setup unit looks like on disk right now.
@@ -1195,12 +1196,13 @@ function ollamaInteractiveUnit(): SetupUnit {
     const spec = {
       ollamaBin,
       modelsDir: runnerEnv.OLLAMA_MODELS ?? mod.sharedModelsDir(),
-      logPath: join(ctx.dataDir, "ollama-interactive.log"),
+      logPath: join(ctx.dataDir, INTERACTIVE_LOG_FILE),
       runnerEnv,
     };
     return {
       mod,
       kind,
+      logPath: spec.logPath,
       file: mod.interactiveServiceFile(kind, serviceDir(kind, ctx)),
       text: mod.interactiveServiceText(kind, spec),
       uid: process.getuid?.() ?? 0,
@@ -1242,6 +1244,8 @@ function ollamaInteractiveUnit(): SetupUnit {
 
       await mkdir(dirname(service.file), { recursive: true });
       await mkdir(ctx.dataDir, { recursive: true });
+      const { capLogFile } = await import("./log-cap.js");
+      await capLogFile(service.logPath).catch(() => null);
       await Bun.write(service.file, service.text);
       for (const argv of service.mod.startCommands(service.kind, service.file, service.uid)) {
         const code = await service.run(argv);

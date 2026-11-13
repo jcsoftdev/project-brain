@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { DATA_DIR } from "../constants.js";
+import { capLogFile, INTERACTIVE_LOG_FILE } from "../setup/log-cap.js";
 import { refreshSkillUsage, scanSkillUsage, skillUsagePath, type SkillUsage } from "../skills/usage.js";
 
 export interface SkillUsageDeps {
@@ -37,5 +38,8 @@ export async function execute(args: string[], deps: SkillUsageDeps = {}): Promis
     return;
   }
   const written = await refreshSkillUsage({ dataDir, projectsRoot, maxAgeMs: args.includes("--if-stale") ? undefined : 0 });
+  // The listing mod runs this at every session start, which makes it the one
+  // reliable recurring hook for capping the interactive Ollama's service log.
+  await capLogFile(join(dataDir, INTERACTIVE_LOG_FILE)).catch(() => null);
   if (written) log(`Wrote ${skillUsagePath(dataDir)}: ${Object.keys(written.skills).length} names.`);
 }
