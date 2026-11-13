@@ -7,6 +7,8 @@ import { computePlan } from "../../src/setup/plan.js";
 import { allUnits, type SetupContext } from "../../src/setup/units.js";
 import { applyPrune, planPrune, repoKey, revertPrune, type PruneEnv } from "../../src/mcpprune/prune.js";
 import { classifyTool } from "../../src/mcpprune/usage.js";
+import { jevFromProcess } from "../../src/mcpprune/judge.js";
+import { execute } from "../../src/commands/mcp.js";
 import { projectDirKey } from "../../src/toolcatalog/transcripts.js";
 
 const DAY = 86_400_000;
@@ -326,5 +328,125 @@ describe("config:mcp-prune unit", () => {
     }
     expect((await readJson()).projects[a].disabledMcpServers).toBeUndefined();
     expect(await unit().inspect({ ...ctxFor(), claudeSettingsPath: join(root, "settings.json") })).toBe("unavailable");
+  });
+});
+
+describe("Jev at prune time", () => {
+  type Sent = { state: { project: Record<string, unknown>; servers: Record<string, { name: string; tools: string[]; instructions?: string }> } };
+
+  /** A TypeSafe stand-in that answers each server question from `scores`, keyed by server name. */
+  function fakeJev(scores: Record<string, number> | "down") {
+    const requests: Sent[] = [];
+    const fetchFn = async (_url: string, init: RequestInit): Promise<Response> => {
+      const body = JSON.parse(String(init.body)) as Sent;
+      requests.push(body);
+      if (scores === "down") return new Response("boom", { status: 503 });
+      const answers = Object.fromEntries(Object.entries(body.state.servers).map(([k, s]) => [k, { type: "noul", noul: scores[s.name] ?? 0.5 }]));
+      return new Response(JSON.stringify({ answers }), { status: 200 });
+    };
+    return { jev: { token: "test-token", fetchFn }, requests };
+  }
+
+  async function announce(dir: string, tools: string[], instructions: Record<string, string> = {}): Promise<void> {
+    const tdir = join(root, ".claude", "projects", projectDirKey(dir));
+    await mkdir(tdir, { recursive: true });
+    const lines = [
+      { type: "attachment", attachment: { type: "deferred_tools_delta", addedNames: tools, removedNames: [] } },
+      { type: "attachment", attachment: { type: "mcp_instructions_delta", addedNames: Object.keys(instructions), addedBlocks: Object.values(instructions) } },
+    ];
+    await writeFile(join(tdir, "announce.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  }
+
+  it("disables in a thin project only what Jev rates unneeded, says so, and revert restores it", async () => {
+    const a = await project("shop");
+    await writeFile(join(a, "README.md"), "# Shop\nA web store.");
+    await writeClaude([a]);
+    await transcripts(a, 1);
+    await announce(a, ["mcp__alpha__deploy", "mcp__beta__model_3d"], { beta: "Generates 3D models." });
+    const { jev, requests } = fakeJev({ alpha: 0.9, beta: 0.05 });
+
+    const [plan] = await planPrune({ ...env, jev }, [a]);
+    expect(plan!.skipped).toBeUndefined();
+    expect(plan!.basis).toBe("jev");
+    expect(plan!.candidates).toEqual([{ name: "beta", mcpJson: false, needed: 0.05 }]);
+    expect(requests).toHaveLength(1);
+    const sent = requests[0]!.state;
+    expect(sent.project.readme).toContain("A web store.");
+    expect(Object.values(sent.servers)).toEqual([
+      { name: "alpha", tools: ["deploy"] },
+      { name: "beta", tools: ["model_3d"], instructions: "Generates 3D models." },
+    ]);
+    expect(JSON.stringify(sent)).not.toContain("test-token");
+
+    const lines: string[] = [];
+    await execute(["prune"], { env: { ...env, jev }, cwd: a, log: (l) => lines.push(l) });
+    expect(lines[0]).toBe(`${a}: beta (Jev: unlikely to be needed here; 2 sessions of history, none of them used it)`);
+    expect(requests).toHaveLength(1);
+
+    await execute(["prune", "--apply"], { env: { ...env, jev }, cwd: a, log: () => {} });
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual(["beta"]);
+    await execute(["prune", "--revert"], { env, log: () => {} });
+    expect((await readJson()).projects[a].disabledMcpServers).toEqual([]);
+  });
+
+  it("keeps every server Jev rates at or above the floor", async () => {
+    const a = await project("app");
+    await writeClaude([a]);
+    await transcripts(a, 2);
+    const { jev } = fakeJev({ alpha: 0.6, beta: 0.2 });
+    const [plan] = await planPrune({ ...env, jev }, [a]);
+    expect(plan!.candidates).toEqual([]);
+  });
+
+  it("falls back to skipping thin projects when Jev fails or there is no token, and stops asking after a failure", async () => {
+    const [a, b] = [await project("a"), await project("b")];
+    await writeClaude([a, b]);
+    await transcripts(a, 2);
+    await transcripts(b, 2);
+    const { jev, requests } = fakeJev("down");
+
+    const plans = await planPrune({ ...env, jev });
+    expect(plans.map((p) => p.skipped)).toEqual(["not enough history yet", "not enough history yet"]);
+    expect(requests).toHaveLength(1);
+    expect((await planPrune({ ...env, jev: null })).map((p) => p.skipped)).toEqual(["not enough history yet", "not enough history yet"]);
+
+    expect((await applyPrune({ ...env, jev }, plans)).added).toEqual([]);
+    expect((await readJson()).projects[a].disabledMcpServers).toBeUndefined();
+  });
+
+  it("never asks about, or disables, a pinned or recently used server", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 2, ["mcp__beta__x"]);
+    const { jev, requests } = fakeJev({ alpha: 0, beta: 0 });
+
+    const [plan] = await planPrune({ ...env, jev, allow: ["alpha"] }, [a]);
+    expect(plan!.candidates).toEqual([]);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("leaves a project untouched within the window alone, without asking", async () => {
+    const a = await project("a");
+    await writeClaude([a]);
+    await transcripts(a, 2, [], 60);
+    const { jev, requests } = fakeJev({ alpha: 0, beta: 0 });
+    expect((await planPrune({ ...env, jev }, [a]))[0]!.skipped).toBe("not enough history yet");
+    expect(requests).toHaveLength(0);
+  });
+
+  it("takes the token from the environment unless opted out", async () => {
+    const prev = { key: process.env.TYPESAFE_API_KEY, opt: process.env.PROJECT_BRAIN_MCP_PRUNE_JEV };
+    try {
+      process.env.TYPESAFE_API_KEY = "env-token";
+      delete process.env.PROJECT_BRAIN_MCP_PRUNE_JEV;
+      expect(await jevFromProcess(env.dataDir)).toEqual({ token: "env-token" });
+      process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = "0";
+      expect(await jevFromProcess(env.dataDir)).toBeNull();
+    } finally {
+      if (prev.key === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = prev.key;
+      if (prev.opt === undefined) delete process.env.PROJECT_BRAIN_MCP_PRUNE_JEV;
+      else process.env.PROJECT_BRAIN_MCP_PRUNE_JEV = prev.opt;
+    }
   });
 });

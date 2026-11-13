@@ -2,11 +2,16 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
-import { discoverMcpConfigs, normalizeServerName } from "../toolcatalog/config.js";
+import { discoverMcpConfigs, normalizeServerName, type McpServerConfig } from "../toolcatalog/config.js";
+import { describeProject, judgeServers, type JevSettings, type ServerBrief } from "./judge.js";
 import { classifyTool, emptyUsage, mergeUsage, scanUsage, type Usage } from "./usage.js";
 
 const DAY = 86_400_000;
 const KEEP_BACKUPS = 5;
+/** Below this probability of being needed, Jev's word disables a server in a project with thin history. */
+export const JEV_PRUNE_BELOW = 0.2;
+/** Repos Jev is asked about per run; cached answers do not count. */
+export const MAX_JEV_REQUESTS = 20;
 export const DISABLED_KEY = "disabledMcpServers";
 export const DISABLED_JSON_KEY = "disabledMcpjsonServers";
 type ListKey = typeof DISABLED_KEY | typeof DISABLED_JSON_KEY;
@@ -24,6 +29,12 @@ export interface PruneEnv {
   minRecentSessions?: number;
   /** Server names never disabled, on top of the keep list in the state file. */
   allow?: string[];
+  /**
+   * When set, a project with too little history to judge by usage asks Jev, once per
+   * repo and cached, which of its unused servers it will need. Absent or failing:
+   * such a project is skipped, as it always was.
+   */
+  jev?: JevSettings | null;
   /** Test seam: runs after the edit is computed and just before the rename of `~/.claude.json`. */
   beforeRename?: () => void | Promise<void>;
 }
@@ -32,6 +43,8 @@ export interface Candidate {
   name: string;
   /** Also listed in `.mcp.json`, so it goes in both disabled lists. */
   mcpJson: boolean;
+  /** Jev's probability that the project needs it, when Jev made the call. */
+  needed?: number;
 }
 
 export interface ProjectPlan {
@@ -39,6 +52,8 @@ export interface ProjectPlan {
   skipped?: string;
   sessions: number;
   candidates: Candidate[];
+  /** "jev" when history was too thin and Jev chose the candidates. */
+  basis?: "jev";
 }
 
 interface Entry {
@@ -189,9 +204,11 @@ async function plan(env: PruneEnv, only?: string[]): Promise<ProjectPlan[]> {
   );
 
   const plans: ProjectPlan[] = [];
+  let jevRequests = 0;
   for (const project of only ?? dirs) {
     if (!dirs.includes(project)) continue;
-    const usage = pooled.get(repoOf.get(project)!)!;
+    const repo = repoOf.get(project)!;
+    const usage = pooled.get(repo)!;
     const base = { project, sessions: usage.sessions, candidates: [] };
     if (!existsSync(project)) {
       plans.push({ ...base, skipped: "directory no longer exists" });
@@ -199,28 +216,66 @@ async function plan(env: PruneEnv, only?: string[]): Promise<ProjectPlan[]> {
     }
     const spanDays = usage.oldest !== null && usage.newest !== null ? (usage.newest - usage.oldest) / DAY : 0;
     const longHistory = spanDays >= (env.minSpanDays ?? 14) && usage.recent >= (env.minRecentSessions ?? 3);
-    if (usage.sessions < (env.minSessions ?? 10) && !longHistory) {
+    const thin = usage.sessions < (env.minSessions ?? 10) && !longHistory;
+    if (thin && (!env.jev || usage.recent === 0 || jevRequests >= MAX_JEV_REQUESTS)) {
       plans.push({ ...base, skipped: "not enough history yet" });
       continue;
     }
-    const configs = await discoverMcpConfigs({ home: env.home, projectDir: project });
-    const used = new Set(
-      [...usage.lastUsed.keys()].flatMap((t) => {
-        const c = classifyTool(t, [...configs.user, ...configs.project].map((s) => s.name));
-        return c ? [c.server] : [];
-      })
-    );
-    const inMcpJson = await mcpJsonNames(project);
-    const seen = new Set<string>();
-    const candidates = [...configs.user, ...configs.project]
-      .filter((s) => {
-        const n = normalizeServerName(s.name);
-        return !never.has(n) && !used.has(n) && !seen.has(n) && seen.add(n);
-      })
-      .map((s) => ({ name: s.name, mcpJson: inMcpJson.has(s.name) }));
-    plans.push({ ...base, candidates });
+    const unused = await unusedServers(env, project, usage, never);
+    if (!thin || unused.length === 0) {
+      plans.push({ ...base, candidates: unused });
+      continue;
+    }
+    const verdict = await judgeServers({
+      dataDir: env.dataDir,
+      jev: env.jev!,
+      now,
+      repo,
+      project: await describeProject(existsSync(repo) ? repo : project),
+      servers: unused.map((s) => briefOf(s.name, usage)),
+    });
+    if (!verdict) {
+      // A failed call is not retried for every other project of this run.
+      jevRequests = MAX_JEV_REQUESTS;
+      plans.push({ ...base, skipped: "not enough history yet" });
+      continue;
+    }
+    if (verdict.asked) jevRequests++;
+    const candidates = unused.flatMap((s) => {
+      const needed = verdict.needed.get(s.name)!;
+      return needed < JEV_PRUNE_BELOW ? [{ name: s.name, mcpJson: s.mcpJson, needed }] : [];
+    });
+    plans.push({ ...base, candidates, basis: "jev" });
   }
   return plans;
+}
+
+/** Enabled servers of `project` that its repo has not called within the window and that may be pruned at all. */
+async function unusedServers(env: PruneEnv, project: string, usage: Usage, never: Set<string>): Promise<Array<{ name: string; mcpJson: boolean }>> {
+  const configs = await discoverMcpConfigs({ home: env.home, projectDir: project });
+  const all: McpServerConfig[] = [...configs.user, ...configs.project];
+  const used = new Set(
+    [...usage.lastUsed.keys()].flatMap((t) => {
+      const c = classifyTool(t, all.map((s) => s.name));
+      return c ? [c.server] : [];
+    })
+  );
+  const inMcpJson = await mcpJsonNames(project);
+  const seen = new Set<string>();
+  return all
+    .filter((s) => {
+      const n = normalizeServerName(s.name);
+      return !never.has(n) && !used.has(n) && !seen.has(n) && seen.add(n);
+    })
+    .map((s) => ({ name: s.name, mcpJson: inMcpJson.has(s.name) }));
+}
+
+/** The tools and instructions the project's own sessions were given for `name`. */
+function briefOf(name: string, usage: Usage): ServerBrief {
+  const prefix = `mcp__${normalizeServerName(name)}__`;
+  const tools = [...usage.announced].filter((t) => t.startsWith(prefix)).map((t) => t.slice(prefix.length)).sort();
+  const instructions = usage.instructions.get(name);
+  return { name, tools, ...(instructions ? { instructions } : {}) };
 }
 
 const indentOf = (text: string): string | number => /^([ \t]+)"/m.exec(text)?.[1] ?? 2;

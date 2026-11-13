@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { jevFromProcess } from "../mcpprune/judge.js";
 import { applyPrune, envFromProcess, planPrune, revertPrune, type ProjectPlan, type PruneEnv } from "../mcpprune/prune.js";
 
 export interface McpOptions {
@@ -10,10 +11,15 @@ export interface McpOptions {
 
 export const defaultPruneEnv = (): PruneEnv => ({ home: homedir(), dataDir: join(homedir(), ".project-brain"), ...envFromProcess() });
 
+/** {@link defaultPruneEnv} plus Jev, when a TypeSafe token is configured and not opted out. */
+const withJev = async (env: PruneEnv): Promise<PruneEnv> => ({ ...env, jev: await jevFromProcess(env.dataDir) });
+
 export function summarize(plans: ProjectPlan[], log: (l: string) => void, windowDays: number): void {
   for (const p of plans) {
     if (p.skipped) log(`${p.project}: skipped (${p.skipped})`);
     else if (p.candidates.length === 0) log(`${p.project}: nothing to disable (${p.sessions} sessions)`);
+    else if (p.basis === "jev")
+      log(`${p.project}: ${p.candidates.map((c) => c.name).join(", ")} (Jev: unlikely to be needed here; ${p.sessions} sessions of history, none of them used it)`);
     else log(`${p.project}: ${p.candidates.map((c) => c.name).join(", ")} (unused in the last ${windowDays} days, ${p.sessions} sessions)`);
   }
 }
@@ -25,7 +31,7 @@ export async function execute(args: string[], opts: McpOptions = {}): Promise<nu
     log("Usage: project-brain mcp prune [--all] [--apply | --revert]");
     return 1;
   }
-  const env = opts.env ?? defaultPruneEnv();
+  const env = opts.env ?? (await withJev(defaultPruneEnv()));
 
   if (rest.includes("--revert")) {
     const r = await revertPrune(env);
