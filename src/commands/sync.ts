@@ -345,13 +345,44 @@ async function filterChangedFiles(root: string, changedFiles: string[]): Promise
     candidates.map((c) => c.relPath)
   );
   const worktreeCache = new Map<string, boolean>();
+  const symlinkCache = new Map<string, boolean>();
   const kept: string[] = [];
   for (const { abs, relPath } of candidates) {
     if (isAlwaysIgnored(relPath) || isIgnoredWithAncestors(relPath, patterns)) continue;
+    if (await crossesSymlink(root, relPath, symlinkCache)) continue;
     if (await isInsideNestedWorktree(root, relPath, worktreeCache)) continue;
     kept.push(abs);
   }
   return kept;
+}
+
+/**
+ * Whether the file or any directory between it and `root` is a symlink — the
+ * same rule the full walk enforces (security S2 in `listAllFiles`): a symlink
+ * may point outside the project, so its target is never indexed. A path that
+ * no longer exists passes, so the read phase still counts it as excluded.
+ */
+async function crossesSymlink(
+  root: string,
+  relPath: string,
+  cache: Map<string, boolean>
+): Promise<boolean> {
+  const { lstat } = await import("node:fs/promises");
+  const segments = relPath.split("/");
+  for (let depth = 1; depth <= segments.length; depth++) {
+    const prefix = segments.slice(0, depth).join("/");
+    let isLink = cache.get(prefix);
+    if (isLink === undefined) {
+      try {
+        isLink = (await lstat(join(root, prefix))).isSymbolicLink();
+      } catch {
+        isLink = false;
+      }
+      cache.set(prefix, isLink);
+    }
+    if (isLink) return true;
+  }
+  return false;
 }
 
 /**

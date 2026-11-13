@@ -1,20 +1,26 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
 
 /**
  * Whether `dir` is the root of a linked git worktree: its `.git` is a file
- * whose `gitdir:` points into some repository's `worktrees/` directory.
+ * whose `gitdir:` points at a directory holding a `commondir` file.
  *
  * A linked worktree nested inside a checkout (`.claude/worktrees/<name>/` is
  * the common case) is a full second copy of the repository on another branch.
  * It has its own index; indexing it into the enclosing checkout duplicates
- * every file under a `.claude/worktrees/<name>/` prefix. Submodules also use a
- * `.git` file, but theirs points into `.git/modules/`, so they stay indexed.
+ * every file under a `.claude/worktrees/<name>/` prefix.
+ *
+ * `commondir` is what git itself writes into every linked worktree's gitdir to
+ * find the shared repository. A submodule also uses a `.git` file, but its
+ * gitdir (`.git/modules/<path>`) is a full repository with no `commondir`, so
+ * it stays indexed even when its own path ends in `worktrees/<name>`.
  */
 export async function isLinkedWorktreeRoot(dir: string): Promise<boolean> {
   try {
     const pointer = await readFile(join(dir, ".git"), "utf8");
-    return /^gitdir:.*[/\\]worktrees[/\\][^/\\]+[/\\]?\s*$/m.test(pointer);
+    const gitdir = /^gitdir:\s*(.+?)\s*$/m.exec(pointer)?.[1];
+    if (!gitdir) return false;
+    return (await stat(join(resolve(dir, gitdir), "commondir"))).isFile();
   } catch {
     return false;
   }

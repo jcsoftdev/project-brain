@@ -95,33 +95,51 @@ describe("sync keeps nested worktrees and ignored files out of the index", () =>
     await put(root, ".claude/worktrees/agent-x/src/real.ts", "export function real() {\n  return 2;\n}\n");
     await put(root, "secrets.env", "TOKEN=hunter2\n");
     await put(root, "build-out/bundle.ts", "export const bundled = 1;\n");
+    const outside = await mkdtemp(join(tmpdir(), "brain-nested-wt-outside-"));
+    await put(outside, "outside-the-root.ts", "export const outside = 1;\n");
 
-    const store = await sync([
-      "src/real.ts",
-      ".claude/worktrees/agent-x/README.md",
-      ".claude/worktrees/agent-x/src/real.ts",
-      "secrets.env",
-      "build-out/bundle.ts",
-      join(tmpdir(), "outside-the-root.ts"),
-    ]);
+    try {
+      const store = await sync([
+        "src/real.ts",
+        ".claude/worktrees/agent-x/README.md",
+        ".claude/worktrees/agent-x/src/real.ts",
+        "secrets.env",
+        "build-out/bundle.ts",
+        join(outside, "outside-the-root.ts"),
+      ]);
 
-    expect(store.sources(PROJECT)).toEqual(["src/real.ts"]);
-    expect(graph.listFiles()).toEqual(["src/real.ts"]);
+      expect(store.sources(PROJECT)).toEqual(["src/real.ts"]);
+      expect(graph.listFiles()).toEqual(["src/real.ts"]);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
-  it("skips a linked worktree nested in a non-ignored directory, on both sync paths, but keeps a submodule", async () => {
-    await put(root, "trees/feature/.git", "gitdir: /elsewhere/repo/.git/worktrees/feature\n");
+  it("skips a linked worktree nested in a non-ignored directory, on both sync paths, but keeps submodules", async () => {
+    // A linked worktree's gitdir carries `commondir`; a submodule's gitdir does
+    // not, even when the submodule's own path ends in `worktrees/<name>`.
+    await put(root, ".git/worktrees/feature/commondir", "../..\n");
+    await put(root, "trees/feature/.git", `gitdir: ${join(root, ".git/worktrees/feature")}\n`);
     await put(root, "trees/feature/src/copy.ts", "export const copy = 1;\n");
+    await put(root, ".git/modules/vendor/lib/HEAD", "ref: refs/heads/main\n");
     await put(root, "vendor/lib/.git", "gitdir: ../../.git/modules/vendor/lib\n");
     await put(root, "vendor/lib/lib.ts", "export const lib = 1;\n");
+    await put(root, ".git/modules/tools/worktrees/core/HEAD", "ref: refs/heads/main\n");
+    await put(root, "tools/worktrees/core/.git", "gitdir: ../../../.git/modules/tools/worktrees/core\n");
+    await put(root, "tools/worktrees/core/core.ts", "export const core = 1;\n");
 
+    const kept = [".gitignore", "src/real.ts", "tools/worktrees/core/core.ts", "vendor/lib/lib.ts"];
     const full = await sync();
-    expect(full.sources(PROJECT)).toEqual([".gitignore", "src/real.ts", "vendor/lib/lib.ts"]);
+    expect(full.sources(PROJECT)).toEqual(kept);
 
     // Same store, so the manifest and store agree and the changed-file branch runs.
     await put(root, "vendor/lib/lib.ts", "export const lib = 2;\n");
-    await sync(["trees/feature/src/copy.ts", "vendor/lib/lib.ts"], full);
-    expect(full.sources(PROJECT)).toEqual([".gitignore", "src/real.ts", "vendor/lib/lib.ts"]);
+    await put(root, "tools/worktrees/core/core.ts", "export const core = 2;\n");
+    await sync(
+      ["trees/feature/src/copy.ts", "vendor/lib/lib.ts", "tools/worktrees/core/core.ts"],
+      full
+    );
+    expect(full.sources(PROJECT)).toEqual(kept);
     expect(graph.listFiles()).not.toContain("trees/feature/src/copy.ts");
   });
 
