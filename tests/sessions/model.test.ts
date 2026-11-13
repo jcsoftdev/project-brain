@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import {
+  isClaudeProcess,
   isSessionCommand,
   lineage,
   liveChildCount,
@@ -57,6 +58,22 @@ describe("isSessionCommand", () => {
     ["npm exec context7-mcp", false],
     ["/opt/homebrew/bin/project-brain sessions", false],
   ])("%s", (command, expected) => expect(isSessionCommand(command)).toBe(expected));
+});
+
+describe("isClaudeProcess", () => {
+  it.each([
+    ["/Users/u/Library/Application Support/Claude/claude-code/2.1.322/claude", "/Users/u/Library/Application Support/Claude/claude-code/2.1.322/claude --resume x", true],
+    ["/Users/u/.local/share/claude/versions/2.1.322", "/Users/u/.local/share/claude/versions/2.1.322 --session-id s --fork-session --resume r", true],
+    ["/opt/homebrew/bin/node", "node /Users/u/app/node_modules/@anthropic-ai/claude-agent-sdk/cli.js --output-format stream-json", true],
+    ["/usr/local/bin/node", "node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js", true],
+    ["claude", "claude --resume 79d84d4d", true],
+    ["claude bg-pty-host", "claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/x", true],
+    ["/Users/u/.local/bin/claude", "/Users/u/.local/bin/claude -p hello", true],
+    ["/Users/u/.vscode/extensions/anthropic.claude-code-2.1.322-darwin-arm64/resources/native-binary/claude", "claude --ide", true],
+    ["/opt/homebrew/bin/zsh", "zsh -c claude-ish /tmp/claude-501/x", false],
+    ["/private/tmp/claude-501/-Users-u-shop/abc/scratchpad/turnara-api", "turnara-api serve", false],
+    ["/opt/homebrew/bin/node", "node /Users/u/app/server.js", false],
+  ])("%s", (exe, args, expected) => expect(isClaudeProcess(exe, args)).toBe(expected));
 });
 
 describe("process table", () => {

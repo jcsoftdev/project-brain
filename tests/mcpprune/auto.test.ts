@@ -7,6 +7,7 @@ import { maintainCommand, maintainMcpPrune } from "../../src/commands/maintain.j
 import { acquirePidFileLock } from "../../src/commands/sync-lock.js";
 import { applyPrune, planPrune, pruneLockPath } from "../../src/mcpprune/prune.js";
 import { registerProject } from "../../src/store/project-registry.js";
+import { claudePids } from "../../src/mcpprune/live.js";
 import { projectDirKey } from "../../src/toolcatalog/transcripts.js";
 
 const SERVERS = { alpha: { command: "a" }, beta: { command: "b" }, "project-brain": { command: "p" } };
@@ -103,6 +104,26 @@ describe("init with the opt-in Jev assist", () => {
     expect(result.projectId.length).toBeGreaterThan(0);
     expect(result.mcpPrune).toBeUndefined();
     expect((await readJson()).projects[a].disabledMcpServers).toBeUndefined();
+  });
+});
+
+describe("claudePids", () => {
+  it("reads executable paths with spaces from comm, and node-run CLIs from args", () => {
+    const comm = [
+      "  101 /Users/u/Library/Application Support/Claude/claude-code/2.1.322/claude",
+      "  102 /Users/u/.local/share/claude/versions/2.1.322",
+      "  103 /opt/homebrew/bin/node",
+      "  104 /opt/homebrew/bin/node",
+      "  105 /bin/zsh",
+    ].join("\n");
+    const args = [
+      "  101 /Users/u/Library/Application Support/Claude/claude-code/2.1.322/claude --resume x",
+      "  102 /Users/u/.local/share/claude/versions/2.1.322 --session-id s --resume r",
+      "  103 node /x/node_modules/@anthropic-ai/claude-agent-sdk/cli.js",
+      "  104 node /x/server.js",
+      "  105 -zsh",
+    ].join("\n");
+    expect(claudePids(comm, args)).toEqual(["101", "102", "103"]);
   });
 });
 
