@@ -15,7 +15,7 @@ import {
 import { getSkillTargetDirs, inspectOwnership, type SkippedTarget } from "../rules/skills.js";
 import { allUnits, type SetupContext, type UnitState } from "../setup/units.js";
 import { computePlan, initialChecked, promptSeed, type PlanRow } from "../setup/plan.js";
-import { loadSelection, saveSelection, membership } from "../setup/selection.js";
+import { loadSelection, saveSelection, membership, isNewUnit, mergeSelection } from "../setup/selection.js";
 import { renderPlan } from "../setup/render.js";
 import { isInteractive } from "../interactive.js";
 import { VERSION } from "../constants.js";
@@ -94,6 +94,16 @@ export interface SetupOptions {
   applySaved?: boolean;
   /** Suppress the plan table (the caller prints its own summary). */
   quiet?: boolean;
+  /**
+   * `setup --new`: offer only the units that shipped after the saved selection was written and
+   * are not on disk, and leave every other unit and every earlier answer exactly as it is.
+   */
+  onlyNew?: boolean;
+  /**
+   * `setup --new --yes`: enable the new units that are on by default, with no prompt. A unit that
+   * is off by default (every opt-in one) is neither enabled nor declined: it stays new.
+   */
+  acceptDefaults?: boolean;
   /**
    * Injectable for testing; defaults to the real `promptUnitSelection` from
    * `src/interactive.js`. Every other prompt in this file is injectable and the
@@ -315,11 +325,11 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
 
   // 5. Inspect every unit BEFORE anything is drawn or written. This is what
   // lets the checklist report disk rather than assumption.
-  const units = allUnits(ctx);
   const selection = await loadSelection(ctx.selectionPath);
 
-  const inspected = await Promise.all(
-    units.map(async (unit) => {
+  const everyUnit = allUnits(ctx);
+  const inspectedAll = await Promise.all(
+    everyUnit.map(async (unit) => {
       const state = await unit.inspect(ctx).catch(() => "absent" as UnitState);
       const seen = membership(selection, unit.id);
       const defaultSelected = (await unit.defaultWhen?.(ctx).catch(() => undefined)) ?? unit.defaultSelected;
@@ -332,9 +342,14 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
         membership: seen,
         chosen: initialChecked(state, seen, defaultSelected, selection !== null),
         seed: promptSeed(state, seen, defaultSelected, selection !== null),
+        defaultSelected,
       };
     })
   );
+  const inspected = options.onlyNew
+    ? inspectedAll.filter((r) => isNewUnit(r.state, r.membership, selection !== null))
+    : inspectedAll;
+  const units = everyUnit.filter((u) => inspected.some((r) => r.id === u.id));
 
   if (!options.quiet) {
     for (const unit of units) {
@@ -359,7 +374,10 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     );
 
   let chosenIds: string[];
-  if (options.applySaved) {
+  if (options.onlyNew && inspected.length === 0) return cancelled();
+  if (options.onlyNew && options.acceptDefaults) {
+    chosenIds = inspected.filter((r) => r.defaultSelected).map((r) => r.id);
+  } else if (options.applySaved) {
     // hasSelection=true, defaultSelected=false: selected -> on, declined -> off,
     // unseen -> on only when already on disk.
     const auto = new Set(units.filter((u) => u.autoOnUpgrade).map((u) => u.id));
@@ -438,11 +456,17 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   // `unseen` so it is offered again once the blocker goes away.
   // Applying a saved selection offers nothing new, so an id never seen stays unseen unless it was
   // installed (and so chosen); otherwise saveSelection would record it as declined.
+  // `--new --yes` decides only what it enabled: an off-by-default unit was never looked at, so it
+  // stays new rather than being recorded as refused.
   const selectableIds = inspected
     .filter((r) => r.state !== "unavailable" && r.state !== "foreign")
     .filter((r) => !options.applySaved || r.membership !== "unseen" || chosen.has(r.id))
+    .filter((r) => !(options.onlyNew && options.acceptDefaults) || chosen.has(r.id))
     .map((r) => r.id);
-  await saveSelection(ctx.selectionPath, chosenIds, selectableIds, VERSION);
+  const saved = options.onlyNew
+    ? mergeSelection(selection, chosenIds.filter((id) => selectableIds.includes(id)), selectableIds)
+    : { selected: chosenIds, allIds: selectableIds };
+  await saveSelection(ctx.selectionPath, saved.selected, saved.allIds, VERSION);
 
   // The SessionStart self-install of the suggest hook must never undo a decline, and a unit left
   // unticked and absent produces no `remove`, so the opt-out is recorded from the final choice.
@@ -516,6 +540,74 @@ export async function probeContext(options: {
   };
 }
 
+export interface NewUnits {
+  /** Units shipped after the saved selection was written and not on disk, in checklist order. */
+  units: { id: string; label: string; description: string }[];
+  /** False when a unit did not answer its inspection in time, so the list may be short. */
+  complete: boolean;
+}
+
+/**
+ * What `setup --new` would offer, for the after-upgrade notice. Inspects only the units the saved
+ * selection never saw, each within `timeoutMs`, because it runs on a prompt hook. No saved
+ * selection means nothing is new: everything would be, and `setup` is the answer to that.
+ */
+export async function findNewUnits(ctx: SetupContext, timeoutMs = 1500): Promise<NewUnits> {
+  const selection = await loadSelection(ctx.selectionPath);
+  if (!selection) return { units: [], complete: true };
+  const unseen = allUnits(ctx).filter((u) => membership(selection, u.id) === "unseen");
+  const states = await Promise.all(
+    unseen.map(
+      (u) =>
+        new Promise<UnitState | "timeout">((resolve) => {
+          const timer = setTimeout(() => resolve("timeout"), timeoutMs);
+          timer.unref?.();
+          u.inspect(ctx).then(
+            (state) => (clearTimeout(timer), resolve(state)),
+            () => (clearTimeout(timer), resolve("absent"))
+          );
+        })
+    )
+  );
+  return {
+    units: unseen
+      .filter((_, i) => states[i] !== "timeout" && isNewUnit(states[i]!, "unseen", true))
+      .map((u) => ({ id: u.id, label: u.label, description: u.description })),
+    complete: !states.includes("timeout"),
+  };
+}
+
+/** `setup --new [--yes]`: the checklist, or the defaults, for the units that are new since the last run. */
+async function executeNew(args: string[], probe: SetupContext, units: SetupOptions["units"]): Promise<void> {
+  const prior = await loadSelection(probe.selectionPath);
+  if (!prior) {
+    console.log("No saved setup selection yet, so nothing is new: run `project-brain setup`.");
+    return;
+  }
+  const yes = args.includes("--yes");
+  if (!yes && units?.mode !== "explicit" && !isInteractive()) {
+    const found = await findNewUnits(probe);
+    if (found.units.length === 0) console.log("Nothing new since your last setup.");
+    else {
+      console.log("New since your last setup, not enabled:");
+      for (const u of found.units) console.log(`  ${u.id}  ${u.label}`);
+      console.log("Run `project-brain setup --new` in a terminal, or pass --with=<ids> (or --yes for the on-by-default ones).");
+    }
+    return;
+  }
+
+  const result = await runSetup({ units, onlyNew: true, acceptDefaults: yes, quiet: yes });
+  if (result.units.length === 0) {
+    console.log("Nothing new since your last setup.");
+    return;
+  }
+  const enabled = result.units.filter((u) => u.action === "install" || u.action === "update");
+  const left = result.units.filter((u) => !u.chosen && u.state === "absent");
+  console.log(enabled.length > 0 ? `Enabled: ${enabled.map((u) => u.id).join(", ")}` : "Nothing enabled.");
+  if (yes && left.length > 0) console.log(`Off by default, left for you to choose: ${left.map((u) => u.id).join(", ")}`);
+  for (const instructions of result.manualInstructions) console.log(`\nManual setup needed:\n${instructions}`);
+}
+
 /** CLI entry point for the setup command. */
 export async function execute(args: string[]): Promise<void> {
   if (args.includes("--apply-saved")) {
@@ -543,6 +635,11 @@ export async function execute(args: string[]): Promise<void> {
   if (units.mode === undefined) {
     console.error(units.error);
     process.exit(1);
+    return;
+  }
+
+  if (args.includes("--new")) {
+    await executeNew(args, probe, units);
     return;
   }
 

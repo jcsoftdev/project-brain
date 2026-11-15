@@ -96,6 +96,8 @@ export interface SuggestDeps {
   claimNotice?: (sessionId: string, kind: "clear" | "compact") => Promise<boolean>;
   /** The one-time "project-brain updated" block for this session, or null. Injectable for tests. */
   upgradeNotice?: (input: HookInput) => Promise<{ text: string; commit: () => Promise<void> } | null>;
+  /** The once-per-upgrade "new setup units" block, or null. Injectable for tests. */
+  whatsNew?: () => Promise<{ text: string; commit: () => Promise<void> } | null>;
   /** Records whether a Jev skill request was answered. Only the CLI entry passes one, so a test never writes the real file. */
   recordHealth?: (ok: boolean) => Promise<unknown>;
 }
@@ -107,6 +109,73 @@ export interface SuggestDeps {
 function alreadySuggested(shown: string, line: string): boolean {
   const name = line.split(" — ")[0]!;
   return `\n${shown}`.includes(`\n${name} — `);
+}
+
+/** At most this many new units are listed by name; the rest are counted. */
+export const WHATS_NEW_LISTED = 5;
+
+/** A unit's description cut to its first clause, short enough for one line of the notice. */
+function firstClause(description: string, max = 90): string {
+  const clause = description.split(/; |\. /)[0]!;
+  if (clause.length <= max) return clause;
+  const cut = clause.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return `${space > 0 ? cut.slice(0, space) : cut}…`;
+}
+
+export interface WhatsNewOptions {
+  dataDir?: string;
+  version?: string;
+  env?: Record<string, string | undefined>;
+  /** The entry point, which decides whether this is the installed binary. Defaults to `Bun.main`. */
+  main?: string;
+  find?: () => Promise<import("./setup.js").NewUnits>;
+}
+
+/**
+ * Printed once per upgrade per machine: the setup units that shipped since the user last chose,
+ * that are neither enabled nor declined, and the one command that offers exactly those.
+ *
+ * Only the installed binary announces. A checkout carries the same version string as the release
+ * it precedes, so a source run would mark that release announced before it was ever installed.
+ * `PROJECT_BRAIN_WHATS_NEW=0` turns it off.
+ */
+export async function whatsNewNoticeFor(options: WhatsNewOptions = {}): Promise<{ text: string; commit: () => Promise<void> } | null> {
+  const env = options.env ?? process.env;
+  if (env.PROJECT_BRAIN_WHATS_NEW === "0") return null;
+  const { isCompiledEntry, FORCE_GLOBAL_WRITES_ENV } = await import("../env/install-origin.js");
+  if (!isCompiledEntry(options.main ?? Bun.main) && env[FORCE_GLOBAL_WRITES_ENV] !== "1") return null;
+
+  const constants = await import("../constants.js");
+  const dir = options.dataDir ?? constants.DATA_DIR;
+  const current = options.version ?? constants.VERSION;
+  const { announcedVersion, markAnnounced } = await import("../setup/selection.js");
+  if ((await announcedVersion(dir)) === current) return null;
+
+  const find =
+    options.find ??
+    (async () => {
+      const { findNewUnits, probeContext } = await import("./setup.js");
+      return findNewUnits(await probeContext());
+    });
+  const found = await find();
+  const commit = () => markAnnounced(dir, current);
+  if (found.units.length === 0) {
+    // Nothing to say for this version; a slow inspection gets another chance on the next prompt.
+    if (found.complete) await commit();
+    return null;
+  }
+
+  const listed = found.units.slice(0, WHATS_NEW_LISTED);
+  const more = found.units.length - listed.length;
+  const count = found.units.length === 1 ? "a setup unit" : `${found.units.length} setup units`;
+  const lines = [
+    `project-brain ${current} has ${count} you have not chosen yet (tell the user once):`,
+    ...listed.map((u) => `- ${u.id}: ${u.label}, ${firstClause(u.description)}`),
+    ...(more > 0 ? [`+${more} more`] : []),
+    "`project-brain setup --new` offers only these (in a terminal; `--with=<ids>` picks without a prompt). Nothing is enabled until chosen.",
+  ];
+  return { text: lines.join("\n"), commit };
 }
 
 /**
@@ -279,15 +348,21 @@ export async function runSuggest(raw: string, deps: SuggestDeps = {}): Promise<v
     };
 
     // Independent of the pickers and of the prompt: it needs no token, no index and no embedding.
-    try {
-      const notice = await (deps.upgradeNotice ?? upgradeNoticeFor)(input);
-      if (notice) {
-        out.push(notice.text);
-        commitNotice = notice.commit;
+    // A test that injects the session notice gets no machine-wide one unless it injects that too.
+    const whatsNew = deps.whatsNew ?? (deps.upgradeNotice ? undefined : () => whatsNewNoticeFor());
+    const commits: (() => Promise<void>)[] = [];
+    for (const take of [() => (deps.upgradeNotice ?? upgradeNoticeFor)(input), whatsNew]) {
+      try {
+        const notice = take ? await take() : null;
+        if (notice) {
+          out.push(notice.text);
+          commits.push(notice.commit);
+        }
+      } catch {
+        // A notice is a courtesy; it must never cost the suggestions.
       }
-    } catch {
-      // A notice is a courtesy; it must never cost the suggestions.
     }
+    if (commits.length > 0) commitNotice = async () => void (await Promise.all(commits.map((c) => c().catch(() => {}))));
 
     if (!prompt.trim() || isTrivialPrompt(prompt)) return await flush(null);
     const projectDir = cwd ?? process.cwd();

@@ -123,6 +123,8 @@ Commands:
   serve              Start MCP server over stdio (default)
   serve --http       Start MCP server over HTTP with bearer auth
   setup              One-time global setup (detect env, register in AI tools)
+                       --new [--yes]  offer only the units shipped since your last setup that you have
+                         neither enabled nor declined; --yes enables the on-by-default ones, never an opt-in
                        --model-routing / --no-model-routing  force the model-routing prompt answer
                        --no-worktree-hook  skip the worktree identity + cleanup hooks
                        --worktree-hook-strict  also block a spawn that never decided about isolation

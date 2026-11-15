@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { writeFileAtomic } from "../atomic-write.js";
 
 /**
  * Where a unit stands with this user.
@@ -79,4 +80,51 @@ export function membership(selection: Selection | null, id: string): Membership 
   if (selection.selected.includes(id)) return "selected";
   if (selection.declined.includes(id)) return "declined";
   return "unseen";
+}
+
+/**
+ * Whether a unit is new to this user: a selection file exists, the unit is in neither of its lists,
+ * and nothing of it is on disk. The selection file is the record of every id the user was offered,
+ * so this needs no per-release list of what shipped when. An installed unit the file never saw
+ * (put there by hand, or by the flow before the file existed) is not news.
+ */
+export function isNewUnit(state: string, seen: Membership, hasSelection: boolean): boolean {
+  return hasSelection && seen === "unseen" && state === "absent";
+}
+
+/**
+ * The ids of a selection merged with the answer for some units only, so a run that offered a
+ * subset (`setup --new`) keeps every earlier choice. `decided` are the ids offered this time;
+ * an id offered and not chosen becomes declined, an id not offered keeps what it was.
+ */
+export function mergeSelection(
+  prior: Selection | null,
+  chosen: string[],
+  decided: string[]
+): { selected: string[]; allIds: string[] } {
+  const offered = new Set(decided);
+  const picked = new Set(chosen);
+  const keptSelected = (prior?.selected ?? []).filter((id) => !offered.has(id));
+  const keptDeclined = (prior?.declined ?? []).filter((id) => !offered.has(id));
+  return {
+    selected: [...keptSelected, ...decided.filter((id) => picked.has(id))],
+    allIds: [...keptSelected, ...keptDeclined, ...decided],
+  };
+}
+
+const announcedPath = (dataDir: string) => join(dataDir, "whats-new.json");
+
+/** The binary version whose new units were last announced on this machine, or null. */
+export async function announcedVersion(dataDir: string): Promise<string | null> {
+  try {
+    const parsed = JSON.parse(await Bun.file(announcedPath(dataDir)).text()) as { announced?: unknown };
+    return typeof parsed.announced === "string" ? parsed.announced : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Records that `version`'s new units were announced, so no other session repeats it. */
+export async function markAnnounced(dataDir: string, version: string): Promise<void> {
+  await writeFileAtomic(announcedPath(dataDir), `${JSON.stringify({ announced: version })}\n`);
 }
