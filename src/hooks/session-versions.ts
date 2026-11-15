@@ -10,11 +10,12 @@
  * Two versions are kept apart because `/compact` and `/clear` reload CLAUDE.md but not the MCP server:
  * `version` is what the rules were last read at, `mcpVersion` is what the server started as.
  *
- * One small file per session under `<dataDir>/sessions/`, written atomically, and one per swap under
- * `<dataDir>/swaps/`. Nothing is shared, so concurrent writers cannot undo each other and the prompt
- * hook reads a single tiny file.
+ * One small file per session under `<dataDir>/sessions/`, written atomically, one per swap under
+ * `<dataDir>/swaps/`, and one per live server under `<dataDir>/servers/`. Nothing is shared, so
+ * concurrent writers cannot undo each other and the prompt hook reads a single tiny file.
  */
 import { join } from "node:path";
+import { rmSync } from "node:fs";
 import { readFile, readdir, realpath, rm, stat, utimes, writeFile, mkdir } from "node:fs/promises";
 import { writeFileAtomic } from "../atomic-write.js";
 import { isNewer } from "../notifier.js";
@@ -150,4 +151,117 @@ export async function serverSwapped(dataDir: string, cwd: string | undefined, ve
   const names = (await readdir(dir).catch(() => [] as string[])).filter((n) => n.endsWith(".json") && Number(n.split("-")[0]) >= since);
   const records = await Promise.all(names.map((n) => readJson<SwapRecord | null>(join(dir, n), null)));
   return records.some((s) => s && s.to === version && s.at >= since && s.cwd === here);
+}
+
+/**
+ * A running MCP server, written by `serve` at startup and removed on exit, so `project-brain status`
+ * can name the version each live server runs. Servers from before this record existed are found
+ * through the process table instead (see {@link staleServers}).
+ */
+export interface ServerRecord {
+  pid: number;
+  version: string;
+  cwd: string;
+  startedAt: number;
+}
+
+/** One row of `ps -Ao pid=,ppid=,etime=,args=`. */
+export interface ProcessRow {
+  pid: number;
+  ppid: number;
+  startedAt: number;
+  args: string;
+}
+
+export interface StaleServer {
+  pid: number;
+  /** Null for a server too old to have recorded itself: older than the installed binary, version unknown. */
+  version: string | null;
+  cwd: string | null;
+  startedAt: number;
+}
+
+const serversDir = (dataDir: string) => join(dataDir, "servers");
+const serverFile = (dataDir: string, pid: number) => join(serversDir(dataDir), `${pid}.json`);
+const isServerFile = (name: string) => /^\d+\.json$/.test(name);
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // Another user's process still exists; only "no such process" means gone.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** Records this server, and drops the records of servers killed before they could remove their own. */
+export async function recordServer(dataDir: string, record: ServerRecord): Promise<void> {
+  const dir = serversDir(dataDir);
+  await mkdir(dir, { recursive: true });
+  await writeFileAtomic(serverFile(dataDir, record.pid), `${JSON.stringify({ ...record, cwd: await realOrSame(record.cwd) })}\n`);
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const gone = names.filter((n) => isServerFile(n) && !alive(Number(n.slice(0, -".json".length))));
+  await Promise.all(gone.map((n) => rm(join(dir, n), { force: true }).catch(() => {})));
+}
+
+/** Synchronous, for an exit handler. */
+export function forgetServer(dataDir: string, pid: number): void {
+  try {
+    rmSync(serverFile(dataDir, pid), { force: true });
+  } catch {
+    /* the next server's startup prunes it */
+  }
+}
+
+export async function readServers(dataDir: string): Promise<ServerRecord[]> {
+  const dir = serversDir(dataDir);
+  const names = (await readdir(dir).catch(() => [] as string[])).filter(isServerFile);
+  const records = await Promise.all(names.map((n) => readJson<ServerRecord | null>(join(dir, n), null)));
+  return records.filter((r): r is ServerRecord => !!r && typeof r.pid === "number" && typeof r.version === "string");
+}
+
+/** `[[dd-]hh:]mm:ss` to seconds. */
+function elapsedSeconds(etime: string): number {
+  const [days, clock] = etime.includes("-") ? etime.split("-", 2) : ["0", etime];
+  const [s = 0, m = 0, h = 0] = clock!.split(":").map(Number).reverse();
+  return Number(days) * 86_400 + h * 3600 + m * 60 + s;
+}
+
+export function parseProcessTable(out: string, now: number): ProcessRow[] {
+  const rows: ProcessRow[] = [];
+  for (const line of out.split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+([\d:-]+)\s+(.+)$/.exec(line);
+    if (!m) continue;
+    const seconds = elapsedSeconds(m[3]!);
+    if (Number.isFinite(seconds)) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), startedAt: now - seconds * 1000, args: m[4]!.trim() });
+  }
+  return rows;
+}
+
+/** `project-brain` (or a platform build of it) with no command or with `serve`: how MCP hosts start it. */
+const SERVE = /^(?:.*[/\\])?project-brain(?:-[a-z0-9-]+?)?(?:\.exe)?(?:\s+serve(?:\s.*)?)?$/;
+
+/**
+ * Live MCP servers that do not run `installed`. A recorded server is judged by its version. A server
+ * in the process table without a record predates recording, so it is older than `installed`. A
+ * process whose child is a server is the hot-swap supervisor relaying to it: the child is judged.
+ */
+export function staleServers(
+  rows: ProcessRow[],
+  records: ServerRecord[],
+  installed: string,
+  isAlive: (pid: number) => boolean = alive
+): StaleServer[] {
+  const recorded = new Map(records.filter((r) => isAlive(r.pid)).map((r) => [r.pid, r]));
+  const unrecorded = rows.filter((r) => !recorded.has(r.pid) && SERVE.test(r.args));
+  const serverPids = new Set([...recorded.keys(), ...unrecorded.map((r) => r.pid)]);
+  const supervisors = new Set(rows.filter((r) => serverPids.has(r.pid)).map((r) => r.ppid));
+
+  const stale: StaleServer[] = [...recorded.values()]
+    .filter((r) => r.version !== installed)
+    .map((r) => ({ pid: r.pid, version: r.version, cwd: r.cwd, startedAt: r.startedAt }));
+  for (const row of unrecorded)
+    if (!supervisors.has(row.pid)) stale.push({ pid: row.pid, version: null, cwd: null, startedAt: row.startedAt });
+  return stale.sort((a, b) => a.startedAt - b.startedAt);
 }

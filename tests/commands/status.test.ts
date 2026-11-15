@@ -83,6 +83,7 @@ function deps(overrides: Partial<StatusDeps> = {}): StatusDeps {
     distTags: async () => ({ latest: "1.0.0", next: "1.0.0" }),
     pendingUnits: async () => ({ pending: [], skipped: [] }),
     holders: async () => () => [],
+    staleServers: async () => [],
     ...overrides,
   };
 }
@@ -176,6 +177,32 @@ describe("project-brain status", () => {
     expect(report.version).toMatchObject({ latest: null, updateAvailable: false, commands: [] });
     expect(report.units).toBeNull();
     expect(offline.exitCode).toBe(0);
+  });
+
+  it("names each MCP server that runs another version than the installed one, and the fix", async () => {
+    const hour = 3_600_000;
+    const { out } = await run(
+      ["--project", "tidy"],
+      deps({
+        staleServers: async () => [
+          { pid: 101, version: "0.9.0", cwd: tidy, startedAt: Date.now() - 5 * 24 * hour },
+          { pid: 102, version: null, cwd: null, startedAt: Date.now() - 3 * hour },
+        ],
+      })
+    );
+    expect(out).toContain(`mcp        MCP server runs 0.9.0, installed 1.0.0 (pid 101, ${tidy}, up 5d)`);
+    expect(out).toContain("MCP server runs an older version, installed 1.0.0 (pid 102, up 3h)");
+    expect(out).toContain("fix: run /mcp reconnect in each of those Claude Code sessions, or restart them");
+    expect(out).not.toContain("All clear");
+  });
+
+  it("finds a live server from its record through the real process table", async () => {
+    const { recordServer } = await import("../../src/hooks/session-versions.js");
+    await recordServer(dataDir, { pid: process.pid, version: "0.9.0", cwd: tidy, startedAt: Date.now() });
+    const { out } = await run(["--project", "tidy", "--json"], deps({ staleServers: defaultStatusDeps().staleServers }));
+    const report = JSON.parse(out) as StatusReport;
+    expect(report.servers).toContainEqual(expect.objectContaining({ pid: process.pid, version: "0.9.0", cwd: tidy }));
+    expect(report.clean).toBe(false);
   });
 
   it("rejects an unknown project id", async () => {

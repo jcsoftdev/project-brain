@@ -5,8 +5,13 @@ const [command, ...args] = process.argv.slice(2);
 // Stdio `serve` runs as a thin supervisor around a worker (`serve --worker`) so a running session can
 // move to a newer binary after `project-brain update` without `/mcp reconnect`. Decided before the
 // preamble below and before anything heavy loads: the supervisor stays small, the worker does the work.
-// Opt-in (BRAIN_MCP_HOT_SWAP=1): the extra process costs ~76 MB per session. By default `serve` runs
-// in-process, as before, and an update is picked up with `/mcp reconnect`.
+// Opt-in (BRAIN_MCP_HOT_SWAP=1). The supervisor's own imports are already minimal (from source it
+// sits at bare-Bun RSS, ~33 MB); its cost comes from the release build, which compiles every module
+// into one bundle that each process parses at start: 39 MB physical footprint (70-84 MB RSS) per
+// session, against 14 MB for an empty compiled Bun program. With `bun build --compile --splitting`
+// the supervisor drops to 16 MB, which would justify making this the default. Until the build does
+// that, `serve` runs in-process by default and an update is picked up with `/mcp reconnect`;
+// check_health and `project-brain status` say when a server runs an older version than installed.
 if (
   (command === undefined || command === "serve") &&
   !args.includes("--http") &&
@@ -242,6 +247,13 @@ Options:
 switch (command) {
   case undefined:
   case "serve": {
+    {
+      // So `project-brain status` can say which version each live server runs.
+      const { recordServer, forgetServer } = await import("./hooks/session-versions.js");
+      const { DATA_DIR, VERSION } = await import("./constants.js");
+      void recordServer(DATA_DIR, { pid: process.pid, version: VERSION, cwd: process.cwd(), startedAt: Date.now() }).catch(() => {});
+      process.on("exit", () => forgetServer(DATA_DIR, process.pid));
+    }
     if (args.includes("--http")) {
       // HTTP transport with bearer-token authentication
       const { parsePort } = await import("./cli-args.js");
