@@ -32,6 +32,7 @@ else {
       if (msg.method === "initialize") out({ id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fake", version: ${JSON.stringify(mode === "lie" ? "0.0.1" : version)} } } });
       else if (msg.method === "whoami") out({ id: msg.id, result: { v: VERSION, pid: process.pid } });
       else if (msg.method === "echo") out({ id: msg.id, result: { v: VERSION, text: msg.params.text } });
+      else if (msg.method === "slow") setTimeout(() => out({ id: msg.id, result: { v: VERSION } }), msg.params.ms);
       else if (msg.method === "notifications/initialized") out({ method: "notifications/message", params: { from: VERSION } });
       else if (msg.method === "burst") {
         // A response and the first half of a notification in ONE write; the rest follows later.
@@ -270,6 +271,22 @@ describe("MCP supervisor", () => {
     h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: "srv-2", result: {} }) + "\n");
     expect(await h.until(() => h.changed() === 1)).toBe(true);
     expect(h.lines.some((l) => l.params?.from === "2.0.0")).toBe(true);
+  }, 30_000);
+
+  it("lets the old worker finish a request already in flight, and only then cuts over", async () => {
+    const h = await boot();
+    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: 800, method: "slow", params: { ms: 1500 } }) + "\n");
+    await h.point(await h.install("2.0.0"));
+    expect(await h.until(async () => (await h.log()).some((l) => l.startsWith("boot 2.0.0")))).toBe(true);
+    await Bun.sleep(600); // the new worker is ready; the request is still being answered
+    expect(h.changed()).toBe(0);
+
+    expect(await h.until(() => h.lines.some((l) => l.id === 800))).toBe(true);
+    expect(h.lines.find((l) => l.id === 800).result).toEqual({ v: "1.0.0" });
+    expect(await h.until(() => h.changed() === 1)).toBe(true);
+    const at = (pred: (l: any) => boolean) => h.lines.findIndex(pred);
+    expect(at((l) => l.method === "notifications/tools/list_changed")).toBeGreaterThan(at((l) => l.id === 800));
+    expect((await h.call("whoami")).v).toBe("2.0.0");
   }, 30_000);
 
   it("gives up on a version after two failed attempts", async () => {
