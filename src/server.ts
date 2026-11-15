@@ -12,6 +12,7 @@ import { register as registerIngest } from "./tools/ingest.js";
 import { register as registerModules } from "./tools/modules.js";
 import { register as registerForget } from "./tools/forget.js";
 import { register as registerHealth } from "./tools/health.js";
+import { installedVersionProbe } from "./server/supervisor-version.js";
 import { register as registerExpand } from "./tools/expand.js";
 import { register as registerFindSymbol } from "./tools/find-symbol.js";
 import { register as registerCallgraph } from "./tools/callgraph.js";
@@ -182,7 +183,8 @@ export async function createServer(options: ServerOptions = {}) {
   registerIngest(server, deps);
   registerModules(server, deps);
   registerForget(server, deps);
-  registerHealth(server, deps);
+  // Taken now, at startup: check_health compares the binary on disk against this moment.
+  registerHealth(server, deps, installedVersionProbe());
   registerExpand(server, deps);
   registerFindSymbol(server, deps);
   registerCallgraph(server, deps);

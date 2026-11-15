@@ -8,15 +8,17 @@ import { measureEmbedLatency, readManifestChunks, readProjectRulesState } from "
 import { readSyncStatus } from "../commands/sync-status.js";
 import { HOOK_TIMEOUT_MS } from "../commands/search.js";
 import { probeReranker } from "../rerank/probe.js";
+import type { InstalledVersionProbe } from "../server/supervisor-version.js";
 
 /** Handle check_health logic (exported for testing). */
 export async function handleHealth(
   args: { project: string },
-  deps: ToolDeps
+  deps: ToolDeps,
+  installedVersion?: InstalledVersionProbe
 ): Promise<ToolResult> {
   const emb = deps.embeddingsFor ? await deps.embeddingsFor(args.project) : deps.embeddings;
 
-  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, rerankerProbe, manifestChunks, lastSync, projectRules, interactiveLane] =
+  const [embeddingsAvailable, chunks, lastError, embedLatencyMs, rerankerProbe, manifestChunks, lastSync, projectRules, interactiveLane, installed] =
     await Promise.all([
       emb.isAvailable(),
       deps.store.countChunks(args.project),
@@ -27,6 +29,7 @@ export async function handleHealth(
       deps.projectRoot ? readSyncStatus(deps.projectRoot) : Promise.resolve(null),
       deps.projectRoot ? readProjectRulesState(deps.projectRoot) : Promise.resolve(undefined),
       deps.probeInteractiveLane ? deps.probeInteractiveLane(emb.model ?? EMBEDDING_MODEL) : Promise.resolve(undefined),
+      installedVersion ? installedVersion().catch(() => null) : Promise.resolve(null),
     ]);
 
   const report = {
@@ -35,6 +38,7 @@ export async function handleHealth(
     model: emb.model ?? EMBEDDING_MODEL,
     chunks,
     version: VERSION,
+    ...(installed ?? {}),
     // `deps.reranker` is only ever set when a token resolved at startup
     // (see createServer) — its presence IS "on", no separate lookup.
     reranker: deps.reranker ? "on" : "off",
@@ -56,7 +60,7 @@ export async function handleHealth(
 }
 
 /** Register check_health tool with MCP server. */
-export function register(server: McpServer, deps: ToolDeps): void {
+export function register(server: McpServer, deps: ToolDeps, installedVersion?: InstalledVersionProbe): void {
   server.registerTool(
     "check_health",
     {
@@ -70,6 +74,8 @@ export function register(server: McpServer, deps: ToolDeps): void {
         model: z.string(),
         chunks: z.number(),
         version: z.string(),
+        installedVersion: z.string().optional(),
+        versionDrift: z.string().optional(),
         reranker: z.enum(["off", "on"]),
         tokenSource: z.enum(["env", "file"]).optional(),
         tokenPath: z.string().optional(),
@@ -109,6 +115,6 @@ export function register(server: McpServer, deps: ToolDeps): void {
       },
       annotations: toolAnnotations("check_health"),
     },
-    async (args) => handleHealth(args, deps)
+    async (args) => handleHealth(args, deps, installedVersion)
   );
 }

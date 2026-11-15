@@ -147,7 +147,8 @@ interface Worker {
   live: boolean;
 }
 
-async function defaultReadVersion(launcher: Launcher): Promise<string | null> {
+/** Runs `<launcher> --version`; null when it fails, times out, or prints no version. */
+export async function readLauncherVersion(launcher: Launcher): Promise<string | null> {
   return await new Promise((resolve) => {
     try {
       const child = spawn(launcher.argv[0], [...launcher.argv.slice(1), "--version"], { stdio: ["ignore", "pipe", "ignore"] });
@@ -176,7 +177,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
   const exit = opts.exit ?? ((code: number) => process.exit(code));
   const args = opts.args ?? [];
   const graceMs = opts.graceMs ?? 30_000;
-  const readVersion = opts.readVersion ?? defaultReadVersion;
+  const readVersion = opts.readVersion ?? readLauncherVersion;
   const clientPid = opts.clientPid ?? (Number(baseEnv.BRAIN_CLIENT_PID) || process.ppid);
 
   return new Promise<number>((finish) => {
