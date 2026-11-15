@@ -102,8 +102,11 @@ export type CommandRunner = (argv: string[], req: RunRequest) => Promise<RunResu
  * below open after `claude` itself is gone.
  */
 export const spawnRunner: CommandRunner = async (argv, req) => {
+  // A Blob lets Bun feed stdin itself: a child that exits before reading (logged out)
+  // then cannot surface EPIPE as an unhandled rejection from a pending FileSink flush,
+  // which is what happens on Linux with a manual write.
   const proc = Bun.spawn(argv, {
-    stdin: "pipe",
+    stdin: new Blob([req.stdin]),
     stdout: "pipe",
     stderr: "pipe",
     env: req.env,
@@ -120,13 +123,6 @@ export const spawnRunner: CommandRunner = async (argv, req) => {
     }
   }, req.timeoutMs);
   try {
-    try {
-      proc.stdin.write(req.stdin);
-      await proc.stdin.end();
-    } catch {
-      // EPIPE: the child exited before reading, e.g. logged out. Its exit code and
-      // output below say why; the write error itself says nothing.
-    }
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
