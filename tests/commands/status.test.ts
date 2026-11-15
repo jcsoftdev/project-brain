@@ -92,7 +92,8 @@ async function run(args: string[], d: StatusDeps): Promise<{ out: string; exitCo
   const log = spyOn(console, "log").mockImplementation((...a: unknown[]) => void logged.push(a.join(" ")));
   const err = spyOn(console, "error").mockImplementation((...a: unknown[]) => void logged.push(a.join(" ")));
   const before = process.exitCode;
-  process.exitCode = undefined;
+  // Bun keeps a previous 0 when undefined is assigned, so start every run from 0 (success).
+  process.exitCode = 0;
   try {
     await execute(args, d);
     return { out: logged.join("\n"), exitCode: process.exitCode as number | undefined };
@@ -174,7 +175,7 @@ describe("project-brain status", () => {
     const report = JSON.parse(offline.out) as StatusReport;
     expect(report.version).toMatchObject({ latest: null, updateAvailable: false, commands: [] });
     expect(report.units).toBeNull();
-    expect(offline.exitCode).toBeUndefined();
+    expect(offline.exitCode).toBe(0);
   });
 
   it("rejects an unknown project id", async () => {
