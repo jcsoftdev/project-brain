@@ -16,6 +16,7 @@ type Mode = "ok" | "crash" | "hang" | "lie" | "proto";
 
 const worker = (version: string, mode: Mode = "ok") => `#!${process.execPath}
 import { appendFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 const VERSION = ${JSON.stringify(version)};
 if (process.argv[2] === "--version") { console.log("project-brain " + VERSION); process.exit(0); }
 const log = (l) => appendFileSync(process.env.FAKE_LOG, l + "\\n");
@@ -64,6 +65,13 @@ else {
       if (msg.method === "initialize") out({ id: msg.id, result: { protocolVersion: ${JSON.stringify(mode === "proto" ? "2024-11-05" : "2025-06-18")}, capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fake", version: ${JSON.stringify(mode === "lie" ? "0.0.1" : version)} } } });
       else if (msg.method?.startsWith("notifications/roots")) log("notif " + VERSION + " " + msg.method);
       else if (msg.method === "whoami") out({ id: msg.id, result: { v: VERSION, pid: process.pid } });
+      // Dies at once while its answer is still on the way: a descendant sharing its stdout writes
+      // the answer after the exit, the order a pipe can deliver in when the exit is reported early.
+      else if (msg.method === "reply-and-die") {
+        const reply = JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { v: VERSION } });
+        spawn("sh", ["-c", 'sleep 0.3; echo "$REPLY"'], { env: { ...process.env, REPLY: reply }, stdio: ["ignore", "inherit", "ignore"] }).unref();
+        process.exit(1);
+      }
       else if (msg.method === "echo") out({ id: msg.id, result: { v: VERSION, text: msg.params.text } });
       // Held until the client says "release": the test decides when it is answered, not a timer.
       else if (msg.method === "slow") held.push(msg.id);
@@ -367,6 +375,20 @@ describe("MCP supervisor", () => {
     expect(await h.until(() => h.changed() === 1)).toBe(true);
     expect(await h.until(() => !h.alive(oldPid!), 10_000)).toBe(true);
     expect((await h.log()).includes("write-end 1.0.0")).toBe(false);
+  }, 60_000);
+
+  it("delivers a response the dying worker already wrote, instead of failing that request", async () => {
+    const h = await boot();
+    await h.point(await h.install("2.0.0"));
+    expect((await h.call("open-ask")).v).toBe("1.0.0"); // busy: the new worker waits, ready
+    expect(await h.until(async () => (await h.log()).includes("initialized 2.0.0"), 30_000)).toBe(true);
+
+    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: 960, method: "reply-and-die", params: {} }) + "\n");
+    expect(await h.until(() => h.changed() === 1)).toBe(true);
+    const reply = h.lines.find((l) => l.id === 960);
+    expect(reply?.error).toBeUndefined();
+    expect(reply?.result?.v).toBe("1.0.0");
+    expect((await h.call("whoami")).v).toBe("2.0.0");
   }, 60_000);
 
   it("promotes the ready worker when the active one dies, and fails its unanswered requests", async () => {

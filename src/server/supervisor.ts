@@ -178,6 +178,9 @@ interface Worker {
 
 const exited = (w: Worker) => w.proc.exitCode !== null || w.proc.signalCode !== null;
 
+/** How long after a worker exits its output may still arrive, before a descendant holding the pipe is ignored. */
+const EXIT_OUTPUT_WAIT_MS = 2000;
+
 /** project-brain's own `--version` line; anything else (another program's version) is not an answer. */
 const VERSION_LINE = /^project-brain (\d+\.\d+\.\d+\S*)\s*$/m;
 
@@ -375,18 +378,42 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         // list_changed it enables, and a half-sent line in this chunk must finish on this worker.
         maybeCutover();
       });
+      // Decide only once the worker has exited AND its stdout has ended: the exit can be reported
+      // while responses it already wrote are still in the pipe, and failing those as "retry" would
+      // make the client repeat a write. A descendant holding the pipe open cannot stall this forever.
+      let exitedAs: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+      let outputEnded = false;
+      let decided = false;
+      const settle = () => {
+        if (decided || !exitedAs || !outputEnded) return;
+        decided = true;
+        onWorkerGone(w, exitedAs.code, exitedAs.signal);
+      };
+      w.proc.stdout!.once("close", () => {
+        outputEnded = true;
+        settle();
+      });
       w.proc.on("exit", (code, signal) => {
         workers.delete(w);
-        if (w.retired || stopping) return;
-        const how = signal ?? `code ${code}`;
-        if (w === active && ready && !exited(ready)) {
-          log(`server ${w.version} exited (${how}); ${ready.version} was ready, so it takes over`);
-          promote();
-          return;
-        }
-        log(`server ${w.version} exited (${how}); closing this connection`);
-        shutdown(code ?? 1);
+        exitedAs = { code, signal };
+        settle();
+        setTimeout(() => {
+          outputEnded = true;
+          settle();
+        }, EXIT_OUTPUT_WAIT_MS).unref?.();
       });
+    };
+
+    const onWorkerGone = (w: Worker, code: number | null, signal: NodeJS.Signals | null) => {
+      if (w.retired || stopping) return;
+      const how = signal ?? `code ${code}`;
+      if (w === active && ready && !exited(ready)) {
+        log(`server ${w.version} exited (${how}); ${ready.version} was ready, so it takes over`);
+        promote();
+        return;
+      }
+      log(`server ${w.version} exited (${how}); closing this connection`);
+      shutdown(code ?? 1);
     };
 
     stdin.on("data", (chunk: Buffer | string) => {
