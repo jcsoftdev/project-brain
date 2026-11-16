@@ -74,9 +74,20 @@ describe("installed version probe", () => {
 
     const i = await install();
     await i.point("0.42.0");
-    const probe = installedVersionProbe({ launcher: i.launcher, running: "0.42.0", readVersion: async () => null });
+    let asked = 0;
+    const probe = installedVersionProbe({ launcher: i.launcher, running: "0.42.0", readVersion: async () => (asked++, null) });
     await i.point("0.45.1");
     expect(await probe()).toBeNull();
+    expect(await probe()).toBeNull();
+    expect(asked).toBe(1); // a binary that will not answer is asked once per change, not per check
+  });
+
+  it("does not flag a server newer than the installed binary: reconnecting would load the older one", async () => {
+    const i = await install();
+    await i.point("0.45.1");
+    const probe = installedVersionProbe({ launcher: i.launcher, running: "0.46.0", supervised: false, readVersion: i.readVersion });
+    await i.point("0.45.0");
+    expect(await probe()).toEqual({ installedVersion: "0.45.0" });
   });
 });
 

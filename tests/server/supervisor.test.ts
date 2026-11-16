@@ -24,6 +24,7 @@ process.on("SIGTERM", () => setTimeout(() => { log("term " + VERSION); process.e
 if (${JSON.stringify(mode)} === "hang") { process.stdin.resume(); }
 else {
   let buf = "";
+  const held = [];
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (c) => {
     buf += c;
@@ -32,8 +33,10 @@ else {
       if (msg.method === "initialize") out({ id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fake", version: ${JSON.stringify(mode === "lie" ? "0.0.1" : version)} } } });
       else if (msg.method === "whoami") out({ id: msg.id, result: { v: VERSION, pid: process.pid } });
       else if (msg.method === "echo") out({ id: msg.id, result: { v: VERSION, text: msg.params.text } });
-      else if (msg.method === "slow") setTimeout(() => out({ id: msg.id, result: { v: VERSION } }), msg.params.ms);
-      else if (msg.method === "notifications/initialized") out({ method: "notifications/message", params: { from: VERSION } });
+      // Held until the client says "release": the test decides when it is answered, not a timer.
+      else if (msg.method === "slow") held.push(msg.id);
+      else if (msg.method === "release") for (const id of held.splice(0)) out({ id, result: { v: VERSION } });
+      else if (msg.method === "notifications/initialized") { log("initialized " + VERSION); out({ method: "notifications/message", params: { from: VERSION } }); }
       else if (msg.method === "burst") {
         // A response and the first half of a notification in ONE write; the rest follows later.
         process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { v: VERSION } }) + "\\n" + '{"jsonrpc":"2.0","method":"notifications/message","params":{"from":"burst-');
@@ -275,11 +278,15 @@ describe("MCP supervisor", () => {
 
   it("lets the old worker finish a request already in flight, and only then cuts over", async () => {
     const h = await boot();
-    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: 800, method: "slow", params: { ms: 1500 } }) + "\n");
+    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: 800, method: "slow", params: {} }) + "\n");
     await h.point(await h.install("2.0.0"));
-    expect(await h.until(async () => (await h.log()).some((l) => l.startsWith("boot 2.0.0")))).toBe(true);
-    await Bun.sleep(600); // the new worker is ready; the request is still being answered
+    // The supervisor sends `initialized` once the new worker answered its handshake: it is ready.
+    expect(await h.until(async () => (await h.log()).includes("initialized 2.0.0"), 30_000)).toBe(true);
+    await Bun.sleep(200); // room for a wrong cutover to show; the request is held until released
     expect(h.changed()).toBe(0);
+    expect(h.lines.some((l) => l.id === 800)).toBe(false);
+
+    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", method: "release" }) + "\n");
 
     expect(await h.until(() => h.lines.some((l) => l.id === 800))).toBe(true);
     expect(h.lines.find((l) => l.id === 800).result).toEqual({ v: "1.0.0" });
@@ -287,7 +294,7 @@ describe("MCP supervisor", () => {
     const at = (pred: (l: any) => boolean) => h.lines.findIndex(pred);
     expect(at((l) => l.method === "notifications/tools/list_changed")).toBeGreaterThan(at((l) => l.id === 800));
     expect((await h.call("whoami")).v).toBe("2.0.0");
-  }, 30_000);
+  }, 60_000);
 
   it("gives up on a version after two failed attempts", async () => {
     const h = await boot({ backoffMs: 50 });

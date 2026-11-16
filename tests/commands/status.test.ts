@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, spyOn } from "bun:test";
 import { join } from "node:path";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -196,13 +196,27 @@ describe("project-brain status", () => {
     expect(out).not.toContain("All clear");
   });
 
-  it("finds a live server from its record through the real process table", async () => {
-    const { recordServer } = await import("../../src/hooks/session-versions.js");
-    await recordServer(dataDir, { pid: process.pid, version: "0.9.0", cwd: tidy, startedAt: Date.now() });
-    const { out } = await run(["--project", "tidy", "--json"], deps({ staleServers: defaultStatusDeps().staleServers }));
-    const report = JSON.parse(out) as StatusReport;
-    expect(report.servers).toContainEqual(expect.objectContaining({ pid: process.pid, version: "0.9.0", cwd: tidy }));
-    expect(report.clean).toBe(false);
+  it("finds a live server from its record through the real process table, and drops a record whose pid is not a server", async () => {
+    const { recordServer, readServers } = await import("../../src/hooks/session-versions.js");
+    // A stand-in server: a script named project-brain, run with `serve`, as the npm shim runs it.
+    const bin = join(base, "fake-bin");
+    await mkdir(bin, { recursive: true });
+    const script = join(bin, "project-brain");
+    await writeFile(script, `#!${process.execPath}\nsetInterval(() => {}, 1000);\n`);
+    await chmod(script, 0o755);
+    const server = Bun.spawn([script, "serve"], { stdio: ["ignore", "ignore", "ignore"] });
+    try {
+      await recordServer(dataDir, { pid: server.pid, version: "0.9.0", cwd: tidy, startedAt: Date.now() });
+      await recordServer(dataDir, { pid: process.pid, version: "0.8.0", cwd: tidy, startedAt: Date.now() });
+      const { out } = await run(["--project", "tidy", "--json"], deps({ staleServers: defaultStatusDeps().staleServers }));
+      const report = JSON.parse(out) as StatusReport;
+      expect(report.servers).toContainEqual(expect.objectContaining({ pid: server.pid, version: "0.9.0", cwd: tidy }));
+      expect(report.servers!.some((s) => s.pid === process.pid)).toBe(false);
+      expect((await readServers(dataDir)).map((r) => r.pid)).toEqual([server.pid]);
+      expect(report.clean).toBe(false);
+    } finally {
+      server.kill(9);
+    }
   });
 
   it("rejects an unknown project id", async () => {

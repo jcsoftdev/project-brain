@@ -8,7 +8,7 @@ import { launcherSignature, readLauncherVersion, resolveLauncher, type Launcher 
 
 export interface InstalledVersion {
   installedVersion: string;
-  /** Present only when the running server and the installed binary differ: both versions and the fix. */
+  /** Present only when the installed binary is newer than the running server: both versions and the fix. */
   versionDrift?: string;
 }
 
@@ -22,10 +22,11 @@ export interface ProbeOptions {
   readVersion?: (launcher: Launcher) => Promise<string | null>;
 }
 
+/** Only an older server is drift: a newer one (run from source) would go back in time on reconnect. */
 export function describeDrift(running: string, installed: string, supervised: boolean): string | undefined {
-  if (running === installed) return undefined;
+  if (!isNewer(installed, running)) return undefined;
   const head = `MCP server runs ${running}, installed ${installed}`;
-  if (supervised && isNewer(installed, running))
+  if (supervised)
     return `${head}: the hot swap moves this session to it at the next idle moment; if this persists, run /mcp reconnect`;
   return `${head}: run /mcp reconnect (or restart Claude Code) to load it`;
 }
@@ -41,18 +42,16 @@ export function installedVersionProbe(opts: ProbeOptions = {}): InstalledVersion
   const supervised = opts.supervised ?? process.argv.includes("--worker");
   const readVersion = opts.readVersion ?? readLauncherVersion;
   const baseline = launcherSignature(launcher.watch);
-  let known: { signature: string; version: string } | null = null;
+  // Per signature, failures included: a binary that hangs on --version costs that wait once, not per call.
+  let known: { signature: string; version: string | null } | null = null;
 
   return async () => {
     const signature = launcherSignature(launcher.watch);
     if (baseline === null || signature === null) return null;
     let installed = running;
     if (signature !== baseline) {
-      if (known?.signature !== signature) {
-        const version = await readVersion(launcher);
-        if (version === null) return null;
-        known = { signature, version };
-      }
+      if (known?.signature !== signature) known = { signature, version: await readVersion(launcher) };
+      if (known.version === null) return null;
       installed = known.version;
     }
     const versionDrift = describeDrift(running, installed, supervised);

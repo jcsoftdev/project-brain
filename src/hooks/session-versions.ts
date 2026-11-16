@@ -153,6 +153,7 @@ export async function serverSwapped(dataDir: string, cwd: string | undefined, ve
   return records.some((s) => s && s.to === version && s.at >= since && s.cwd === here);
 }
 
+
 /**
  * A running MCP server, written by `serve` at startup and removed on exit, so `project-brain status`
  * can name the version each live server runs. Servers from before this record existed are found
@@ -165,11 +166,14 @@ export interface ServerRecord {
   startedAt: number;
 }
 
-/** One row of `ps -Ao pid=,ppid=,etime=,args=`. */
+/** One process, joined from `ps -Ao pid=,ppid=,uid=,etime=,comm=` and `ps -Ao pid=,args=`. */
 export interface ProcessRow {
   pid: number;
   ppid: number;
+  uid: number;
   startedAt: number;
+  /** The executable: a full path on macOS, a name of at most 15 characters on Linux. */
+  comm: string;
   args: string;
 }
 
@@ -183,7 +187,13 @@ export interface StaleServer {
 
 const serversDir = (dataDir: string) => join(dataDir, "servers");
 const serverFile = (dataDir: string, pid: number) => join(serversDir(dataDir), `${pid}.json`);
-const isServerFile = (name: string) => /^\d+\.json$/.test(name);
+const pidOf = (name: string) => (/^\d+\.json$/.test(name) ? Number(name.slice(0, -".json".length)) : null);
+/** A leftover of an interrupted atomic write is removed once it is this old. */
+const TMP_MAX_AGE_MS = 5 * 60_000;
+/** ps reports whole seconds, so a recorded process may appear to start up to a second after its record. */
+const START_SKEW_MS = 2000;
+/** A record written later than this after its process started belongs to some other process. */
+const MAX_STARTUP_MS = 60_000;
 
 function alive(pid: number): boolean {
   try {
@@ -195,14 +205,25 @@ function alive(pid: number): boolean {
   }
 }
 
+/** Drops records `keep` rejects, and temp files an interrupted write left behind. */
+async function prune(dir: string, keep: (pid: number) => boolean, now: number): Promise<void> {
+  const names = await readdir(dir).catch(() => [] as string[]);
+  await Promise.all(
+    names.map(async (n) => {
+      const pid = pidOf(n);
+      const drop =
+        pid !== null ? !keep(pid) : n.endsWith(".tmp") && (await stat(join(dir, n)).then((s) => now - s.mtimeMs > TMP_MAX_AGE_MS, () => false));
+      if (drop) await rm(join(dir, n), { force: true }).catch(() => {});
+    })
+  );
+}
+
 /** Records this server, and drops the records of servers killed before they could remove their own. */
 export async function recordServer(dataDir: string, record: ServerRecord): Promise<void> {
   const dir = serversDir(dataDir);
   await mkdir(dir, { recursive: true });
   await writeFileAtomic(serverFile(dataDir, record.pid), `${JSON.stringify({ ...record, cwd: await realOrSame(record.cwd) })}\n`);
-  const names = await readdir(dir).catch(() => [] as string[]);
-  const gone = names.filter((n) => isServerFile(n) && !alive(Number(n.slice(0, -".json".length))));
-  await Promise.all(gone.map((n) => rm(join(dir, n), { force: true }).catch(() => {})));
+  await prune(dir, (pid) => pid === record.pid || alive(pid), record.startedAt);
 }
 
 /** Synchronous, for an exit handler. */
@@ -216,9 +237,27 @@ export function forgetServer(dataDir: string, pid: number): void {
 
 export async function readServers(dataDir: string): Promise<ServerRecord[]> {
   const dir = serversDir(dataDir);
-  const names = (await readdir(dir).catch(() => [] as string[])).filter(isServerFile);
+  const names = (await readdir(dir).catch(() => [] as string[])).filter((n) => pidOf(n) !== null);
   const records = await Promise.all(names.map((n) => readJson<ServerRecord | null>(join(dir, n), null)));
-  return records.filter((r): r is ServerRecord => !!r && typeof r.pid === "number" && typeof r.version === "string");
+  return records.filter((r): r is ServerRecord => !!r && typeof r.pid === "number" && typeof r.version === "string" && typeof r.startedAt === "number");
+}
+
+/**
+ * The records whose process is still the one that wrote them: a project-brain server, under that pid,
+ * started when the record says. Anything else (a pid recycled after a crash or a reboot) is removed.
+ */
+export async function liveServers(dataDir: string, rows: ProcessRow[], now: number = Date.now()): Promise<ServerRecord[]> {
+  const byPid = new Map(rows.map((r) => [r.pid, r]));
+  const owns = (record: ServerRecord) => {
+    const row = byPid.get(record.pid);
+    if (!row || !isServeCommand(row, true)) return false;
+    const lag = record.startedAt - row.startedAt;
+    return lag >= -START_SKEW_MS && lag <= MAX_STARTUP_MS;
+  };
+  const live = (await readServers(dataDir)).filter(owns);
+  const kept = new Set(live.map((r) => r.pid));
+  await prune(serversDir(dataDir), (pid) => kept.has(pid), now);
+  return live;
 }
 
 /** `[[dd-]hh:]mm:ss` to seconds. */
@@ -228,40 +267,80 @@ function elapsedSeconds(etime: string): number {
   return Number(days) * 86_400 + h * 3600 + m * 60 + s;
 }
 
-export function parseProcessTable(out: string, now: number): ProcessRow[] {
+/** Joins the two ps reads by pid; `comm` and `args` are last in their read, so spaces in them survive. */
+export function parseProcessTable(meta: string, args: string, now: number): ProcessRow[] {
+  const argsByPid = new Map<number, string>();
+  for (const line of args.split("\n")) {
+    const m = /^\s*(\d+)\s+(.+)$/.exec(line);
+    if (m) argsByPid.set(Number(m[1]), m[2]!.trim());
+  }
   const rows: ProcessRow[] = [];
-  for (const line of out.split("\n")) {
-    const m = /^\s*(\d+)\s+(\d+)\s+([\d:-]+)\s+(.+)$/.exec(line);
+  for (const line of meta.split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([\d:-]+)\s+(.+)$/.exec(line);
     if (!m) continue;
-    const seconds = elapsedSeconds(m[3]!);
-    if (Number.isFinite(seconds)) rows.push({ pid: Number(m[1]), ppid: Number(m[2]), startedAt: now - seconds * 1000, args: m[4]!.trim() });
+    const pid = Number(m[1]);
+    const seconds = elapsedSeconds(m[4]!);
+    if (!Number.isFinite(seconds)) continue;
+    rows.push({ pid, ppid: Number(m[2]), uid: Number(m[3]), startedAt: now - seconds * 1000, comm: m[5]!.trim(), args: argsByPid.get(pid) ?? m[5]!.trim() });
   }
   return rows;
 }
 
-/** `project-brain` (or a platform build of it) with no command or with `serve`: how MCP hosts start it. */
-const SERVE = /^(?:.*[/\\])?project-brain(?:-[a-z0-9-]+?)?(?:\.exe)?(?:\s+serve(?:\s.*)?)?$/;
+const basename = (path: string) => path.split(/[/\\]/).pop() ?? path;
+/** The release binary, or the npm platform package's `project-brain-native` that the shim runs. */
+const BINARY = /^project-brain(-native)?(\.exe)?$/;
+const INTERPRETER = /^(bun|node)(\.exe)?$/;
+/** What follows the program on a server's command line: nothing, or `serve` and its flags. */
+const SERVE_TAIL = /^\s*(serve(\s.*)?)?$/;
 
 /**
- * Live MCP servers that do not run `installed`. A recorded server is judged by its version. A server
- * in the process table without a record predates recording, so it is older than `installed`. A
- * process whose child is a server is the hot-swap supervisor relaying to it: the child is judged.
+ * Whether a process is a project-brain MCP server, judged by its executable: the `project-brain`
+ * binary, or bun/node running the npm shim (a script named `project-brain`), started with no command
+ * or with `serve`. `withSource` also accepts bun running a checkout's `src/cli.ts`, which only a
+ * record can vouch for: another project's `src/cli.ts` looks the same.
  */
-export function staleServers(
-  rows: ProcessRow[],
-  records: ServerRecord[],
-  installed: string,
-  isAlive: (pid: number) => boolean = alive
-): StaleServer[] {
-  const recorded = new Map(records.filter((r) => isAlive(r.pid)).map((r) => [r.pid, r]));
-  const unrecorded = rows.filter((r) => !recorded.has(r.pid) && SERVE.test(r.args));
+export function isServeCommand(row: Pick<ProcessRow, "comm" | "args">, withSource = false): boolean {
+  const exe = basename(row.comm);
+  if (BINARY.test(exe)) {
+    const at = /project-brain(-native)?(\.exe)?(?=\s|$)/.exec(row.args);
+    return at !== null && SERVE_TAIL.test(row.args.slice(at.index + at[0].length));
+  }
+  if (!INTERPRETER.test(exe)) return false;
+  const afterInterpreter = row.args.startsWith(row.comm) ? row.args.slice(row.comm.length) : row.args.replace(/^\S+/, "");
+  const script = withSource ? /^\s*(?:.*?[/\\])?(project-brain|src[/\\]cli\.[jt]s)(?=\s|$)/ : /^\s*(?:.*?[/\\])?project-brain(?=\s|$)/;
+  const m = script.exec(afterInterpreter);
+  return m !== null && SERVE_TAIL.test(afterInterpreter.slice(m[0].length));
+}
+
+export interface StaleOptions {
+  /** Only this user's processes count; another user's servers are not this user's to reconnect. */
+  uid?: number;
+  /**
+   * When the installed binary was put in place (its ctime). A server with no record that started
+   * after it runs the installed code from another HOME, so only earlier ones are reported. Null when
+   * unknown: then servers without a record are not reported at all.
+   */
+  installedAt: number | null;
+}
+
+/**
+ * Live MCP servers older than `installed`. A recorded server (validated by {@link liveServers}) is
+ * judged by its version. A server in the process table without a record predates recording, so it
+ * is older. A process whose child is a server is the hot-swap supervisor relaying to it: the child is
+ * judged.
+ */
+export function staleServers(rows: ProcessRow[], records: ServerRecord[], installed: string, opts: StaleOptions): StaleServer[] {
+  const recorded = new Map(records.map((r) => [r.pid, r]));
+  const mine = rows.filter((r) => opts.uid === undefined || r.uid === opts.uid);
+  const unrecorded = mine.filter((r) => !recorded.has(r.pid) && isServeCommand(r));
   const serverPids = new Set([...recorded.keys(), ...unrecorded.map((r) => r.pid)]);
   const supervisors = new Set(rows.filter((r) => serverPids.has(r.pid)).map((r) => r.ppid));
 
-  const stale: StaleServer[] = [...recorded.values()]
-    .filter((r) => r.version !== installed)
+  const stale: StaleServer[] = records
+    .filter((r) => isNewer(installed, r.version))
     .map((r) => ({ pid: r.pid, version: r.version, cwd: r.cwd, startedAt: r.startedAt }));
-  for (const row of unrecorded)
-    if (!supervisors.has(row.pid)) stale.push({ pid: row.pid, version: null, cwd: null, startedAt: row.startedAt });
+  if (opts.installedAt !== null)
+    for (const row of unrecorded)
+      if (!supervisors.has(row.pid) && row.startedAt < opts.installedAt) stale.push({ pid: row.pid, version: null, cwd: null, startedAt: row.startedAt });
   return stale.sort((a, b) => a.startedAt - b.startedAt);
 }

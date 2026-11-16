@@ -668,7 +668,7 @@ Everything left pending across every registered project, in one read-only report
 project-brain status [--json] [--project <id>]
 ```
 
-For each project it lists commits not yet pushed (a branch ahead of its upstream, or a local branch with no upstream that has commits not on the default branch), uncommitted changes in the main checkout, and linked worktrees that `worktree finish` would accept (merged, clean, idle). Globally it lists setup units that are available but not enabled (ones you declined are left out), and compares the installed version with npm's `latest` and `next` dist-tags, flagging when `latest` lags `next`, and lists live MCP servers that run another version than the installed one. Each pending item comes with the command that resolves it. A clean project prints nothing; when nothing at all is pending it prints one `All clear` line. Repositories with no remote are not checked for unpushed commits, and the npm lookup gives up after 3 s.
+For each project it lists commits not yet pushed (a branch ahead of its upstream, or a local branch with no upstream that has commits not on the default branch), uncommitted changes in the main checkout, and linked worktrees that `worktree finish` would accept (merged, clean, idle). Globally it lists setup units that are available but not enabled (ones you declined are left out), and compares the installed version with npm's `latest` and `next` dist-tags, flagging when `latest` lags `next`, and lists your live MCP servers that run an older version than the installed one. Each pending item comes with the command that resolves it. A clean project prints nothing; when nothing at all is pending it prints one `All clear` line. Repositories with no remote are not checked for unpushed commits, and the npm lookup gives up after 3 s.
 
 ### `bench` — measure retrieval quality
 
@@ -781,7 +781,7 @@ What reaches Claude Code sessions that are already open:
 - **CLAUDE.md** is only read at launch, so the first prompt after an update shows a one-time notice (`project-brain updated X → Y`) with the current model-routing guidance.
 - **The MCP server** is not reloaded by Claude Code. By default the same notice tells you to run `/mcp reconnect all` (or `/mcp`) to load the new tools.
 
-Whenever a server is still on old code, the `check_health` tool says so in its `versionDrift` field (`MCP server runs 0.42.0, installed 0.45.1: run /mcp reconnect ...`), and `project-brain status` lists every live MCP server that runs another version than the installed one, by pid, with the same fix. Each server records its version under `~/.project-brain/servers/` while it runs; a server too old to have done that is still found in the process table and reported as running an older version.
+Whenever a server is still on old code, the `check_health` tool says so in its `versionDrift` field (`MCP server runs 0.42.0, installed 0.45.1: run /mcp reconnect ...`), and `project-brain status` lists every live MCP server of yours that runs an older version than the installed one, by pid, with the same fix. Each server records its version under `~/.project-brain/servers/` while it runs, and a record counts only while its pid is still that server; a server too old to have recorded itself is found in the process table and reported when it started before the installed binary was put in place. Without `ps` (Windows) status leaves servers out.
 
 #### Optional: automatic MCP hot swap
 
