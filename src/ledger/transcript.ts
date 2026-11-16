@@ -3,7 +3,7 @@ import { open, type FileHandle } from "node:fs/promises";
 /**
  * The injection ledger: one pass over a Claude Code transcript (JSONL) that records what the
  * prompt-context hook injected, which of those hits the model went on to use, and what the
- * session's MCP set put into context. Pure: text in, ledger out; reading files is the caller's.
+ * session's MCP set put into context. Read-only: it never writes and never sends anything.
  */
 
 export const INJECTION_OPEN = "<project-brain: relevant context for this prompt>";
@@ -52,9 +52,18 @@ export interface TranscriptLedger {
   lastAt?: number;
   injections: Injection[];
   hits: HitUsage[];
-  /** MCP tool names and server instructions the session's deltas added, by server. */
+  /**
+   * The MCP set's context footprint, by server: tool names and instructions present at once in the
+   * largest segment between compactions (each compaction re-announces the whole set).
+   */
   mcp: Record<string, McpServerCost>;
+  /** Each server's own largest footprint in any segment, to price it where it was pruned. */
+  mcpServerMax: Record<string, McpServerCost>;
+  compactions: number;
 }
+
+/** Claude Code's spelling of a server inside `mcp__<server>__tool`: anything but [A-Za-z0-9_-] becomes `_`. */
+export const mcpServerKey = (name: string): string => name.replace(/[^a-zA-Z0-9_-]/g, "_");
 
 const HIT_LINE = /^- (.+?)(?: › .+?)?(?: \(L(\d+)-(\d+)\))? \[score (\d+(?:\.\d+)?)\]$/;
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -90,29 +99,48 @@ function injectedBlock(attachment: unknown): string | null {
   const text = values.find((v): v is string => typeof v === "string" && v.includes(INJECTION_OPEN));
   if (!text) return null;
   const start = text.indexOf(INJECTION_OPEN);
-  const end = text.indexOf(INJECTION_CLOSE, start);
-  return text.slice(start, end < 0 ? undefined : end + INJECTION_CLOSE.length);
+  // Only a closing tag alone on its line ends the block: a snippet may quote one, indented.
+  const close = `\n${INJECTION_CLOSE}`;
+  for (let end = text.indexOf(close, start); end >= 0; end = text.indexOf(close, end + 1)) {
+    const after = end + close.length;
+    if (after === text.length || text[after] === "\n" || text[after] === "\r") return text.slice(start, after);
+  }
+  return text.slice(start);
 }
 
-function addMcp(mcp: Record<string, McpServerCost>, server: string, chars: number, tools: number): void {
-  const cost = (mcp[server] ??= { tools: 0, chars: 0 });
-  cost.tools += tools;
-  cost.chars += chars;
-}
+/** The MCP set as it stands in one segment between compactions: removals take effect, re-adds replace. */
+class McpSegment {
+  readonly tools = new Map<string, { server: string; chars: number }>();
+  readonly instructions = new Map<string, number>();
 
-/** Deltas only ever append to context, so a name removed later still cost what it added. */
-function recordDelta(mcp: Record<string, McpServerCost>, a: Record<string, unknown>): void {
-  if (a.type === "deferred_tools_delta") {
-    const lines = strings(a.addedLines);
-    strings(a.addedNames).forEach((name, i) => {
-      const server = MCP_TOOL.exec(name)?.[1];
-      if (server) addMcp(mcp, server, (lines[i] ?? name).length + 1, 1);
-    });
-  } else if (a.type === "mcp_instructions_delta") {
-    const blocks = strings(a.addedBlocks);
-    strings(a.addedNames).forEach((name, i) => addMcp(mcp, name, (blocks[i] ?? "").length, 0));
+  apply(a: Record<string, unknown>): void {
+    if (a.type === "deferred_tools_delta") {
+      for (const name of strings(a.removedNames)) this.tools.delete(name);
+      const lines = strings(a.addedLines);
+      strings(a.addedNames).forEach((name, i) => {
+        const server = MCP_TOOL.exec(name)?.[1];
+        if (server) this.tools.set(name, { server: mcpServerKey(server), chars: (lines[i] ?? name).length + 1 });
+      });
+    } else if (a.type === "mcp_instructions_delta") {
+      for (const name of strings(a.removedNames)) this.instructions.delete(mcpServerKey(name));
+      const blocks = strings(a.addedBlocks);
+      strings(a.addedNames).forEach((name, i) => this.instructions.set(mcpServerKey(name), (blocks[i] ?? "").length));
+    }
+  }
+
+  byServer(): Record<string, McpServerCost> {
+    const out: Record<string, McpServerCost> = {};
+    for (const { server, chars } of this.tools.values()) {
+      const c = (out[server] ??= { tools: 0, chars: 0 });
+      c.tools++;
+      c.chars += chars;
+    }
+    for (const [server, chars] of this.instructions) (out[server] ??= { tools: 0, chars: 0 }).chars += chars;
+    return out;
   }
 }
+
+const total = (by: Record<string, McpServerCost>): number => Object.values(by).reduce((n, c) => n + c.chars, 0);
 
 interface Usage {
   line: number;
@@ -158,7 +186,9 @@ function used(u: Usage, source: string): boolean {
  * Lines that can hold anything the ledger reads; the rest only carry a timestamp. A tool result
  * matters only when it answers a project-brain call, so those are matched by the call's id instead.
  */
-const RELEVANT = [INJECTION_OPEN, '"tool_use"', '"type":"deferred_tools_delta"', '"type":"mcp_instructions_delta"'].map((m) => Buffer.from(m));
+const RELEVANT = [INJECTION_OPEN, '"tool_use"', '"type":"deferred_tools_delta"', '"type":"mcp_instructions_delta"', '"subtype":"compact_boundary"'].map((m) =>
+  Buffer.from(m)
+);
 const TIMESTAMP = Buffer.from('"timestamp":"');
 const NEWLINE = 0x0a;
 
@@ -194,8 +224,9 @@ class MarkerIndex {
  * never hold it whole. Lines are searched as bytes and only the ones that matter are decoded.
  */
 export class TranscriptReader {
-  private readonly ledger: TranscriptLedger = { injections: [], hits: [], mcp: {} };
+  private readonly ledger: TranscriptLedger = { injections: [], hits: [], mcp: {}, mcpServerMax: {}, compactions: 0 };
   private readonly usages: Usage[] = [];
+  private segment = new McpSegment();
   private readonly brainCalls = new Set<string>();
   private brainIds: Buffer[] = [];
 
@@ -252,14 +283,29 @@ export class TranscriptReader {
         const at = typeof o.timestamp === "string" ? Date.parse(o.timestamp) : NaN;
         if (hits.length > 0) ledger.injections.push({ line: offset, ...(Number.isFinite(at) ? { at } : {}), chars: block.length, hits });
       }
-      recordDelta(ledger.mcp, o.attachment);
+      this.segment.apply(o.attachment);
+    } else if (o.type === "system" && o.subtype === "compact_boundary") {
+      this.closeSegment();
+      this.segment = new McpSegment();
+      ledger.compactions++;
     } else {
       for (const u of usagesOf(o, offset, this.brainCalls)) this.usages.push({ ...u, text: u.text.slice(0, USAGE_TEXT_MAX) });
     }
   }
 
-  finish(): TranscriptLedger {
+  private closeSegment(): void {
+    const by = this.segment.byServer();
+    if (total(by) > total(this.ledger.mcp)) this.ledger.mcp = by;
+    for (const [server, cost] of Object.entries(by)) {
+      if (cost.chars > (this.ledger.mcpServerMax[server]?.chars ?? -1)) this.ledger.mcpServerMax[server] = cost;
+    }
+  }
+
+  /** `since`: injections stamped before it are left out, with the hits only they brought. */
+  finish(since = -Infinity): TranscriptLedger {
     const ledger = this.ledger;
+    this.closeSegment();
+    ledger.injections = ledger.injections.filter((i) => i.at === undefined || i.at >= since);
     const distinct = new Map<string, HitUsage & { first: number }>();
     for (const injection of ledger.injections) {
       for (const hit of injection.hits) {
@@ -285,33 +331,35 @@ export class TranscriptReader {
 const withNewline = (bytes: Buffer): Buffer => (bytes.length > 0 && bytes[bytes.length - 1] !== NEWLINE ? Buffer.concat([bytes, Buffer.from("\n")]) : bytes);
 
 /** A transcript already in memory. `line` positions are byte offsets: ordered, not line numbers. */
-export function parseTranscript(input: string | Uint8Array): TranscriptLedger {
+export function parseTranscript(input: string | Uint8Array, since?: number): TranscriptLedger {
   const bytes = typeof input === "string" ? Buffer.from(input) : Buffer.from(input.buffer, input.byteOffset, input.byteLength);
   const reader = new TranscriptReader();
   reader.feed(withNewline(bytes), 0);
-  return reader.finish();
+  return reader.finish(since);
 }
 
 export const READ_CHUNK_BYTES = 1024 * 1024;
 
 /**
- * The lines decoded from a large transcript are garbage at once, but the collector lets them pile up
- * for the whole file; collecting this often keeps the peak flat for a few percent of the time.
+ * The lines decoded from transcripts are garbage at once, but the collector lets them pile up across
+ * a large file or many small ones; collecting this often, counted across files, keeps the peak flat
+ * for a few percent of the time.
  */
 const GC_EVERY_BYTES = 4 * 1024 * 1024;
-
-/** One read buffer for every file: a fresh one per transcript is freed only when the GC gets to it. */
-let sharedChunk: Buffer | null = null;
-const chunkBuffer = (size: number): Buffer => {
-  if (sharedChunk?.length !== size) sharedChunk = Buffer.allocUnsafe(size);
-  return sharedChunk;
-};
+let readSinceCollect = 0;
+function collectEvery(bytes: number): void {
+  readSinceCollect += bytes;
+  if (readSinceCollect < GC_EVERY_BYTES) return;
+  readSinceCollect = 0;
+  Bun.gc(true);
+}
 
 /**
  * A transcript on disk, read in fixed-size chunks into one reused buffer: memory stays at the chunk
  * plus the longest single line, whatever the file's size. Null when the file cannot be read.
  */
-export async function parseTranscriptFile(path: string, chunkBytes = READ_CHUNK_BYTES): Promise<TranscriptLedger | null> {
+export async function parseTranscriptFile(path: string, opts: { since?: number; chunkBytes?: number } = {}): Promise<TranscriptLedger | null> {
+  const { since, chunkBytes = READ_CHUNK_BYTES } = opts;
   let handle: FileHandle;
   try {
     handle = await open(path, "r");
@@ -319,7 +367,7 @@ export async function parseTranscriptFile(path: string, chunkBytes = READ_CHUNK_
     return null;
   }
   const reader = new TranscriptReader();
-  const chunk = chunkBuffer(chunkBytes);
+  const chunk = Buffer.allocUnsafe(chunkBytes);
   /** Copies of a line that spans chunks, fed once its newline arrives. */
   let pending: Buffer[] = [];
   let pendingStart = 0;
@@ -347,10 +395,10 @@ export async function parseTranscriptFile(path: string, chunkBytes = READ_CHUNK_
         pendingStart = position + tail;
       }
       position += bytesRead;
-      if (position % GC_EVERY_BYTES < bytesRead) Bun.gc(true);
+      collectEvery(bytesRead);
     }
     if (pending.length > 0) reader.feed(withNewline(Buffer.concat(pending)), pendingStart);
-    return reader.finish();
+    return reader.finish(since);
   } catch {
     return null;
   } finally {

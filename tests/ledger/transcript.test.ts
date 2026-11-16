@@ -3,8 +3,8 @@ import { usageSignal } from "../../src/ledger/signal.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mentions, parseInjection, parseTranscript, parseTranscriptFile } from "../../src/ledger/transcript.js";
-import { injection, instructionsDelta, toolResult, toolsDelta, toolUse, transcript, userPrompt } from "./fixtures.js";
+import { mcpServerKey, mentions, parseInjection, parseTranscript, parseTranscriptFile } from "../../src/ledger/transcript.js";
+import { compactBoundary, injection, instructionsDelta, instructionsRemoved, toolResult, toolsDelta, toolUse, transcript, userPrompt } from "./fixtures.js";
 
 const o = { sessionId: "s-1", cwd: "/work/app", at: "2026-11-10T10:00:00.000Z" };
 const later = { ...o, at: "2026-11-10T10:05:00.000Z" };
@@ -81,17 +81,77 @@ describe("parseTranscript", () => {
     expect(hits).toEqual([{ source: "src/a.ts", startLine: 1, score: 0.72, injections: 2, used: ["read"] }]);
   });
 
-  it("sums what MCP deltas added per server, builtin deferred tools and later removals aside", () => {
+  it("keys a server's tools and its instructions under one name, as Claude Code spells it in tool names", () => {
+    const cases: Array<[string, string, string]> = [
+      ["plugin:engram:engram", "mcp__plugin_engram_engram__mem_save", "plugin_engram_engram"],
+      ["claude.ai Claude Docs", "mcp__claude_ai_Claude_Docs__create", "claude_ai_Claude_Docs"],
+      ["chrome-devtools", "mcp__chrome-devtools__click", "chrome-devtools"],
+      ["project-brain", "mcp__project-brain__search_context", "project-brain"],
+    ];
+    for (const [display, tool, key] of cases) {
+      expect(mcpServerKey(display)).toBe(key);
+      const { mcp } = parseTranscript(transcript([toolsDelta(o, [tool]), instructionsDelta(o, { [display]: "how to use it" })]));
+      expect(Object.keys(mcp)).toEqual([key]);
+      expect(mcp[key]).toEqual({ tools: 1, chars: tool.length + 1 + "how to use it".length });
+    }
+  });
+
+  it("measures the MCP set as it stands, builtin deferred tools aside and removals applied", () => {
     const text = transcript([
       toolsDelta(o, ["WebFetch", "mcp__alpha__one", "mcp__alpha__two", "mcp__beta__x"]),
-      instructionsDelta(o, { alpha: "use alpha well" }),
+      instructionsDelta(o, { alpha: "use alpha well", beta: "beta notes" }),
       toolsDelta(later, [], ["mcp__alpha__two"]),
+      instructionsRemoved(later, ["beta"]),
     ]);
     const { mcp } = parseTranscript(text);
     expect(mcp).toEqual({
-      alpha: { tools: 2, chars: "mcp__alpha__one".length + 1 + "mcp__alpha__two".length + 1 + "use alpha well".length },
+      alpha: { tools: 1, chars: "mcp__alpha__one".length + 1 + "use alpha well".length },
       beta: { tools: 1, chars: "mcp__beta__x".length + 1 },
     });
+  });
+
+  it("counts the set once across compactions, which re-announce it, keeping the largest segment", () => {
+    const all = ["mcp__alpha__one", "mcp__alpha__two", "mcp__beta__x"];
+    const text = transcript([
+      toolsDelta(o, all),
+      instructionsDelta(o, { alpha: "use alpha well" }),
+      compactBoundary(later),
+      toolsDelta(later, all),
+      instructionsDelta(later, { alpha: "use alpha well" }),
+      compactBoundary(later),
+      toolsDelta(later, ["mcp__alpha__one"]),
+    ]);
+    const ledger = parseTranscript(text);
+    expect(ledger.compactions).toBe(2);
+    const alpha = "mcp__alpha__one".length + 1 + "mcp__alpha__two".length + 1 + "use alpha well".length;
+    expect(ledger.mcp).toEqual({ alpha: { tools: 2, chars: alpha }, beta: { tools: 1, chars: "mcp__beta__x".length + 1 } });
+    expect(ledger.mcpServerMax.alpha).toEqual({ tools: 2, chars: alpha });
+  });
+
+  it("ends the block only at a closing tag alone on its line, not one quoted in a snippet", () => {
+    const block = [
+      "<project-brain: relevant context for this prompt>",
+      "- src/a.ts [score 0.80]",
+      "  const close = \"</project-brain>\";",
+      "  </project-brain>",
+      "- src/b.ts [score 0.70]",
+      "  two",
+      "</project-brain>",
+    ].join("\n");
+    const line = JSON.stringify({ type: "attachment", sessionId: "s", cwd: "/w", attachment: { type: "hook_success", hookEvent: "UserPromptSubmit", content: `${block}\ntrailing hook text` } });
+    const [injection] = parseTranscript(transcript([line])).injections;
+    expect(injection!.hits.map((h) => h.source)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(injection!.chars).toBe(block.length);
+  });
+
+  it("leaves out injections stamped before the window, with the hits only they brought", () => {
+    const text = transcript([
+      injection(o, [{ source: "src/old.ts", score: 0.8 }]),
+      injection(later, [{ source: "src/new.ts", score: 0.7 }]),
+    ]);
+    const ledger = parseTranscript(text, Date.parse(later.at));
+    expect(ledger.injections).toHaveLength(1);
+    expect(ledger.hits.map((h) => h.source)).toEqual(["src/new.ts"]);
   });
 
   it("skips malformed lines and ignores other hooks' output", () => {
@@ -119,7 +179,7 @@ describe("parseTranscriptFile", () => {
       await writeFile(path, text);
       const whole = parseTranscript(text);
       expect(whole.hits.map((h) => h.used)).toEqual([["read"], ["bash"]]);
-      for (const chunk of [7, 64, 1024 * 1024]) expect(await parseTranscriptFile(path, chunk)).toEqual(whole);
+      for (const chunkBytes of [7, 64, 1024 * 1024]) expect(await parseTranscriptFile(path, { chunkBytes })).toEqual(whole);
       expect(await parseTranscriptFile(join(dir, "missing.jsonl"))).toBeNull();
     } finally {
       await rm(dir, { recursive: true, force: true });

@@ -67,4 +67,10 @@ export const instructionsDelta = (o: LineOpts, blocks: Record<string, string>) =
     attachment: { type: "mcp_instructions_delta", addedNames: Object.keys(blocks), addedBlocks: Object.values(blocks), removedNames: [] },
   });
 
+export const instructionsRemoved = (o: LineOpts, names: string[]) =>
+  envelope(o, "attachment", { attachment: { type: "mcp_instructions_delta", addedNames: [], removedNames: names } });
+
+export const compactBoundary = (o: LineOpts) =>
+  envelope(o, "system", { subtype: "compact_boundary", content: "Conversation compacted", level: "info", compactMetadata: { trigger: "auto" } });
+
 export const transcript = (lines: string[]): string => `${lines.join("\n")}\n`;
