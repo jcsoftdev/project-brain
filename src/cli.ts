@@ -42,6 +42,8 @@ const SKIPS_PREAMBLE = [
   "__extract-selftest",
   "--version",
   "-v",
+  // Promises to send nothing and write nothing: no update check, skill refresh or config repair.
+  "stats",
 ];
 
 if (!SKIPS_PREAMBLE.includes(command as string)) {
