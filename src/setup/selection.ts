@@ -1,5 +1,7 @@
-import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, open, stat, utimes } from "node:fs/promises";
+import { join } from "node:path";
+import { writeFileAtomic } from "../atomic-write.js";
 
 /**
  * Where a unit stands with this user.
@@ -69,8 +71,21 @@ export async function saveSelection(
     declined: allIds.filter((id) => !chosen.has(id)),
   };
 
-  await mkdir(dirname(path), { recursive: true });
-  await Bun.write(path, `${JSON.stringify(payload, null, 2)}\n`);
+  // Atomic: the prompt hook reads this file, and a half-written one would read as "no selection".
+  await writeFileAtomic(path, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
+/**
+ * The saved selection, telling a file that is not there (`missing`: setup never ran) from one that
+ * could not be read (`unreadable`: corrupt, or caught mid-write). Only the first means "nothing is
+ * new"; the second means "unknown, ask again later".
+ */
+export async function readSelection(
+  path: string
+): Promise<{ kind: "ok"; selection: Selection } | { kind: "missing" } | { kind: "unreadable" }> {
+  if (!existsSync(path)) return { kind: "missing" };
+  const selection = await loadSelection(path);
+  return selection ? { kind: "ok", selection } : { kind: "unreadable" };
 }
 
 /** Where one unit stands. Everything is `unseen` when nothing was ever saved. */
@@ -79,4 +94,118 @@ export function membership(selection: Selection | null, id: string): Membership 
   if (selection.selected.includes(id)) return "selected";
   if (selection.declined.includes(id)) return "declined";
   return "unseen";
+}
+
+/**
+ * Whether a unit is new to this user: a selection file exists, the unit is in neither of its lists,
+ * and nothing of it is on disk. The selection file is the record of every id the user was offered,
+ * so this needs no per-release list of what shipped when. An installed unit the file never saw
+ * (put there by hand, or by the flow before the file existed) is not news.
+ */
+export function isNewUnit(state: string, seen: Membership, hasSelection: boolean): boolean {
+  return hasSelection && seen === "unseen" && state === "absent";
+}
+
+/**
+ * The ids of a selection merged with the answer for some units only, so a run that offered a
+ * subset (`setup --new`) keeps every earlier choice. `decided` are the ids offered this time;
+ * an id offered and not chosen becomes declined, an id not offered keeps what it was.
+ */
+export function mergeSelection(
+  prior: Selection | null,
+  chosen: string[],
+  decided: string[]
+): { selected: string[]; allIds: string[] } {
+  const offered = new Set(decided);
+  const picked = new Set(chosen);
+  const keptSelected = (prior?.selected ?? []).filter((id) => !offered.has(id));
+  const keptDeclined = (prior?.declined ?? []).filter((id) => !offered.has(id));
+  return {
+    selected: [...keptSelected, ...decided.filter((id) => picked.has(id))],
+    allIds: [...keptSelected, ...keptDeclined, ...decided],
+  };
+}
+
+export interface AnnouncedUnit {
+  id: string;
+  label: string;
+  description: string;
+}
+
+/**
+ * The new units of one binary version, computed between sessions (`maintain`, `update`) so the
+ * prompt hook only reads a file. `unknown` are units whose inspection did not answer in time: they
+ * are not listed, and the next computation looks at them again.
+ */
+export interface WhatsNewCache {
+  version: string;
+  units: AnnouncedUnit[];
+  unknown: string[];
+}
+
+const cachePath = (dataDir: string) => join(dataDir, "whats-new.json");
+const announcedPath = (dataDir: string) => join(dataDir, "whats-new-announced.json");
+
+export async function readWhatsNewCache(dataDir: string): Promise<WhatsNewCache | null> {
+  try {
+    const parsed = JSON.parse(await Bun.file(cachePath(dataDir)).text()) as Partial<WhatsNewCache>;
+    if (typeof parsed.version !== "string" || !Array.isArray(parsed.units) || !Array.isArray(parsed.unknown)) return null;
+    return { version: parsed.version, units: parsed.units, unknown: parsed.unknown };
+  } catch {
+    return null;
+  }
+}
+
+export async function writeWhatsNewCache(dataDir: string, cache: WhatsNewCache): Promise<void> {
+  await writeFileAtomic(cachePath(dataDir), `${JSON.stringify(cache)}\n`);
+}
+
+/** Every unit id ever announced on this machine: each is announced at most once, whatever the release. */
+export async function announcedIds(dataDir: string): Promise<Set<string>> {
+  try {
+    const parsed = JSON.parse(await Bun.file(announcedPath(dataDir)).text()) as { ids?: unknown };
+    return new Set(Array.isArray(parsed.ids) ? parsed.ids.filter((id): id is string => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export async function recordAnnounced(dataDir: string, ids: string[]): Promise<void> {
+  const all = new Set([...(await announcedIds(dataDir)), ...ids]);
+  await writeFileAtomic(announcedPath(dataDir), `${JSON.stringify({ ids: [...all] })}\n`);
+}
+
+/**
+ * Claims one announcement before it is printed, so of two sessions prompting at once only one
+ * shows it. Exclusive create on a name made of the version and the ids: the same list in the same
+ * release is claimed once, while a unit found later in that release makes a new list and a new claim.
+ *
+ * A claim lives `ttlMs`. The hook can claim and then never print (its timeout wins, or the process
+ * dies), and the units are only recorded as announced once printed, so a claim that outlived any
+ * prompt is taken over. The takeover is itself an exclusive create, named after the stale claim's
+ * mtime, so two sessions finding the same stale claim still produce one notice.
+ */
+export async function claimAnnouncement(dataDir: string, version: string, ids: string[], ttlMs = CLAIM_TTL_MS): Promise<boolean> {
+  const dir = join(dataDir, "whats-new-claims");
+  await mkdir(dir, { recursive: true });
+  const claim = join(dir, `${version}-${Bun.hash([...ids].sort().join(",")).toString(36)}`);
+  if (await createExclusive(claim)) return true;
+  const stale = await stat(claim).then((s) => s.mtimeMs, () => null);
+  if (stale === null || Date.now() - stale < ttlMs) return false;
+  if (!(await createExclusive(`${claim}.takeover-${Math.floor(stale)}`))) return false;
+  const now = new Date();
+  await utimes(claim, now, now).catch(() => {});
+  return true;
+}
+
+/** Longer than any prompt hook can run, so only an abandoned claim is ever taken over. */
+export const CLAIM_TTL_MS = 120_000;
+
+async function createExclusive(path: string): Promise<boolean> {
+  try {
+    await (await open(path, "wx")).close();
+    return true;
+  } catch {
+    return false;
+  }
 }

@@ -13,9 +13,19 @@ import {
   parseWorktreeHookFlag,
 } from "../cli-args.js";
 import { getSkillTargetDirs, inspectOwnership, type SkippedTarget } from "../rules/skills.js";
-import { allUnits, type SetupContext, type UnitState } from "../setup/units.js";
+import { allUnits, type SetupContext, type SetupUnit, type UnitState } from "../setup/units.js";
 import { computePlan, initialChecked, promptSeed, type PlanRow } from "../setup/plan.js";
-import { loadSelection, saveSelection, membership } from "../setup/selection.js";
+import {
+  loadSelection,
+  saveSelection,
+  membership,
+  isNewUnit,
+  mergeSelection,
+  readSelection,
+  readWhatsNewCache,
+  writeWhatsNewCache,
+  type AnnouncedUnit,
+} from "../setup/selection.js";
 import { renderPlan } from "../setup/render.js";
 import { isInteractive } from "../interactive.js";
 import { VERSION } from "../constants.js";
@@ -94,6 +104,23 @@ export interface SetupOptions {
   applySaved?: boolean;
   /** Suppress the plan table (the caller prints its own summary). */
   quiet?: boolean;
+  /**
+   * `setup --new`: offer only the units that shipped after the saved selection was written and
+   * are not on disk, and leave every other unit and every earlier answer exactly as it is.
+   */
+  onlyNew?: boolean;
+  /**
+   * `setup --new --yes`: enable, with no prompt and no confirmation, only the new units that are
+   * on by default unconditionally. A unit whose default depends on the machine (`defaultWhen`, e.g.
+   * a hook that turns on when a TypeSafe token exists) or that is off by default (every opt-in one)
+   * is neither enabled nor declined: it stays new.
+   */
+  acceptDefaults?: boolean;
+  /**
+   * `setup --new --with/--without`: the units named to enable and to decline. A new unit named in
+   * neither stays undecided, rather than being recorded as declined.
+   */
+  newAnswer?: { enable: string[]; decline: string[] };
   /**
    * Injectable for testing; defaults to the real `promptUnitSelection` from
    * `src/interactive.js`. Every other prompt in this file is injectable and the
@@ -315,11 +342,11 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
 
   // 5. Inspect every unit BEFORE anything is drawn or written. This is what
   // lets the checklist report disk rather than assumption.
-  const units = allUnits(ctx);
   const selection = await loadSelection(ctx.selectionPath);
 
-  const inspected = await Promise.all(
-    units.map(async (unit) => {
+  const everyUnit = allUnits(ctx);
+  const inspectedAll = await Promise.all(
+    everyUnit.map(async (unit) => {
       const state = await unit.inspect(ctx).catch(() => "absent" as UnitState);
       const seen = membership(selection, unit.id);
       const defaultSelected = (await unit.defaultWhen?.(ctx).catch(() => undefined)) ?? unit.defaultSelected;
@@ -332,9 +359,14 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
         membership: seen,
         chosen: initialChecked(state, seen, defaultSelected, selection !== null),
         seed: promptSeed(state, seen, defaultSelected, selection !== null),
+        defaultSelected,
       };
     })
   );
+  const inspected = options.onlyNew
+    ? inspectedAll.filter((r) => isNewUnit(r.state, r.membership, selection !== null))
+    : inspectedAll;
+  const units = everyUnit.filter((u) => inspected.some((r) => r.id === u.id));
 
   if (!options.quiet) {
     for (const unit of units) {
@@ -359,7 +391,18 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
     );
 
   let chosenIds: string[];
-  if (options.applySaved) {
+  // The ids this run answers for; null means every offered row (the checklist and plain setup).
+  let decided: Set<string> | null = null;
+  if (options.onlyNew && inspected.length === 0) return cancelled();
+  if (options.onlyNew && options.acceptDefaults) {
+    const onByDefault = new Set(units.filter((u) => u.defaultSelected && !u.defaultWhen).map((u) => u.id));
+    chosenIds = inspected.filter((r) => onByDefault.has(r.id)).map((r) => r.id);
+    decided = new Set(chosenIds);
+  } else if (options.onlyNew && options.newAnswer) {
+    const declined = new Set(options.newAnswer.decline);
+    chosenIds = options.newAnswer.enable.filter((id) => !declined.has(id));
+    decided = new Set([...chosenIds, ...declined]);
+  } else if (options.applySaved) {
     // hasSelection=true, defaultSelected=false: selected -> on, declined -> off,
     // unseen -> on only when already on disk.
     const auto = new Set(units.filter((u) => u.autoOnUpgrade).map((u) => u.id));
@@ -400,7 +443,7 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   const hasWork = plan.some(
     (p) => p.action === "install" || p.action === "update" || p.action === "remove"
   );
-  if (hasWork && isInteractive() && !options.applySaved) {
+  if (hasWork && isInteractive() && !options.applySaved && !options.acceptDefaults) {
     const clack = await import("@clack/prompts");
     const proceed = await clack.confirm({ message: "Apply?", initialValue: false });
     if (clack.isCancel(proceed) || proceed !== true) {
@@ -438,11 +481,17 @@ export async function runSetup(options: SetupOptions = {}): Promise<SetupResult>
   // `unseen` so it is offered again once the blocker goes away.
   // Applying a saved selection offers nothing new, so an id never seen stays unseen unless it was
   // installed (and so chosen); otherwise saveSelection would record it as declined.
+  // `--new --yes` and `--new --with/--without` decide only the units they enabled or named: any
+  // other new unit was never looked at, so it stays new rather than being recorded as refused.
   const selectableIds = inspected
     .filter((r) => r.state !== "unavailable" && r.state !== "foreign")
     .filter((r) => !options.applySaved || r.membership !== "unseen" || chosen.has(r.id))
+    .filter((r) => decided === null || decided.has(r.id))
     .map((r) => r.id);
-  await saveSelection(ctx.selectionPath, chosenIds, selectableIds, VERSION);
+  const saved = options.onlyNew
+    ? mergeSelection(selection, chosenIds.filter((id) => selectableIds.includes(id)), selectableIds)
+    : { selected: chosenIds, allIds: selectableIds };
+  await saveSelection(ctx.selectionPath, saved.selected, saved.allIds, VERSION);
 
   // The SessionStart self-install of the suggest hook must never undo a decline, and a unit left
   // unticked and absent produces no `remove`, so the opt-out is recorded from the final choice.
@@ -516,6 +565,140 @@ export async function probeContext(options: {
   };
 }
 
+export interface NewUnits {
+  /** Units shipped after the saved selection was written and not on disk, in checklist order. */
+  units: AnnouncedUnit[];
+  /** Units whose inspection did not answer in time: neither listed nor ruled out. */
+  unknown: string[];
+}
+
+/**
+ * What `setup --new` would offer. Inspects only the units the saved selection never saw, each
+ * within `timeoutMs`. No saved selection means nothing is new (everything would be, and `setup`
+ * is the answer to that); a selection that cannot be read gives null, "ask again later".
+ */
+export async function findNewUnits(ctx: SetupContext, timeoutMs = 1500, units?: SetupUnit[]): Promise<NewUnits | null> {
+  const saved = await readSelection(ctx.selectionPath);
+  if (saved.kind === "missing") return { units: [], unknown: [] };
+  if (saved.kind === "unreadable") return null;
+  const unseen = (units ?? allUnits(ctx)).filter((u) => membership(saved.selection, u.id) === "unseen");
+  const states = await Promise.all(
+    unseen.map(
+      (u) =>
+        new Promise<UnitState | "timeout">((resolve) => {
+          const timer = setTimeout(() => resolve("timeout"), timeoutMs);
+          timer.unref?.();
+          u.inspect(ctx).then(
+            (state) => (clearTimeout(timer), resolve(state)),
+            () => (clearTimeout(timer), resolve("absent"))
+          );
+        })
+    )
+  );
+  return {
+    units: unseen
+      .filter((_, i) => states[i] !== "timeout" && isNewUnit(states[i]!, "unseen", true))
+      .map((u) => ({ id: u.id, label: u.label, description: u.description })),
+    unknown: unseen.filter((_, i) => states[i] === "timeout").map((u) => u.id),
+  };
+}
+
+/**
+ * Computes this version's new units into the cache the prompt hook reads. Runs between sessions
+ * (`maintain` at SessionEnd, and `update` after installing), never on a prompt. Skipped once a
+ * complete answer for this version exists; a unit that timed out keeps it incomplete, so the next
+ * run looks again. An unreadable selection writes nothing.
+ */
+export async function refreshWhatsNew(
+  options: { dataDir?: string; version?: string; find?: () => Promise<NewUnits | null> } = {}
+): Promise<void> {
+  const dataDir = options.dataDir ?? DEFAULT_DATA_DIR;
+  const version = options.version ?? VERSION;
+  const cached = await readWhatsNewCache(dataDir);
+  if (cached?.version === version && cached.unknown.length === 0) return;
+  const found = await (options.find ?? (async () => findNewUnits(await probeContext())))();
+  if (found) await writeWhatsNewCache(dataDir, { version, ...found });
+}
+
+/** Ids named by every `--flag=a,b` occurrence, `group:*` expanded against `ids`. */
+function namedIds(args: string[], flag: string, ids: string[]): string[] {
+  const named = args.filter((a) => a.startsWith(`${flag}=`)).flatMap((a) => a.slice(flag.length + 1).split(",").filter(Boolean));
+  return ids.filter((id) => named.some((n) => n === id || (n.endsWith(":*") && id.startsWith(n.slice(0, -1)))));
+}
+
+export interface SetupNewDeps {
+  interactive?: boolean;
+  print?: (line: string) => void;
+  /** Passed through to `runSetup`; tests point it at temporary paths. */
+  setup?: Partial<SetupOptions>;
+}
+
+/**
+ * `setup --new`: the checklist (or, without a TTY, the list) of the units new since the last run.
+ * `--yes` enables the unconditionally default-on ones; `--with`/`--without` enable and decline
+ * exactly what they name. Returns the exit code. Selection flags that answer for every unit
+ * (`--all`, `--none`, `--no-*`) are refused: under `--new` they could switch on an opt-in unit
+ * nobody named.
+ */
+export async function runSetupNew(args: string[], ids: string[], probe: SetupContext, deps: SetupNewDeps = {}): Promise<number> {
+  const print = deps.print ?? console.log;
+  const saved = await readSelection(probe.selectionPath);
+  if (saved.kind === "missing") {
+    print("No saved setup selection yet, so nothing is new: run `project-brain setup`.");
+    return 0;
+  }
+  if (saved.kind === "unreadable") {
+    print(`Could not read ${probe.selectionPath}: run \`project-brain setup\` to choose again.`);
+    return 1;
+  }
+
+  const yes = args.includes("--yes");
+  const enable = namedIds(args, "--with", ids);
+  const decline = namedIds(args, "--without", ids);
+  const named = enable.length > 0 || decline.length > 0;
+  const broad = ["--all", "--none", "--skills", "--brain-audit"].some((f) => args.includes(f)) || args.some((a) => a.startsWith("--no-"));
+  if (broad) {
+    print("--new takes --with=<ids>, --without=<ids> or --yes; --all, --none and the --no-* flags answer for every unit.");
+    return 1;
+  }
+  if (yes && named) {
+    print("--new: use --yes or --with/--without, not both. --with names exactly what to enable.");
+    return 1;
+  }
+
+  const interactive = deps.interactive ?? isInteractive();
+  if (!yes && !named && !interactive) {
+    const found = await findNewUnits(probe);
+    if (!found || found.units.length === 0) print("Nothing new since your last setup.");
+    else {
+      print("New since your last setup, not enabled:");
+      for (const u of found.units) print(`  ${u.id}  ${u.label}`);
+      print("Run `project-brain setup --new` in a terminal, or pass --with=<ids> (or --yes for the on-by-default ones).");
+    }
+    return 0;
+  }
+
+  const result = await runSetup({
+    ...deps.setup,
+    onlyNew: true,
+    acceptDefaults: yes,
+    ...(named ? { newAnswer: { enable, decline } } : {}),
+    quiet: deps.setup?.quiet ?? yes,
+  });
+  if (result.units.length === 0) {
+    print("Nothing new since your last setup.");
+    return 0;
+  }
+  const applied = result.units.filter((u) => u.action === "install" || u.action === "update");
+  print(applied.length > 0 ? `Enabled: ${applied.map((u) => u.id).join(", ")}` : "Nothing enabled.");
+  const left = result.units.filter((u) => !u.chosen && u.state === "absent" && !decline.includes(u.id));
+  if ((yes || named) && left.length > 0) print(`Still new, not enabled: ${left.map((u) => u.id).join(", ")}`);
+  const ignored = [...enable, ...decline].filter((id) => !result.units.some((u) => u.id === id));
+  if (ignored.length > 0) print(`Not new, left as they are: ${ignored.join(", ")}`);
+  for (const instructions of result.manualInstructions) print(`\nManual setup needed:\n${instructions}`);
+  return 0;
+}
+
 /** CLI entry point for the setup command. */
 export async function execute(args: string[]): Promise<void> {
   if (args.includes("--apply-saved")) {
@@ -543,6 +726,12 @@ export async function execute(args: string[]): Promise<void> {
   if (units.mode === undefined) {
     console.error(units.error);
     process.exit(1);
+    return;
+  }
+
+  if (args.includes("--new")) {
+    const code = await runSetupNew(args, ids, probe);
+    if (code !== 0) process.exitCode = code;
     return;
   }
 
@@ -659,4 +848,6 @@ async function executeApplySaved(): Promise<void> {
   if (result.manualInstructions.length > 0) {
     console.log(`Manual setup needed:\n${result.manualInstructions.join("\n\n")}`);
   }
+  // The new binary's what's-new list, ready before the next prompt reads it.
+  await refreshWhatsNew().catch(() => {});
 }

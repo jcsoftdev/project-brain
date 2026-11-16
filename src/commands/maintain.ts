@@ -62,6 +62,8 @@ export interface MaintainSteps {
   mcpPrune: () => Promise<unknown>;
   /** Compacts and returns the line to print, if any. */
   compact: () => Promise<string | null>;
+  /** Computes the new-setup-units list the prompt hook announces, so no prompt ever inspects a unit. */
+  whatsNew?: () => Promise<unknown>;
 }
 
 export const defaultMaintainSteps = (): MaintainSteps => ({
@@ -72,6 +74,7 @@ export const defaultMaintainSteps = (): MaintainSteps => ({
   mcpPrune: () => maintainMcpPrune(),
   compact: async () =>
     summarize(await autoCompact(defaultAutoCompactDeps({ dbPath: DB_PATH, dataDir: DATA_DIR, ownProject: await currentProjectKey() }))),
+  whatsNew: async () => (await import("./setup.js")).refreshWhatsNew(),
 });
 
 /** Never throws and never exits non-zero: it runs inside a host's hook. */
@@ -101,6 +104,7 @@ export async function maintainCommand(args: string[], steps: MaintainSteps = def
   }
 
   await steps.mcpPrune().catch(() => {});
+  await steps.whatsNew?.().catch(() => {});
 
   const line = await steps.compact();
   if (line) console.log(line);
