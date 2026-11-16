@@ -158,16 +158,44 @@ export interface SwapFailure {
   from: string;
   to: string;
   reason: string;
+  /** "start": the new binary does not come up; "protocol" or "idle": a reconnect would work. */
+  kind?: "start" | "protocol" | "idle";
   at: number;
 }
 
 // One file per supervisor, named by its pid: the worker it relays to knows that pid (BRAIN_CLIENT_PID).
-const swapFailureFile = (dataDir: string, supervisorPid: number) => join(dataDir, "swap-failures", `${supervisorPid}.json`);
+const swapFailuresDir = (dataDir: string) => join(dataDir, "swap-failures");
+const swapFailureFile = (dataDir: string, supervisorPid: number) => join(swapFailuresDir(dataDir), `${supervisorPid}.json`);
 
 /** Called by the supervisor when it gives up on a swap and keeps the old worker. */
 export async function recordSwapFailure(dataDir: string, supervisorPid: number, failure: SwapFailure): Promise<void> {
-  await mkdir(join(dataDir, "swap-failures"), { recursive: true });
+  await mkdir(swapFailuresDir(dataDir), { recursive: true });
   await writeFileAtomic(swapFailureFile(dataDir, supervisorPid), `${JSON.stringify(failure)}\n`);
+  await pruneSwapFailures(dataDir, null, failure.at);
+}
+
+/**
+ * Same rule as the server records: a failure is dropped once its supervisor's pid is gone, or, when
+ * the process table is at hand, clearly belongs to another process (not a project-brain server, or
+ * started after the failure was written).
+ */
+export async function pruneSwapFailures(dataDir: string, rows: ProcessRow[] | null, now: number = Date.now()): Promise<void> {
+  const dir = swapFailuresDir(dataDir);
+  const byPid = rows ? new Map(rows.map((r) => [r.pid, r])) : null;
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const recycled = async (pid: number) => {
+    const row = byPid?.get(pid);
+    if (!row) return false;
+    if (!isServeCommand(row, true)) return true;
+    const failure = await readSwapFailure(dataDir, pid);
+    return failure !== null && row.startedAt - failure.at > START_SKEW_MS;
+  };
+  const doomed = new Set<number>();
+  for (const n of names) {
+    const pid = pidOf(n);
+    if (pid !== null && (!alive(pid) || (await recycled(pid)))) doomed.add(pid);
+  }
+  await prune(dir, (pid) => !doomed.has(pid), now);
 }
 
 /** Synchronous, for the supervisor's exit handler and a later successful swap. */

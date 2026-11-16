@@ -176,7 +176,7 @@ export function defaultStatusDeps(): StatusDeps {
         run("ps", ["-Ao", "pid=,args="], { timeout: 3000 }),
       ]);
       if (!meta.ok || !args.ok) return null;
-      const { liveServers, parseProcessTable, staleServers } = await import("../hooks/session-versions.js");
+      const { liveServers, parseProcessTable, pruneSwapFailures, staleServers } = await import("../hooks/session-versions.js");
       const { resolveLauncher } = await import("../server/supervisor.js");
       const rows = parseProcessTable(meta.out, args.out, now);
       const installedAt = (() => {
@@ -186,6 +186,7 @@ export function defaultStatusDeps(): StatusDeps {
           return null;
         }
       })();
+      await pruneSwapFailures(dataDir, rows, now);
       return staleServers(rows, await liveServers(dataDir, rows, now), installed, { uid: process.getuid?.(), installedAt });
     },
   };

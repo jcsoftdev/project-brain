@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import {
   clearSwapFailure,
+  pruneSwapFailures,
   readSwapFailure,
   recordSwapFailure,
   forgetServer,
@@ -102,12 +103,30 @@ describe("running server records", () => {
 describe("swap failures", () => {
   it("are kept per supervisor until cleared", async () => {
     const dir = await dataDir();
-    expect(await readSwapFailure(dir, 77)).toBeNull();
-    await recordSwapFailure(dir, 77, { from: "1.0.0", to: "2.0.0", reason: "timed out", at: NOW });
-    expect(await readSwapFailure(dir, 77)).toEqual({ from: "1.0.0", to: "2.0.0", reason: "timed out", at: NOW });
-    expect(await readSwapFailure(dir, 78)).toBeNull();
-    clearSwapFailure(dir, 77);
-    expect(await readSwapFailure(dir, 77)).toBeNull();
+    expect(await readSwapFailure(dir, process.pid)).toBeNull();
+    await recordSwapFailure(dir, process.pid, { from: "1.0.0", to: "2.0.0", reason: "timed out", at: NOW });
+    expect(await readSwapFailure(dir, process.pid)).toEqual({ from: "1.0.0", to: "2.0.0", reason: "timed out", at: NOW });
+    expect(await readSwapFailure(dir, process.ppid)).toBeNull();
+    clearSwapFailure(dir, process.pid);
+    expect(await readSwapFailure(dir, process.pid)).toBeNull();
+  });
+
+  it("are dropped once their supervisor is gone or its pid clearly belongs to another process", async () => {
+    const dir = await dataDir();
+    const failure = { from: "1.0.0", to: "2.0.0", reason: "x", at: NOW };
+    await recordSwapFailure(dir, DEAD_PID, failure);
+    await recordSwapFailure(dir, process.pid, failure); // pruning on write drops the dead supervisor's
+    expect(await readSwapFailure(dir, DEAD_PID)).toBeNull();
+    await recordSwapFailure(dir, process.ppid, failure);
+
+    // With the process table: this pid runs bun test (not a server), its parent is a server started before the failure.
+    await pruneSwapFailures(dir, [row(process.pid, "/usr/bin/bun test"), row(process.ppid, BREW, { startedAt: NOW - 60_000 })], NOW);
+    expect(await readSwapFailure(dir, process.pid)).toBeNull();
+    expect(await readSwapFailure(dir, process.ppid)).not.toBeNull();
+
+    // The same parent pid, now started after the failure was written: recycled.
+    await pruneSwapFailures(dir, [row(process.ppid, BREW, { startedAt: NOW + 60_000 })], NOW);
+    expect(await readSwapFailure(dir, process.ppid)).toBeNull();
   });
 });
 

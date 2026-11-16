@@ -68,7 +68,7 @@ describe("installed version probe", () => {
     );
   });
 
-  it("under the hot-swap supervisor, names a swap that failed and keeps the reconnect", async () => {
+  it("when the new binary failed to start as a server, says so and does not advise a reconnect", async () => {
     const i = await install();
     await i.point("0.42.0");
     const probe = installedVersionProbe({
@@ -76,11 +76,29 @@ describe("installed version probe", () => {
       running: "0.42.0",
       supervised: true,
       readVersion: i.readVersion,
-      swapFailure: async () => ({ to: "0.45.1", reason: "new server exited early (code 3)" }),
+      swapFailure: async () => ({ to: "0.45.1", reason: "new server exited early (code 3)", kind: "start" }),
+    });
+    await i.point("0.45.1");
+    const drift = (await probe())?.versionDrift;
+    expect(drift).toBe(
+      `The installed project-brain 0.45.1 (${i.launcher.watch}) fails to start: new server exited early (code 3). This session keeps working on 0.42.0; reinstall project-brain or upgrade again.`
+    );
+    expect(drift).not.toContain("/mcp reconnect");
+  });
+
+  it("when a swap only missed its moment or the protocol changed, a reconnect is the fix", async () => {
+    const i = await install();
+    await i.point("0.42.0");
+    const probe = installedVersionProbe({
+      launcher: i.launcher,
+      running: "0.42.0",
+      supervised: true,
+      readVersion: i.readVersion,
+      swapFailure: async () => ({ to: "0.45.1", reason: "new server speaks MCP protocol 2024-11-05, this session uses 2025-06-18", kind: "protocol" }),
     });
     await i.point("0.45.1");
     expect((await probe())?.versionDrift).toBe(
-      "MCP server runs 0.42.0, installed 0.45.1: the hot swap to it failed (new server exited early (code 3)), so the old server keeps serving; run /mcp reconnect to load it"
+      "MCP server runs 0.42.0, installed 0.45.1: the hot swap to it did not happen (new server speaks MCP protocol 2024-11-05, this session uses 2025-06-18); run /mcp reconnect to load it"
     );
   });
 
@@ -98,18 +116,38 @@ describe("installed version probe", () => {
     expect((await probe())?.versionDrift).toContain("the hot swap moves this session to it");
   });
 
-  it("says nothing it cannot back: an unreadable launcher or a binary that will not answer", async () => {
+  it("says nothing about a launcher it cannot read", async () => {
     const missing = installedVersionProbe({ launcher: { argv: ["/nonexistent"], watch: "/nonexistent" }, running: "1.0.0" });
     expect(await missing()).toBeNull();
+  });
 
+  it("reports an installed binary that does not start, asking it once per change", async () => {
     const i = await install();
     await i.point("0.42.0");
     let asked = 0;
-    const probe = installedVersionProbe({ launcher: i.launcher, running: "0.42.0", readVersion: async () => (asked++, null) });
+    const probe = installedVersionProbe({
+      launcher: i.launcher,
+      running: "0.42.0",
+      probeVersion: async () => (asked++, { error: "--version exited with code 1: dyld: missing symbol" }),
+    });
     await i.point("0.45.1");
-    expect(await probe()).toBeNull();
-    expect(await probe()).toBeNull();
-    expect(asked).toBe(1); // a binary that will not answer is asked once per change, not per check
+    const expected = {
+      versionDrift: `The installed project-brain (${i.launcher.watch}) fails to start: --version exited with code 1: dyld: missing symbol. This session keeps working on 0.42.0; reinstall project-brain or upgrade again.`,
+    };
+    expect(await probe()).toEqual(expected);
+    expect(await probe()).toEqual(expected);
+    expect(asked).toBe(1);
+  });
+
+  it("reads only project-brain's own --version line, never another program's version", async () => {
+    const i = await install();
+    const { probeLauncherVersion } = await import("../../src/server/supervisor.js");
+    const bunLike = join(dirs.at(-1)!, "bun-like");
+    await writeFile(bunLike, `#!/bin/sh\necho "1.3.14"\n`);
+    await chmod(bunLike, 0o755);
+    expect(await probeLauncherVersion({ argv: [bunLike], watch: bunLike })).toEqual({ error: "--version printed no project-brain version" });
+    await i.point("2.0.0");
+    expect(await probeLauncherVersion(i.launcher)).toEqual({ version: "2.0.0" });
   });
 
   it("does not flag a server newer than the installed binary: reconnecting would load the older one", async () => {
