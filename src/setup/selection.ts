@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, open } from "node:fs/promises";
+import { mkdir, open, stat, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
 
@@ -179,13 +179,31 @@ export async function recordAnnounced(dataDir: string, ids: string[]): Promise<v
  * Claims one announcement before it is printed, so of two sessions prompting at once only one
  * shows it. Exclusive create on a name made of the version and the ids: the same list in the same
  * release is claimed once, while a unit found later in that release makes a new list and a new claim.
+ *
+ * A claim lives `ttlMs`. The hook can claim and then never print (its timeout wins, or the process
+ * dies), and the units are only recorded as announced once printed, so a claim that outlived any
+ * prompt is taken over. The takeover is itself an exclusive create, named after the stale claim's
+ * mtime, so two sessions finding the same stale claim still produce one notice.
  */
-export async function claimAnnouncement(dataDir: string, version: string, ids: string[]): Promise<boolean> {
+export async function claimAnnouncement(dataDir: string, version: string, ids: string[], ttlMs = CLAIM_TTL_MS): Promise<boolean> {
   const dir = join(dataDir, "whats-new-claims");
   await mkdir(dir, { recursive: true });
-  const key = Bun.hash([...ids].sort().join(",")).toString(36);
+  const claim = join(dir, `${version}-${Bun.hash([...ids].sort().join(",")).toString(36)}`);
+  if (await createExclusive(claim)) return true;
+  const stale = await stat(claim).then((s) => s.mtimeMs, () => null);
+  if (stale === null || Date.now() - stale < ttlMs) return false;
+  if (!(await createExclusive(`${claim}.takeover-${Math.floor(stale)}`))) return false;
+  const now = new Date();
+  await utimes(claim, now, now).catch(() => {});
+  return true;
+}
+
+/** Longer than any prompt hook can run, so only an abandoned claim is ever taken over. */
+export const CLAIM_TTL_MS = 120_000;
+
+async function createExclusive(path: string): Promise<boolean> {
   try {
-    await (await open(join(dir, `${version}-${key}`), "wx")).close();
+    await (await open(path, "wx")).close();
     return true;
   } catch {
     return false;

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSuggest, whatsNewNoticeFor, type WhatsNewOptions } from "../../src/commands/suggest.js";
@@ -89,6 +89,20 @@ describe("what's-new notice (prompt hook)", () => {
     await cache([unit(1)]);
     const both = await Promise.all([take(), take(), take()]);
     expect(both.filter((n) => n !== null).length).toBe(1);
+  });
+
+  it("takes over a claim abandoned before printing, and only once; a fresh claim still blocks", async () => {
+    await cache([unit(1)]);
+    expect(await take()).not.toBeNull(); // claimed, never committed: the hook timed out or died
+    expect(await take()).toBeNull();
+
+    const [claim] = await claims();
+    const old = new Date(Date.now() - 3 * 60_000);
+    await utimes(join(dataDir, "whats-new-claims", claim!), old, old);
+
+    const after = await Promise.all([take(), take(), take()]);
+    expect(after.filter((n) => n !== null).length).toBe(1);
+    expect(await take()).toBeNull();
   });
 
   it("is printed by the prompt hook and recorded only after printing", async () => {
