@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { projectDirKey } from "../toolcatalog/transcripts.js";
 import { usageSignal, type UsageSignal } from "./signal.js";
-import { parseTranscript, type HitUsage, type TranscriptLedger } from "./transcript.js";
+import { parseTranscriptFile, type HitUsage, type TranscriptLedger } from "./transcript.js";
 
 /** Every token figure here is an estimate: characters / 4, the same rule as retrieval/budget.ts. */
 export const TOKEN_ESTIMATOR = "chars/4";
@@ -150,11 +150,10 @@ export async function buildLedger(opts: LedgerOptions): Promise<Ledger> {
       truncated = true;
       break;
     }
-    const text = await readFile(file.path).catch(() => null);
-    if (text === null) continue;
+    const ledger = await parseTranscriptFile(file.path);
+    if (ledger === null) continue;
     bytes += file.size;
     read++;
-    const ledger = parseTranscript(text);
     if (!ledger.sessionId || !ledger.cwd || (ledger.lastAt ?? file.mtime) < since) continue;
     if (opts.projectRoot !== null && !within(projectOf(ledger.cwd), opts.projectRoot)) continue;
     ledgers.push(ledger);

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { usageSignal } from "../../src/ledger/signal.js";
-import { mentions, parseInjection, parseTranscript } from "../../src/ledger/transcript.js";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { mentions, parseInjection, parseTranscript, parseTranscriptFile } from "../../src/ledger/transcript.js";
 import { injection, instructionsDelta, toolResult, toolsDelta, toolUse, transcript, userPrompt } from "./fixtures.js";
 
 const o = { sessionId: "s-1", cwd: "/work/app", at: "2026-11-10T10:00:00.000Z" };
@@ -96,6 +99,31 @@ describe("parseTranscript", () => {
     const ledger = parseTranscript(transcript(["{not json", other, userPrompt(o, "hi")]));
     expect(ledger.injections).toEqual([]);
     expect(ledger.sessionId).toBe("s-1");
+  });
+});
+
+describe("parseTranscriptFile", () => {
+  it("streams in small chunks to the same ledger as parsing the whole text, lines spanning chunks included", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pb-ledger-"));
+    try {
+      const text = transcript([
+        toolsDelta(o, ["mcp__alpha__one"]),
+        injection(o, [
+          { source: "src/a.ts", score: 0.8 },
+          { source: "src/b.ts", score: 0.7 },
+        ]),
+        toolUse(later, "Bash", { command: `cat src/b.ts # ${"x".repeat(300)}` }),
+        toolUse(later, "Read", { file_path: "/work/app/src/a.ts" }),
+      ]).trimEnd();
+      const path = join(dir, "t.jsonl");
+      await writeFile(path, text);
+      const whole = parseTranscript(text);
+      expect(whole.hits.map((h) => h.used)).toEqual([["read"], ["bash"]]);
+      for (const chunk of [7, 64, 1024 * 1024]) expect(await parseTranscriptFile(path, chunk)).toEqual(whole);
+      expect(await parseTranscriptFile(join(dir, "missing.jsonl"))).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
