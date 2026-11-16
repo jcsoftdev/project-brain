@@ -47,6 +47,8 @@ const SKIPS_PREAMBLE = [
   "__extract-selftest",
   "--version",
   "-v",
+  // Promises to send nothing and write nothing: no update check, skill refresh or config repair.
+  "stats",
 ];
 
 if (!SKIPS_PREAMBLE.includes(command as string)) {
@@ -178,6 +180,9 @@ Commands:
   skill-usage        Count skill invocations in the last 30 days of Claude Code transcripts, no changes
                        --write   save ~/.project-brain/skill-usage.json for the compact skill listing
                        --if-stale  with --write, skip when the file is under a day old
+  stats              What project-brain injected, what the Jev gate dropped, MCP cost and pruned servers,
+                       per session, estimated tokens (local transcripts only, no changes)
+                       [--days N] (default 7) [--all] [--json]
   arch init          Write .project-brain/architecture.json (hexagonal preset) [--force]
   compact            Reclaim storage from old versions + deleted rows now [--project <id>] [--force]
                        refuses while another process has the index open; --force overrides
@@ -584,6 +589,11 @@ switch (command) {
   }
   case "skill-usage": {
     const { execute } = await import("./commands/skill-usage.js");
+    await execute(args);
+    break;
+  }
+  case "stats": {
+    const { execute } = await import("./commands/stats.js");
     await execute(args);
     break;
   }

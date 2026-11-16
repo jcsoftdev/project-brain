@@ -672,6 +672,18 @@ project-brain status [--json] [--project <id>]
 
 For each project it lists commits not yet pushed (a branch ahead of its upstream, or a local branch with no upstream that has commits not on the default branch), uncommitted changes in the main checkout, and linked worktrees that `worktree finish` would accept (merged, clean, idle). Globally it lists setup units that are available but not enabled (ones you declined are left out), and compares the installed version with npm's `latest` and `next` dist-tags, flagging when `latest` lags `next`, and lists your live MCP servers that run an older version than the installed one. Each pending item comes with the command that resolves it. A clean project prints nothing; when nothing at all is pending it prints one `All clear` line. Repositories with no remote are not checked for unpushed commits, and the npm lookup gives up after 3 s.
 
+### `stats`
+
+What project-brain put into your Claude Code sessions, per session and per project, read only from local files: nothing is sent anywhere and nothing is written.
+
+```bash
+project-brain stats [--days N] [--all] [--json]
+```
+
+For each session in the window (default the last 7 days, `--days N` or `--days=N`; only injections and gate drops stamped inside it count) it reports the prompt-context hook's injected blocks (prompts, hits, tokens), the context the Jev context gate dropped (`~/.project-brain/context-gate-log.json`), the tool names and server instructions the session's MCP set holds in context at its largest between compactions (subagents counted apart), and the MCP servers `mcp prune` had disabled for that directory before the session began. The scope is the current project: the initialized project root, else the git repository root, else exactly the current directory, and the header says which; `--all` covers every project. Unknown flags exit with status 2. Every token figure is an estimate, characters divided by 4. `--json` carries counts, sources and scores only, never prompt text.
+
+Per project it also prints a usage signal: of the distinct hits injected, how many the model later read, edited, named in a shell command, or got back from a project-brain tool in the same transcript, and that share at each floor. It is a report, not a calibration. Measured on real transcripts (5,345 injected hits), only 2% were later read, edited or returned by a project-brain tool; counting shell commands, the signal agreed with hand labels only moderately (17 of 36 relevant hits used, 8 of 127 irrelevant). And since only hits above the floor in force are ever injected, it cannot show what a lower floor would add.
+
 ### `bench` — measure retrieval quality
 
 Published embedding leaderboards score a different corpus and a different task. A percent-or-two delta on someone else's benchmark says nothing about whether YOUR queries still surface the right file after changing model, dimension or chunking — so `bench` measures against ground truth from *this* repository instead.
@@ -694,7 +706,7 @@ project-brain search "how does auth work"
 echo "how does auth work" | project-brain search --stdin
 ```
 
-The hook only injects when it is likely to help. Before any embedding work it skips prompts that carry no code question: very short prompts (under 3 words or 15 characters, unless they name a code identifier), acknowledgements and continuations in English and Spanish ("ok", "sí", "continúa", "commit y push"), slash-command echoes, and pasted harness or agent reports. Hits Jev scores below 0.65 are dropped and at most 5 are kept; if nothing survives, nothing is printed. The floor comes from `scripts/calibrate-hook-floor.ts`, which replays your own prompts read-only through the hook's retrieval and Jev (at most 30 requests), writes every hit to a file outside the repository for labelling, and prints precision and recall per floor. The plain CLI `search "<q>"` is not gated.
+The hook only injects when it is likely to help. Before any embedding work it skips prompts that carry no code question: very short prompts (under 3 words or 15 characters, unless they name a code identifier), acknowledgements and continuations in English and Spanish ("ok", "sí", "continúa", "commit y push"), slash-command echoes, and pasted harness or agent reports. Hits Jev scores below 0.65 are dropped and at most 5 are kept; if nothing survives, nothing is printed. The floor comes from `scripts/calibrate-hook-floor.ts`, which replays your own prompts read-only through the hook's retrieval and Jev (at most 30 requests), writes every hit to a file outside the repository for labelling, and prints precision and recall per floor. The floor is one value for every project and is not adjusted automatically; `project-brain stats` shows it next to how often injected hits were used. The plain CLI `search "<q>"` is not gated.
 
 Hook output stays in the conversation, so a snippet is injected only while it is not already there: the hook reads the newest 8 MB of the session transcript (`transcript_path`), follows the live message chain back from the newest entry, and skips any snippet whose printed text, score aside, an earlier UserPromptSubmit hook output on that chain already holds. When every relevant hit is already there, nothing is printed. The skill/tool suggestion hook does the same per suggested name. Because it reads the live chain, a compaction, `/clear`, `/rewind` or an edited earlier message brings the dropped snippets back on the next prompt, and an unreadable transcript dedups nothing. No state is stored.
 
