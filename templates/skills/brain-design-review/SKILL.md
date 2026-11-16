@@ -17,7 +17,7 @@ metadata:
 
 ## Activation Contract
 
-Use when a live or local UI must be judged on how it looks and feels, and the findings should be fixed. Report-only: use `brain-qa-only`. Whole-product MVP verdict: `mvp-ui-review`. Building new UI: `impeccable`.
+Use when a live or local UI must be judged on how it looks and feels, and the findings should be fixed. Report-only: use `brain-qa-only`. Task flows, navigation and error recovery: `brain-ux-review`. Whole-product MVP verdict: `mvp-ui-review`. Building new UI: `impeccable`.
 
 ## Hard Rules
 

@@ -17,7 +17,7 @@ metadata:
 
 ## Activation Contract
 
-Use when the ask is to find and document bugs, not to fix them. Design judgment: `brain-design-review`. Every screen of a product and an MVP verdict: `mvp-ui-review`. Recording a demo: `brain-record`.
+Use when the ask is to find and document bugs, not to fix them. Design judgment: `brain-design-review`. UX of whole tasks and flows: `brain-ux-review`. Every screen of a product and an MVP verdict: `mvp-ui-review`. Recording a demo: `brain-record`.
 
 ## Hard Rules
 

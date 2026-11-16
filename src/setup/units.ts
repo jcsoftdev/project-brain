@@ -128,6 +128,7 @@ const SKILL_DESCRIPTIONS: Record<string, string> = {
   "brain-qa-only": "finds and documents reproducible bugs with evidence, never edits product code",
   "brain-record": "records a branch's flow as video evidence for a PR or ticket",
   "brain-style": "keeps generated code architecture-first and declarative — no comments, the why goes to the commit or the knowledge bundle",
+  "brain-ux-review": "walks real user tasks, diagnoses the UX with evidence, redesigns the flows and plans their validation",
   "brain-worktree": "gives an isolated worktree its own brain and its own port",
 };
 

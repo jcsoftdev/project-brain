@@ -18,6 +18,10 @@ import designReviewProbes from "../../templates/skills/brain-design-review/refer
 import designReviewFixLoop from "../../templates/skills/brain-design-review/references/fix-loop.md" with { type: "text" };
 import qaOnlySkillMd from "../../templates/skills/brain-qa-only/SKILL.md" with { type: "text" };
 import qaOnlyReport from "../../templates/skills/brain-qa-only/references/report.md" with { type: "text" };
+import uxReviewSkillMd from "../../templates/skills/brain-ux-review/SKILL.md" with { type: "text" };
+import uxReviewProtocol from "../../templates/skills/brain-ux-review/references/protocol.md" with { type: "text" };
+import uxReviewReport from "../../templates/skills/brain-ux-review/references/report.md" with { type: "text" };
+import uxReviewDelegation from "../../templates/skills/brain-ux-review/references/delegation.md" with { type: "text" };
 
 // A. Product & intent
 import functional from "../../templates/skills/brain-audit/references/functional.md" with { type: "text" };
@@ -248,6 +252,13 @@ export const BRAIN_QA_ONLY_FILES: Record<string, string> = {
   "references/report.md": qaOnlyReport,
 };
 
+export const BRAIN_UX_REVIEW_FILES: Record<string, string> = {
+  "SKILL.md": uxReviewSkillMd,
+  "references/protocol.md": uxReviewProtocol,
+  "references/report.md": uxReviewReport,
+  "references/delegation.md": uxReviewDelegation,
+};
+
 /**
  * Every skill setup installs, keyed by the directory name it occupies inside a
  * skills root. Ownership is proven per skill directory, so a user's
@@ -261,6 +272,7 @@ export const SKILL_MANIFESTS: Record<string, Record<string, string>> = {
   "brain-qa-only": BRAIN_QA_ONLY_FILES,
   "brain-record": BRAIN_RECORD_FILES,
   "brain-style": BRAIN_STYLE_FILES,
+  "brain-ux-review": BRAIN_UX_REVIEW_FILES,
   "brain-worktree": BRAIN_WORKTREE_FILES,
 };
 
