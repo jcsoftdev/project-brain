@@ -34,8 +34,9 @@ describe("one-time update notice", () => {
     expect(first[0]).toContain("project-brain updated 0.39.0 → 0.40.0 in this session");
     expect(first[0]).toContain("hooks and skills are already live");
     expect(first[0]).toContain("/mcp reconnect all");
-    expect(first[0]).toContain("BRAIN_MCP_HOT_SWAP=1");
-    expect(first[0]).toContain("76 MB");
+    expect(first[0]).toContain("Hot swap is off because BRAIN_MCP_HOT_SWAP=0 is set");
+    expect(first[0]).toContain("remove it and updates apply without a restart (~16 MB of memory per session)");
+    expect(first[0]).not.toContain("76 MB");
     // CLAUDE.md does not reload, so the routing table is repeated in full.
     expect(first[0]).toContain("Model routing for delegated agents");
     expect(first[0]).toContain("| Task |");
@@ -85,7 +86,7 @@ describe("one-time update notice", () => {
 
     const [notice] = await h.run(h.prompt("s1"));
     expect(notice).toContain("if project-brain tools look stale, run `/mcp reconnect all`");
-    expect(notice).not.toContain("76 MB");
+    expect(notice).not.toContain("BRAIN_MCP_HOT_SWAP");
   });
 
   it("/compact and /clear reload CLAUDE.md but not the MCP server: the reconnect hint stays, the routing table does not repeat", async () => {

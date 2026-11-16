@@ -134,7 +134,7 @@ export async function upgradeNoticeFor(
   else
     server =
       "the MCP server is still the old version: run `/mcp reconnect all` (or `/mcp`) to load the new project-brain tools. " +
-      "To have this happen automatically, start the server with BRAIN_MCP_HOT_SWAP=1 (costs ~76 MB of memory per session)";
+      "Hot swap is off because BRAIN_MCP_HOT_SWAP=0 is set; remove it and updates apply without a restart (~16 MB of memory per session)";
 
   const lines = [`project-brain updated ${notice.from} → ${current} in this session: hooks and skills are already live; ${server}.`];
   // /compact and /clear already reloaded CLAUDE.md; only a session that did not needs the table repeated.
