@@ -68,6 +68,36 @@ describe("installed version probe", () => {
     );
   });
 
+  it("under the hot-swap supervisor, names a swap that failed and keeps the reconnect", async () => {
+    const i = await install();
+    await i.point("0.42.0");
+    const probe = installedVersionProbe({
+      launcher: i.launcher,
+      running: "0.42.0",
+      supervised: true,
+      readVersion: i.readVersion,
+      swapFailure: async () => ({ to: "0.45.1", reason: "new server exited early (code 3)" }),
+    });
+    await i.point("0.45.1");
+    expect((await probe())?.versionDrift).toBe(
+      "MCP server runs 0.42.0, installed 0.45.1: the hot swap to it failed (new server exited early (code 3)), so the old server keeps serving; run /mcp reconnect to load it"
+    );
+  });
+
+  it("ignores a failure recorded for another version", async () => {
+    const i = await install();
+    await i.point("0.42.0");
+    const probe = installedVersionProbe({
+      launcher: i.launcher,
+      running: "0.42.0",
+      supervised: true,
+      readVersion: i.readVersion,
+      swapFailure: async () => ({ to: "0.44.0", reason: "old" }),
+    });
+    await i.point("0.45.1");
+    expect((await probe())?.versionDrift).toContain("the hot swap moves this session to it");
+  });
+
   it("says nothing it cannot back: an unreadable launcher or a binary that will not answer", async () => {
     const missing = installedVersionProbe({ launcher: { argv: ["/nonexistent"], watch: "/nonexistent" }, running: "1.0.0" });
     expect(await missing()).toBeNull();

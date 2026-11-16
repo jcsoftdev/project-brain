@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
+  clearSwapFailure,
+  readSwapFailure,
+  recordSwapFailure,
   forgetServer,
   isServeCommand,
   liveServers,
@@ -93,6 +96,18 @@ describe("running server records", () => {
     const rows = [row(LIVE, BREW, { startedAt: NOW - 10_000 + 2500 })];
     expect(await liveServers(dir, rows, NOW)).toEqual([]);
     expect(await files(dir)).toEqual([`${LIVE}.json`, `${LIVE_TOO}.json`].sort());
+  });
+});
+
+describe("swap failures", () => {
+  it("are kept per supervisor until cleared", async () => {
+    const dir = await dataDir();
+    expect(await readSwapFailure(dir, 77)).toBeNull();
+    await recordSwapFailure(dir, 77, { from: "1.0.0", to: "2.0.0", reason: "timed out", at: NOW });
+    expect(await readSwapFailure(dir, 77)).toEqual({ from: "1.0.0", to: "2.0.0", reason: "timed out", at: NOW });
+    expect(await readSwapFailure(dir, 78)).toBeNull();
+    clearSwapFailure(dir, 77);
+    expect(await readSwapFailure(dir, 77)).toBeNull();
   });
 });
 

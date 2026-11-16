@@ -133,6 +133,8 @@ export interface SupervisorOptions {
   orphanCheckMs?: number;
   readVersion?: (launcher: Launcher) => Promise<string | null>;
   onSwapped?: (swap: { from: string; to: string }) => Promise<void> | void;
+  /** A swap that was abandoned; the old worker keeps serving. */
+  onSwapFailed?: (failure: { from: string; to: string; reason: string }) => Promise<void> | void;
   log?: (message: string) => void;
   now?: () => number;
   exit?: (code: number) => void;
@@ -368,7 +370,9 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         proc.kill("SIGKILL");
         backoff.set(to, now() + (opts.backoffMs ?? 10 * 60_000));
         attempts.set(to, (attempts.get(to) ?? 0) + 1);
-        log(`hot swap to ${to} failed, staying on ${active.version}: ${(error as Error).message}`);
+        const reason = (error as Error).message;
+        log(`hot swap to ${to} failed, staying on ${active.version}: ${reason}`);
+        void (async () => opts.onSwapFailed?.({ from: active.version, to, reason }))().catch(() => {});
       } finally {
         preparing = false;
       }

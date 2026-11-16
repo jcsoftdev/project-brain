@@ -154,6 +154,36 @@ export async function serverSwapped(dataDir: string, cwd: string | undefined, ve
 }
 
 
+export interface SwapFailure {
+  from: string;
+  to: string;
+  reason: string;
+  at: number;
+}
+
+// One file per supervisor, named by its pid: the worker it relays to knows that pid (BRAIN_CLIENT_PID).
+const swapFailureFile = (dataDir: string, supervisorPid: number) => join(dataDir, "swap-failures", `${supervisorPid}.json`);
+
+/** Called by the supervisor when it gives up on a swap and keeps the old worker. */
+export async function recordSwapFailure(dataDir: string, supervisorPid: number, failure: SwapFailure): Promise<void> {
+  await mkdir(join(dataDir, "swap-failures"), { recursive: true });
+  await writeFileAtomic(swapFailureFile(dataDir, supervisorPid), `${JSON.stringify(failure)}\n`);
+}
+
+/** Synchronous, for the supervisor's exit handler and a later successful swap. */
+export function clearSwapFailure(dataDir: string, supervisorPid: number): void {
+  try {
+    rmSync(swapFailureFile(dataDir, supervisorPid), { force: true });
+  } catch {
+    /* nothing to clear */
+  }
+}
+
+export async function readSwapFailure(dataDir: string, supervisorPid: number): Promise<SwapFailure | null> {
+  const failure = await readJson<SwapFailure | null>(swapFailureFile(dataDir, supervisorPid), null);
+  return failure && typeof failure.to === "string" && typeof failure.reason === "string" ? failure : null;
+}
+
 /**
  * A running MCP server, written by `serve` at startup and removed on exit, so `project-brain status`
  * can name the version each live server runs. Servers from before this record existed are found
