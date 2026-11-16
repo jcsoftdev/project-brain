@@ -1,30 +1,35 @@
 #!/usr/bin/env bun
+import { wantsSupervisor } from "./server/supervisor-gate.js";
 
 const [command, ...args] = process.argv.slice(2);
 
 // Stdio `serve` runs as a thin supervisor around a worker (`serve --worker`) so a running session can
 // move to a newer binary after `project-brain update` without `/mcp reconnect`. Decided before the
 // preamble below and before anything heavy loads: the supervisor stays small, the worker does the work.
-// Opt-in (BRAIN_MCP_HOT_SWAP=1): the extra process costs ~76 MB per session. By default `serve` runs
-// in-process, as before, and an update is picked up with `/mcp reconnect`.
-if (
-  (command === undefined || command === "serve") &&
-  !args.includes("--http") &&
-  !args.includes("--worker") &&
-  process.env.BRAIN_MCP_HOT_SWAP === "1"
-) {
+// On by default; BRAIN_MCP_HOT_SWAP=0 runs `serve` in-process. It is affordable because the release
+// build compiles with `--splitting`: without it every process parsed the whole app bundle at start,
+// and the supervisor alone cost 39 MB of physical memory per session; split, it loads only its chunk.
+if (wantsSupervisor(command, args, process.env)) {
   const { runSupervisor, resolveLauncher } = await import("./server/supervisor.js");
   const { VERSION, DATA_DIR } = await import("./constants.js");
+  const { join } = await import("node:path");
+  const { recordSwap, recordSwapFailure, clearSwapFailure } = await import("./hooks/session-versions.js");
   const cwd = process.cwd();
+  process.on("exit", () => clearSwapFailure(DATA_DIR, process.pid));
   const code = await runSupervisor({
     launcher: resolveLauncher(),
     args: ["serve", ...args],
     version: VERSION,
     orphanCheckMs: Number(process.env.BRAIN_ORPHAN_CHECK_MS) || undefined,
+    drainDir: join(DATA_DIR, "draining"),
     // Left for the next prompt's notice, which can then say the server is already on the new version.
     onSwapped: async (swap) => {
-      const { recordSwap } = await import("./hooks/session-versions.js");
+      clearSwapFailure(DATA_DIR, process.pid);
       await recordSwap(DATA_DIR, { cwd, ...swap, at: Date.now() });
+    },
+    // Left for the worker's check_health, which then names the failure instead of a pending swap.
+    onSwapFailed: async (failure) => {
+      await recordSwapFailure(DATA_DIR, process.pid, { ...failure, at: Date.now() });
     },
   });
   process.exit(code);
@@ -229,6 +234,11 @@ Structural (offline — no Ollama probe, reads the local graph.db directly):
   map                      Token-budgeted repo overview, [--budget N] [--focus a,b,c]
   code "<query>"           Keyword/BM25 code search (no embeddings needed), [--limit N] (default 10, max 50)
 
+Options for serve (stdio):
+  BRAIN_MCP_HOT_SWAP=0  Run the server in-process. By default a small supervisor
+                        moves the session to a newer binary after an update,
+                        without /mcp reconnect.
+
 Options for serve --http:
   --port <n>         HTTP listen port (default: 3000; env: BRAIN_HTTP_PORT)
   BRAIN_HTTP_TOKEN   Required env var — bearer secret for HTTP auth
@@ -242,6 +252,13 @@ Options:
 switch (command) {
   case undefined:
   case "serve": {
+    {
+      // So `project-brain status` can say which version each live server runs.
+      const { recordServer, forgetServer } = await import("./hooks/session-versions.js");
+      const { DATA_DIR, VERSION } = await import("./constants.js");
+      void recordServer(DATA_DIR, { pid: process.pid, version: VERSION, cwd: process.cwd(), startedAt: Date.now() }).catch(() => {});
+      process.on("exit", () => forgetServer(DATA_DIR, process.pid));
+    }
     if (args.includes("--http")) {
       // HTTP transport with bearer-token authentication
       const { parsePort } = await import("./cli-args.js");
@@ -284,7 +301,17 @@ switch (command) {
 
       // Graceful shutdown — closes the shared graph connection AND every
       // foreign project graph the structural tools opened along the way.
-      const shutdown = createShutdownHandler(watcher, undefined, [graph, foreignGraphs]);
+      const teardown = createShutdownHandler(watcher, undefined, [graph, foreignGraphs]);
+      // Under the hot-swap supervisor: the watcher's stop() drains an in-flight sync, which can take
+      // minutes, so the supervisor is told (a marker file) to wait for it rather than kill it. The
+      // new worker cannot index meanwhile: watch.lock stays ours until that drain has finished.
+      const { DRAIN_DIR_ENV, markDraining, clearDraining } = await import("./server/supervisor-drain.js");
+      const drainDir = args.includes("--worker") ? process.env[DRAIN_DIR_ENV] : undefined;
+      if (drainDir) process.on("exit", () => clearDraining(drainDir, process.pid));
+      const shutdown = () => {
+        if (drainDir && watcher.watching) markDraining(drainDir, process.pid);
+        return teardown();
+      };
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
 

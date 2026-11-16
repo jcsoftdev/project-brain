@@ -134,7 +134,7 @@ export async function upgradeNoticeFor(
   else
     server =
       "the MCP server is still the old version: run `/mcp reconnect all` (or `/mcp`) to load the new project-brain tools. " +
-      "To have this happen automatically, start the server with BRAIN_MCP_HOT_SWAP=1 (costs ~76 MB of memory per session)";
+      "Hot swap is off because BRAIN_MCP_HOT_SWAP=0 is set; remove it and updates apply without a restart (~16 MB of memory per session)";
 
   const lines = [`project-brain updated ${notice.from} → ${current} in this session: hooks and skills are already live; ${server}.`];
   // /compact and /clear already reloaded CLAUDE.md; only a session that did not needs the table repeated.
@@ -148,9 +148,9 @@ export async function upgradeNoticeFor(
   return { text: lines.join("\n"), commit: notice.commit };
 }
 
-/** Whether the user turned the hot swap on: in this environment, or in the MCP entry Claude Code launches. */
+/** Whether the hot swap is on (the default): off only when BRAIN_MCP_HOT_SWAP=0 here or in the MCP entry Claude Code launches. */
 async function hotSwapConfigured(): Promise<boolean> {
-  if (process.env.BRAIN_MCP_HOT_SWAP === "1") return true;
+  if (process.env.BRAIN_MCP_HOT_SWAP === "0") return false;
   try {
     const { homedir } = await import("node:os");
     const { join } = await import("node:path");
@@ -158,9 +158,9 @@ async function hotSwapConfigured(): Promise<boolean> {
     const config = JSON.parse(await readFile(join(homedir(), ".claude.json"), "utf8")) as {
       mcpServers?: Record<string, { env?: Record<string, string> }>;
     };
-    return config.mcpServers?.["project-brain"]?.env?.BRAIN_MCP_HOT_SWAP === "1";
+    return config.mcpServers?.["project-brain"]?.env?.BRAIN_MCP_HOT_SWAP !== "0";
   } catch {
-    return false;
+    return true;
   }
 }
 

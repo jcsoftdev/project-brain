@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DATA_DIR, VERSION } from "../constants.js";
 import { isScopedProjectId } from "../indexer/project-id.js";
 import { isNewer } from "../notifier.js";
+import type { StaleServer } from "../hooks/session-versions.js";
 import { readRegistry } from "../store/project-registry.js";
 import { resolveDefaultBranch } from "./worktree.js";
 import {
@@ -56,6 +57,8 @@ export interface StatusDeps {
   pendingUnits: () => Promise<UnitsInspection | null>;
   /** One process-table read, asked per worktree. Null holders mean "unknown", which blocks removal. */
   holders: () => Promise<(path: string) => number[] | null>;
+  /** Live MCP servers not running `installed`. Null when that could not be determined. */
+  staleServers?: (installed: string, dataDir: string) => Promise<StaleServer[] | null>;
 }
 
 export interface UnpushedBranch {
@@ -95,6 +98,8 @@ export interface StatusReport {
   projects: ProjectStatus[];
   units: (UnitsInspection & { command: string }) | null;
   version: VersionStatus;
+  /** MCP servers still running an older version than the installed one; null when unknown. */
+  servers: StaleServer[] | null;
   clean: boolean;
 }
 
@@ -161,6 +166,28 @@ export function defaultStatusDeps(): StatusDeps {
       const r = await run("lsof", ["-d", "cwd", "-Fpn"], {});
       if (r.out.length === 0) return () => null;
       return (path) => holdersIn(r.out, path);
+    },
+    staleServers: async (installed, dataDir) => {
+      // Without ps (Windows, slim containers) a record cannot be told from a recycled pid: unknown.
+      // `now` is taken before ps runs: etime counts to the snapshot, not to whenever this resumes.
+      const now = Date.now();
+      const [meta, args] = await Promise.all([
+        run("ps", ["-Ao", "pid=,ppid=,uid=,etime=,comm="], { timeout: 3000 }),
+        run("ps", ["-Ao", "pid=,args="], { timeout: 3000 }),
+      ]);
+      if (!meta.ok || !args.ok) return null;
+      const { liveServers, parseProcessTable, pruneSwapFailures, staleServers } = await import("../hooks/session-versions.js");
+      const { resolveLauncher } = await import("../server/supervisor.js");
+      const rows = parseProcessTable(meta.out, args.out, now);
+      const installedAt = (() => {
+        try {
+          return statSync(realpathSync(resolveLauncher().watch)).ctimeMs;
+        } catch {
+          return null;
+        }
+      })();
+      await pruneSwapFailures(dataDir, rows, now);
+      return staleServers(rows, await liveServers(dataDir, rows, now), installed, { uid: process.getuid?.(), installedAt });
     },
   };
 }
@@ -324,6 +351,7 @@ export async function collectStatus(deps: StatusDeps, options: { project?: strin
   const tagsPromise = deps.distTags().catch(() => null);
   const unitsPromise = deps.pendingUnits().catch(() => null);
   const holdersOf = await deps.holders().catch(() => () => null);
+  const serversPromise = deps.staleServers ? deps.staleServers(deps.installedVersion, deps.dataDir).catch(() => null) : Promise.resolve(null);
 
   const collected = await Promise.all(candidates.map(([id, entry]) => collectProject(id, entry.root, deps, holdersOf).catch(() => null)));
   const seen = new Set<string>();
@@ -336,8 +364,10 @@ export async function collectStatus(deps: StatusDeps, options: { project?: strin
   const inspection = await unitsPromise;
   const units = inspection === null ? null : { ...inspection, command: "project-brain setup" };
   const version = versionStatus(deps.installedVersion, await tagsPromise);
-  const clean = projects.every((p) => p.clean) && (units?.pending.length ?? 0) === 0 && version.commands.length === 0;
-  return { projects, units, version, clean };
+  const servers = await serversPromise;
+  const clean =
+    projects.every((p) => p.clean) && (units?.pending.length ?? 0) === 0 && version.commands.length === 0 && (servers?.length ?? 0) === 0;
+  return { projects, units, version, servers, clean };
 }
 
 function plural(n: number, word: string): string {
@@ -384,9 +414,31 @@ export function formatStatus(report: StatusReport): string {
     global.push(`  ${"version".padEnd(10)} installed ${v.installed}; ${notes.join("; ")}`);
     for (const c of v.commands) global.push(`  ${"".padEnd(10)} $ ${c}`);
   }
+  global.push(...formatStaleServers(report.servers ?? [], v.installed));
   if (global.length > 0) out.push("global", ...global);
   else if (out.at(-1) === "") out.pop();
   return out.join("\n");
+}
+
+function age(ms: number): string {
+  const hours = Math.floor(ms / 3_600_000);
+  if (hours >= 48) return `${Math.floor(hours / 24)}d`;
+  return hours >= 1 ? `${hours}h` : `${Math.max(1, Math.floor(ms / 60_000))}m`;
+}
+
+/** One line per server: "MCP server runs 0.42.0, installed 0.45.1", and the fix once at the end. */
+export function formatStaleServers(servers: StaleServer[], installed: string, now: number = Date.now()): string[] {
+  if (servers.length === 0) return [];
+  const pad = "".padEnd(10);
+  const lines = servers.slice(0, LISTED_ITEMS).map((s, i) => {
+    const runs = s.version ? `runs ${s.version}` : "runs an older version";
+    const where = [`pid ${s.pid}`, s.cwd ? shellPath(s.cwd) : null, `up ${age(now - s.startedAt)}`].filter(Boolean).join(", ");
+    return `  ${(i === 0 ? "mcp" : "").padEnd(10)} MCP server ${runs}, installed ${installed} (${where})`;
+  });
+  const hidden = servers.length - LISTED_ITEMS;
+  if (hidden > 0) lines.push(`  ${pad} ... and ${hidden} more`);
+  lines.push(`  ${pad} fix: run /mcp reconnect in each of those Claude Code sessions, or restart them`);
+  return lines;
 }
 
 export async function execute(args: string[], deps: StatusDeps = defaultStatusDeps()): Promise<void> {
