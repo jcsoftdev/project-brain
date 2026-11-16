@@ -15,6 +15,7 @@ import { realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { isNewer } from "../notifier.js";
+import { DRAIN_DIR_ENV, clearDraining, isDraining } from "./supervisor-drain.js";
 
 export interface Launcher {
   /** argv that runs the CLI with no arguments; `--version` and the worker args are appended. */
@@ -90,13 +91,19 @@ export class LineFramer {
       this.len += rest.length;
     }
   }
+
+  /** Drops a half-line, for a stream whose writer died mid-line. */
+  reset(): void {
+    this.parts = [];
+    this.len = 0;
+  }
 }
 
 type Msg = {
   id?: string | number;
   method?: string;
   params?: { requestId?: string | number };
-  result?: { capabilities?: Record<string, unknown>; serverInfo?: { version?: string } };
+  result?: { capabilities?: Record<string, unknown>; serverInfo?: { version?: string }; protocolVersion?: string };
   error?: { message?: string };
 };
 
@@ -108,6 +115,22 @@ function parse(line: Buffer): Msg | null {
     return m && typeof m === "object" ? (m as Msg) : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Why a swap was abandoned. "start": the new binary did not come up as a working server, so a
+ * reconnect would fail the same way. "protocol": it speaks another MCP protocol version than this
+ * session negotiated; a reconnect negotiates afresh. "idle": the session never had a quiet moment.
+ */
+export type SwapFailureKind = "start" | "protocol" | "idle";
+
+class SwapError extends Error {
+  constructor(
+    message: string,
+    readonly kind: SwapFailureKind
+  ) {
+    super(message);
   }
 }
 
@@ -126,15 +149,19 @@ export interface SupervisorOptions {
   /** How long to wait for the session to go idle once the new worker is ready. */
   idleTimeoutMs?: number;
   backoffMs?: number;
-  /** SIGTERM -> SIGKILL grace for workers. */
+  /** How long a retiring worker that is not finishing a sync has to exit before it is killed. */
   graceMs?: number;
+  /** Where workers mark that they are finishing a sync on their way out (see supervisor-drain.ts). */
+  drainDir?: string;
+  /** The most a retiring worker that is finishing a sync is given before it is killed anyway. */
+  drainCapMs?: number;
   /** Client pid to watch for an orphaned supervisor. */
   clientPid?: number;
   orphanCheckMs?: number;
   readVersion?: (launcher: Launcher) => Promise<string | null>;
   onSwapped?: (swap: { from: string; to: string }) => Promise<void> | void;
   /** A swap that was abandoned; the old worker keeps serving. */
-  onSwapFailed?: (failure: { from: string; to: string; reason: string }) => Promise<void> | void;
+  onSwapFailed?: (failure: { from: string; to: string; reason: string; kind: SwapFailureKind }) => Promise<void> | void;
   log?: (message: string) => void;
   now?: () => number;
   exit?: (code: number) => void;
@@ -149,24 +176,42 @@ interface Worker {
   live: boolean;
 }
 
-/** Runs `<launcher> --version`; null when it fails, times out, or prints no version. */
-export async function readLauncherVersion(launcher: Launcher): Promise<string | null> {
+const exited = (w: Worker) => w.proc.exitCode !== null || w.proc.signalCode !== null;
+
+/** project-brain's own `--version` line; anything else (another program's version) is not an answer. */
+const VERSION_LINE = /^project-brain (\d+\.\d+\.\d+\S*)\s*$/m;
+
+/** Runs `<launcher> --version`: the version, or why there is none. */
+export async function probeLauncherVersion(launcher: Launcher): Promise<{ version: string } | { error: string }> {
   return await new Promise((resolve) => {
     try {
-      const child = spawn(launcher.argv[0], [...launcher.argv.slice(1), "--version"], { stdio: ["ignore", "pipe", "ignore"] });
+      const child = spawn(launcher.argv[0]!, [...launcher.argv.slice(1), "--version"], { stdio: ["ignore", "pipe", "pipe"] });
       let out = "";
-      const timer = setTimeout(() => child.kill("SIGKILL"), 5000);
+      let err = "";
+      let timedOut = false;
+      const timer = setTimeout(() => ((timedOut = true), child.kill("SIGKILL")), 5000);
       child.stdout!.on("data", (c) => (out += c));
-      child.on("error", () => (clearTimeout(timer), resolve(null)));
-      child.on("close", (code) => {
+      child.stderr!.on("data", (c) => (err += c));
+      child.on("error", (e) => (clearTimeout(timer), resolve({ error: e.message })));
+      child.on("close", (code, signal) => {
         clearTimeout(timer);
-        const match = /\d+\.\d+\.\d+\S*/.exec(out);
-        resolve(code === 0 && match ? match[0] : null);
+        const match = VERSION_LINE.exec(out);
+        if (code === 0 && match) return resolve({ version: match[1]! });
+        const detail = err.trim().split("\n").pop()?.slice(0, 200);
+        if (timedOut) return resolve({ error: "--version did not answer within 5 s" });
+        if (code !== 0) return resolve({ error: `--version exited with ${signal ?? `code ${code}`}${detail ? `: ${detail}` : ""}` });
+        resolve({ error: "--version printed no project-brain version" });
       });
-    } catch {
-      resolve(null);
+    } catch (e) {
+      resolve({ error: (e as Error).message });
     }
   });
+}
+
+/** Runs `<launcher> --version`; null when it fails, times out, or prints no project-brain version. */
+export async function readLauncherVersion(launcher: Launcher): Promise<string | null> {
+  const r = await probeLauncherVersion(launcher);
+  return "version" in r ? r.version : null;
 }
 
 /** Runs until the client goes away or the active worker dies. Resolves with the exit code (and calls `exit`). */
@@ -179,6 +224,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
   const exit = opts.exit ?? ((code: number) => process.exit(code));
   const args = opts.args ?? [];
   const graceMs = opts.graceMs ?? 30_000;
+  const drainCapMs = opts.drainCapMs ?? 10 * 60_000;
   const readVersion = opts.readVersion ?? readLauncherVersion;
   const clientPid = opts.clientPid ?? (Number(baseEnv.BRAIN_CLIENT_PID) || process.ppid);
 
@@ -188,32 +234,66 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
     let stopping = false;
 
     // Session state, shared by whichever worker is active.
-    const inbound = new Set<string>(); // client requests awaiting a response
+    const inbound = new Map<string, string | number>(); // client requests awaiting a response
     const outbound = new Set<string>(); // server requests awaiting a response
     let initReq: (Msg & { jsonrpc: "2.0" }) | undefined;
     let initialized = false;
     let capabilities: Record<string, unknown> = {};
+    let protocolVersion: string | undefined;
     const fromClient = new LineFramer();
     const fromServer = new LineFramer();
     const idle = () => inbound.size === 0 && outbound.size === 0 && fromClient.clean && fromServer.clean;
 
-    const spawnWorker = (extraEnv: Record<string, string> = {}): ChildProcess =>
-      spawn(opts.launcher.argv[0], [...opts.launcher.argv.slice(1), ...args, "--worker"], {
+    const spawnWorker = (): ChildProcess =>
+      spawn(opts.launcher.argv[0]!, [...opts.launcher.argv.slice(1), ...args, "--worker"], {
         cwd: opts.cwd ?? process.cwd(),
         stdio: ["pipe", "pipe", "inherit"],
         // The worker's orphan check must watch THIS process, not the client above it.
-        env: { ...baseEnv, BRAIN_CLIENT_PID: String(process.pid), ...extraEnv } as NodeJS.ProcessEnv,
+        env: {
+          ...baseEnv,
+          BRAIN_CLIENT_PID: String(process.pid),
+          ...(opts.drainDir ? { [DRAIN_DIR_ENV]: opts.drainDir } : {}),
+        } as NodeJS.ProcessEnv,
       });
 
+    /**
+     * Asks a worker to stop and makes sure it does. The request is closing its stdin, which a worker
+     * treats as a graceful shutdown on every platform; a signal is added only where it is not a hard
+     * kill. A worker that marked itself as finishing a sync gets up to drainCapMs; any other gets graceMs.
+     */
     const terminate = (w: Worker) => {
+      if (w.retired && w.proc.stdin?.writableEnded) return;
       w.retired = true;
+      const pid = w.proc.pid;
+      const startedAt = now();
       try {
         w.proc.stdin?.end();
       } catch {}
-      w.proc.kill("SIGTERM");
-      const t = setTimeout(() => w.proc.kill("SIGKILL"), graceMs);
-      t.unref?.();
-      w.proc.once("exit", () => clearTimeout(t));
+      if (process.platform !== "win32") w.proc.kill("SIGTERM");
+      let told = false;
+      const tick = setInterval(() => {
+        if (exited(w)) return clearInterval(tick);
+        const waited = now() - startedAt;
+        if (waited < graceMs) return;
+        const draining = !!opts.drainDir && pid !== undefined && isDraining(opts.drainDir, pid);
+        if (draining && waited < drainCapMs) {
+          if (!told) log(`server ${w.version} is finishing a sync before it exits; waiting up to ${Math.round(drainCapMs / 1000)} s`);
+          told = true;
+          return;
+        }
+        log(
+          draining
+            ? `server ${w.version} was still syncing after ${Math.round(waited / 1000)} s; killing it`
+            : `server ${w.version} did not exit within ${Math.round(waited / 1000)} s; killing it`
+        );
+        clearInterval(tick);
+        w.proc.kill("SIGKILL");
+      }, Math.max(20, Math.min(1000, graceMs / 2)));
+      tick.unref?.();
+      w.proc.once("exit", () => {
+        clearInterval(tick);
+        if (opts.drainDir && pid !== undefined) clearDraining(opts.drainDir, pid);
+      });
     };
 
     const shutdown = (code: number) => {
@@ -221,7 +301,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       stopping = true;
       clearInterval(poll);
       clearInterval(orphan);
-      const live = [...workers].filter((w) => w.proc.exitCode === null && w.proc.signalCode === null);
+      const live = [...workers].filter((w) => !exited(w));
       let left = live.length;
       const done = () => {
         if (--left <= 0) {
@@ -238,8 +318,8 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         w.proc.once("exit", done);
         terminate(w);
       }
-      // Backstop: kill is bounded by graceMs, plus a moment for the exit events.
-      setTimeout(() => (finish(code), exit(code)), graceMs + 2000).unref?.();
+      // Backstop: terminate() kills within drainCapMs at worst, plus a moment for the exit events.
+      setTimeout(() => (finish(code), exit(code)), Math.max(graceMs, drainCapMs) + 2000).unref?.();
     };
 
     // ---- relay -----------------------------------------------------------
@@ -248,11 +328,17 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       const m = parse(line);
       if (!m) return;
       if (m.method && m.id !== undefined) {
-        inbound.add(key(m.id));
+        inbound.set(key(m.id), m.id);
         if (m.method === "initialize" && !initReq) initReq = m as unknown as typeof initReq;
       } else if (m.method === "notifications/initialized") initialized = true;
       else if (m.method === "notifications/cancelled") inbound.delete(key(m.params?.requestId));
       else if (!m.method && m.id !== undefined) outbound.delete(key(m.id));
+      // A notification can change session state (roots, for one). The worker that is ready to take
+      // over gets it too, so it serves the session as the client left it. A cancellation names a
+      // request of the current worker only.
+      if (m.method && m.id === undefined && m.method !== "notifications/cancelled" && ready && !ready.live && !exited(ready)) {
+        ready.proc.stdin!.write(Buffer.concat([line, Buffer.from("\n")]));
+      }
     };
 
     const trackServer = (line: Buffer) => {
@@ -262,7 +348,10 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       else if (m.method === "notifications/cancelled") outbound.delete(key(m.params?.requestId));
       else if (!m.method && m.id !== undefined) {
         inbound.delete(key(m.id));
-        if (initReq && m.id === initReq.id && m.result?.capabilities) capabilities = m.result.capabilities;
+        if (initReq && m.id === initReq.id && m.result) {
+          if (m.result.capabilities) capabilities = m.result.capabilities;
+          protocolVersion = m.result.protocolVersion;
+        }
       }
     };
 
@@ -289,7 +378,13 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       w.proc.on("exit", (code, signal) => {
         workers.delete(w);
         if (w.retired || stopping) return;
-        log(`server ${w.version} exited (${signal ?? `code ${code}`}); closing this connection`);
+        const how = signal ?? `code ${code}`;
+        if (w === active && ready && !exited(ready)) {
+          log(`server ${w.version} exited (${how}); ${ready.version} was ready, so it takes over`);
+          promote();
+          return;
+        }
+        log(`server ${w.version} exited (${how}); closing this connection`);
         shutdown(code ?? 1);
       });
     };
@@ -327,6 +422,7 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
     let target: string | null = null;
     let preparing = false;
     let ready: Worker | null = null;
+    let readySince = 0;
     const backoff = new Map<string, number>();
     // A version that keeps failing is given up on for this session instead of being retried forever.
     const attempts = new Map<string, number>();
@@ -358,10 +454,11 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       try {
         await handshake(next);
         ready = next;
+        readySince = startedAt;
         const deadline = now() + (opts.idleTimeoutMs ?? 120_000);
         while (!stopping && ready === next && !maybeCutover(startedAt)) {
-          if (next.proc.exitCode !== null || next.proc.signalCode !== null) throw new Error("new server died while waiting for an idle moment");
-          if (now() > deadline) throw new Error("session never went idle");
+          if (exited(next)) throw new SwapError("new server died while waiting for an idle moment", "start");
+          if (now() > deadline) throw new SwapError("session never went idle", "idle");
           await new Promise((r) => setTimeout(r, 25));
         }
       } catch (error) {
@@ -371,8 +468,9 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         backoff.set(to, now() + (opts.backoffMs ?? 10 * 60_000));
         attempts.set(to, (attempts.get(to) ?? 0) + 1);
         const reason = (error as Error).message;
+        const kind = error instanceof SwapError ? error.kind : "start";
         log(`hot swap to ${to} failed, staying on ${active.version}: ${reason}`);
-        void (async () => opts.onSwapFailed?.({ from: active.version, to, reason }))().catch(() => {});
+        void (async () => opts.onSwapFailed?.({ from: active.version, to, reason, kind }))().catch(() => {});
       } finally {
         preparing = false;
       }
@@ -383,7 +481,10 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       new Promise<void>((resolve, reject) => {
         const replayId = `hot-swap-init-${now()}`;
         let acc: Buffer = Buffer.alloc(0);
-        const timer = setTimeout(() => fail(new Error("timed out waiting for the new server to initialize")), opts.handoverTimeoutMs ?? 10_000);
+        const timer = setTimeout(
+          () => fail(new SwapError("timed out waiting for the new server to initialize", "start")),
+          opts.handoverTimeoutMs ?? 10_000
+        );
         let settled = false;
         const fail = (e: Error) => {
           if (settled) return;
@@ -391,9 +492,9 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
           clearTimeout(timer);
           reject(e);
         };
-        w.proc.on("error", fail);
-        w.proc.on("exit", (code) => fail(new Error(`new server exited early (code ${code})`)));
-        w.proc.stdin!.on("error", fail);
+        w.proc.on("error", (e) => fail(new SwapError(`could not run the new server: ${e.message}`, "start")));
+        w.proc.on("exit", (code) => fail(new SwapError(`new server exited early (code ${code})`, "start")));
+        w.proc.stdin!.on("error", (e) => fail(new SwapError(e.message, "start")));
         w.proc.stdout!.on("data", (chunk: Buffer) => {
           if (w.live) return; // attach() relays from here on
           if (settled) {
@@ -405,10 +506,13 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
             const m = parse(acc.subarray(0, nl));
             acc = acc.subarray(nl + 1);
             if (!m || m.id !== replayId || m.method) continue;
-            if (m.error) return fail(new Error(`new server rejected initialize: ${m.error.message ?? "unknown"}`));
+            if (m.error) return fail(new SwapError(`new server rejected initialize: ${m.error.message ?? "unknown"}`, "start"));
             const reported = m.result?.serverInfo?.version;
-            if (reported !== w.version) return fail(new Error(`new server reports ${reported}, expected ${w.version}`));
-            if (!isNewer(reported, active.version)) return fail(new Error(`${reported} is not newer than ${active.version}`));
+            if (reported !== w.version) return fail(new SwapError(`new server reports ${reported}, expected ${w.version}`, "start"));
+            if (!isNewer(reported, active.version)) return fail(new SwapError(`${reported} is not newer than ${active.version}`, "start"));
+            const protocol = m.result?.protocolVersion;
+            if (protocolVersion !== undefined && protocol !== protocolVersion)
+              return fail(new SwapError(`new server speaks MCP protocol ${protocol}, this session uses ${protocolVersion}`, "protocol"));
             settled = true;
             clearTimeout(timer);
             // The replayed response is discarded; whatever the worker sends after it is kept for the cutover.
@@ -420,10 +524,8 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         w.proc.stdin!.write(`${JSON.stringify({ ...initReq, id: replayId })}\n`);
       });
 
-    /** Atomic: runs synchronously, only when nothing is in flight and no line is half-sent either way. */
-    const maybeCutover = (startedAt = now()): boolean => {
-      const next = ready;
-      if (!next || stopping || !idle() || next.proc.exitCode !== null || next.proc.signalCode !== null) return false;
+    /** Points the relay at `next`. Synchronous, so nothing slips in between. */
+    const switchTo = (next: Worker, startedAt: number): Worker => {
       const old = active;
       active = next;
       ready = null;
@@ -435,8 +537,6 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
         fromServer.push(chunk, trackServer);
         stdout.write(chunk);
       }
-      old.proc.stdout!.pause();
-      terminate(old);
       stdin.resume();
       const notify = (method: string) => stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method })}\n`);
       notify("notifications/tools/list_changed");
@@ -444,7 +544,33 @@ export function runSupervisor(opts: SupervisorOptions): Promise<number> {
       if (capabilities.resources) notify("notifications/resources/list_changed");
       log(`hot-swapped ${old.version} -> ${next.version} in ${now() - startedAt}ms`);
       void (async () => opts.onSwapped?.({ from: old.version, to: next.version }))().catch(() => {});
+      return old;
+    };
+
+    /** Atomic: runs synchronously, only when nothing is in flight and no line is half-sent either way. */
+    const maybeCutover = (startedAt = now()): boolean => {
+      const next = ready;
+      if (!next || stopping || !idle() || exited(next)) return false;
+      const old = switchTo(next, startedAt);
+      old.proc.stdout!.pause();
+      terminate(old);
       return true;
+    };
+
+    /** The active worker died with a replacement ready: the session moves to it instead of ending. */
+    const promote = () => {
+      const next = ready!;
+      // A line the dead worker left half-written is closed, so the client can parse what follows.
+      if (!fromServer.clean) {
+        stdout.write("\n");
+        fromServer.reset();
+      }
+      // Requests it never answered get an error rather than silence; its own requests are moot.
+      for (const id of inbound.values())
+        stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: "project-brain server restarted; retry the request" } })}\n`);
+      inbound.clear();
+      outbound.clear();
+      switchTo(next, readySince);
     };
 
     // ---- start -----------------------------------------------------------

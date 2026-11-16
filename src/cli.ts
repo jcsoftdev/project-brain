@@ -12,6 +12,7 @@ const [command, ...args] = process.argv.slice(2);
 if (wantsSupervisor(command, args, process.env)) {
   const { runSupervisor, resolveLauncher } = await import("./server/supervisor.js");
   const { VERSION, DATA_DIR } = await import("./constants.js");
+  const { join } = await import("node:path");
   const { recordSwap, recordSwapFailure, clearSwapFailure } = await import("./hooks/session-versions.js");
   const cwd = process.cwd();
   process.on("exit", () => clearSwapFailure(DATA_DIR, process.pid));
@@ -20,6 +21,7 @@ if (wantsSupervisor(command, args, process.env)) {
     args: ["serve", ...args],
     version: VERSION,
     orphanCheckMs: Number(process.env.BRAIN_ORPHAN_CHECK_MS) || undefined,
+    drainDir: join(DATA_DIR, "draining"),
     // Left for the next prompt's notice, which can then say the server is already on the new version.
     onSwapped: async (swap) => {
       clearSwapFailure(DATA_DIR, process.pid);
@@ -299,7 +301,17 @@ switch (command) {
 
       // Graceful shutdown — closes the shared graph connection AND every
       // foreign project graph the structural tools opened along the way.
-      const shutdown = createShutdownHandler(watcher, undefined, [graph, foreignGraphs]);
+      const teardown = createShutdownHandler(watcher, undefined, [graph, foreignGraphs]);
+      // Under the hot-swap supervisor: the watcher's stop() drains an in-flight sync, which can take
+      // minutes, so the supervisor is told (a marker file) to wait for it rather than kill it. The
+      // new worker cannot index meanwhile: watch.lock stays ours until that drain has finished.
+      const { DRAIN_DIR_ENV, markDraining, clearDraining } = await import("./server/supervisor-drain.js");
+      const drainDir = args.includes("--worker") ? process.env[DRAIN_DIR_ENV] : undefined;
+      if (drainDir) process.on("exit", () => clearDraining(drainDir, process.pid));
+      const shutdown = () => {
+        if (drainDir && watcher.watching) markDraining(drainDir, process.pid);
+        return teardown();
+      };
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
 

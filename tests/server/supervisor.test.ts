@@ -9,19 +9,49 @@ import { wantsSupervisor } from "../../src/server/supervisor-gate.js";
 // brew moves /opt/homebrew/bin/project-brain to a new keg. The worker speaks raw JSON-RPC lines, so
 // the supervisor's bookkeeping is exercised directly and deterministically.
 const supervisorSrc = join(import.meta.dir, "../../src/server/supervisor.ts");
+const watchLockSrc = join(import.meta.dir, "../../src/watcher-lock.ts");
+const drainSrc = join(import.meta.dir, "../../src/server/supervisor-drain.ts");
 
-const worker = (version: string, mode: "ok" | "crash" | "hang" | "lie" = "ok") => `#!${process.execPath}
+type Mode = "ok" | "crash" | "hang" | "lie" | "proto";
+
+const worker = (version: string, mode: Mode = "ok") => `#!${process.execPath}
 import { appendFileSync } from "node:fs";
 const VERSION = ${JSON.stringify(version)};
-if (process.argv[2] === "--version") { console.log(VERSION); process.exit(0); }
+if (process.argv[2] === "--version") { console.log("project-brain " + VERSION); process.exit(0); }
 const log = (l) => appendFileSync(process.env.FAKE_LOG, l + "\\n");
 log("boot " + VERSION + " " + process.pid);
 if (${JSON.stringify(mode)} === "crash") process.exit(3);
 const out = (m) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...m }) + "\\n");
+// Like a real worker's watcher: with FAKE_ROOT it indexes only while it holds the REAL watch.lock,
+// and on shutdown it marks itself draining (the REAL marker), finishes its sync, then releases.
+let lock = null;
+let stopping = false;
+if (process.env.FAKE_ROOT) {
+  const { acquireWatchLock } = await import(${JSON.stringify(watchLockSrc)});
+  const win = async () => {
+    if (lock || stopping) return;
+    lock = await acquireWatchLock(process.env.FAKE_ROOT);
+    if (lock) { clearInterval(retry); log("write-start " + VERSION); }
+  };
+  const retry = setInterval(win, 50);
+  await win();
+}
+const stop = async (why) => {
+  if (stopping) return;
+  stopping = true;
+  if (lock) {
+    const { markDraining } = await import(${JSON.stringify(drainSrc)});
+    if (process.env.BRAIN_DRAIN_DIR) markDraining(process.env.BRAIN_DRAIN_DIR, process.pid);
+    await new Promise((r) => setTimeout(r, Number(process.env.FAKE_SYNC_MS) || 0));
+    log("write-end " + VERSION);
+    await lock.release();
+  }
+  setTimeout(() => { log(why + " " + VERSION); process.exit(0); }, Number(process.env.FAKE_TERM_MS) || 0);
+};
 // Contract of a real worker: gone when its stdin closes or its supervisor dies.
-process.stdin.on("end", () => setTimeout(() => { log("stdin-end " + VERSION); process.exit(0); }, Number(process.env.FAKE_TERM_MS) || 0));
+process.stdin.on("end", () => stop("stdin-end"));
 setInterval(() => { try { process.kill(Number(process.env.BRAIN_CLIENT_PID), 0); } catch { log("orphan " + VERSION); process.exit(0); } }, 100);
-process.on("SIGTERM", () => setTimeout(() => { log("term " + VERSION); process.exit(0); }, Number(process.env.FAKE_TERM_MS) || 0));
+process.on("SIGTERM", () => stop("term"));
 if (${JSON.stringify(mode)} === "hang") { process.stdin.resume(); }
 else {
   let buf = "";
@@ -31,7 +61,8 @@ else {
     buf += c;
     for (let i = buf.indexOf("\\n"); i !== -1; i = buf.indexOf("\\n")) {
       const msg = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
-      if (msg.method === "initialize") out({ id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fake", version: ${JSON.stringify(mode === "lie" ? "0.0.1" : version)} } } });
+      if (msg.method === "initialize") out({ id: msg.id, result: { protocolVersion: ${JSON.stringify(mode === "proto" ? "2024-11-05" : "2025-06-18")}, capabilities: { tools: { listChanged: true } }, serverInfo: { name: "fake", version: ${JSON.stringify(mode === "lie" ? "0.0.1" : version)} } } });
+      else if (msg.method?.startsWith("notifications/roots")) log("notif " + VERSION + " " + msg.method);
       else if (msg.method === "whoami") out({ id: msg.id, result: { v: VERSION, pid: process.pid } });
       else if (msg.method === "echo") out({ id: msg.id, result: { v: VERSION, text: msg.params.text } });
       // Held until the client says "release": the test decides when it is answered, not a timer.
@@ -63,14 +94,16 @@ afterEach(async () => {
 
 type Env = Record<string, string>;
 
-async function boot(opts: { termMs?: number; handoverMs?: number; backoffMs?: number; env?: Env } = {}) {
+async function boot(
+  opts: { termMs?: number; handoverMs?: number; backoffMs?: number; graceMs?: number; drainCapMs?: number; drainDir?: string; env?: Env } = {}
+) {
   const dir = await mkdtemp(join(tmpdir(), "pb-supervisor-"));
   dirs.push(dir);
   const bin = join(dir, "bin");
   await mkdir(bin);
   const logFile = join(dir, "log.txt");
   await writeFile(logFile, "");
-  const install = async (version: string, mode: "ok" | "crash" | "hang" | "lie" = "ok") => {
+  const install = async (version: string, mode: Mode = "ok") => {
     const file = join(dir, `project-brain-${version}-${mode}`);
     await writeFile(file, worker(version, mode));
     await chmod(file, 0o755);
@@ -92,8 +125,9 @@ import { runSupervisor } from ${JSON.stringify(supervisorSrc)};
 const link = ${JSON.stringify(join(bin, "project-brain"))};
 const code = await runSupervisor({
   launcher: { argv: [link], watch: link }, args: ["serve"], version: "1.0.0",
-  onSwapFailed: (f) => appendFileSync(process.env.FAKE_LOG, "swap-failed " + f.from + " " + f.to + "\\n"),
-  checkIntervalMs: 50, handoverTimeoutMs: ${opts.handoverMs ?? 5000}, graceMs: 5000, orphanCheckMs: 100, backoffMs: ${opts.backoffMs ?? 600000},
+  onSwapFailed: (f) => appendFileSync(process.env.FAKE_LOG, "swap-failed " + f.from + " " + f.to + " " + f.kind + "\\n"),
+  drainDir: ${JSON.stringify(opts.drainDir ?? null)} ?? undefined, drainCapMs: ${opts.drainCapMs ?? 600000},
+  checkIntervalMs: 50, handoverTimeoutMs: ${opts.handoverMs ?? 5000}, graceMs: ${opts.graceMs ?? 5000}, orphanCheckMs: 100, backoffMs: ${opts.backoffMs ?? 600000},
 });
 process.exit(code);
 `
@@ -225,7 +259,7 @@ describe("MCP supervisor", () => {
       expect(h.changed()).toBe(0);
       expect(h.alive(oldPid)).toBe(true);
       expect((await h.log()).filter((l) => l.startsWith("boot 2.0.0")).length).toBe(1);
-      expect(await h.until(async () => (await h.log()).includes("swap-failed 1.0.0 2.0.0"))).toBe(true);
+      expect(await h.until(async () => (await h.log()).includes("swap-failed 1.0.0 2.0.0 start"))).toBe(true);
       if (mode !== "crash") expect(await h.until(async () => !pidsOf(await h.log()).slice(1).some((p) => h.alive(p)))).toBe(true);
     }, 30_000);
   }
@@ -299,6 +333,76 @@ describe("MCP supervisor", () => {
     expect(at((l) => l.method === "notifications/tools/list_changed")).toBeGreaterThan(at((l) => l.id === 800));
     expect((await h.call("whoami")).v).toBe("2.0.0");
   }, 60_000);
+
+  it("never kills a retiring worker that is finishing a sync, and the next one indexes only after it finished", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pb-root-"));
+    dirs.push(root);
+    await mkdir(join(root, ".project-brain"));
+    // A grace far shorter than the sync: without the drain marker the old worker would be killed mid-write.
+    const h = await boot({ graceMs: 300, drainDir: join(root, "draining"), env: { FAKE_ROOT: root, FAKE_SYNC_MS: "1500" } });
+    expect(await h.until(async () => (await h.log()).includes("write-start 1.0.0"))).toBe(true);
+    const [oldPid] = pidsOf(await h.log());
+
+    await h.point(await h.install("2.0.0"));
+    expect(await h.until(() => h.changed() === 1)).toBe(true);
+    expect((await h.call("whoami")).v).toBe("2.0.0"); // the session moved on while the old worker drains
+    expect(await h.until(async () => (await h.log()).includes("write-start 2.0.0"), 15_000)).toBe(true);
+
+    const log = await h.log();
+    const at = (line: string) => log.indexOf(line);
+    expect(at("write-end 1.0.0")).toBeGreaterThan(at("write-start 1.0.0"));
+    expect(at("write-start 2.0.0")).toBeGreaterThan(at("write-end 1.0.0")); // one writer at a time
+    expect(log.some((l) => l === "stdin-end 1.0.0" || l === "term 1.0.0")).toBe(true); // exited on its own
+    expect(await h.until(() => !h.alive(oldPid!))).toBe(true);
+  }, 60_000);
+
+  it("kills a draining worker once the cap is reached", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pb-root-"));
+    dirs.push(root);
+    await mkdir(join(root, ".project-brain"));
+    const h = await boot({ graceMs: 200, drainCapMs: 1000, drainDir: join(root, "draining"), env: { FAKE_ROOT: root, FAKE_SYNC_MS: "60000" } });
+    expect(await h.until(async () => (await h.log()).includes("write-start 1.0.0"))).toBe(true);
+    const [oldPid] = pidsOf(await h.log());
+    await h.point(await h.install("2.0.0"));
+    expect(await h.until(() => h.changed() === 1)).toBe(true);
+    expect(await h.until(() => !h.alive(oldPid!), 10_000)).toBe(true);
+    expect((await h.log()).includes("write-end 1.0.0")).toBe(false);
+  }, 60_000);
+
+  it("promotes the ready worker when the active one dies, and fails its unanswered requests", async () => {
+    const h = await boot();
+    const [oldPid] = pidsOf(await h.log());
+    await h.point(await h.install("2.0.0"));
+    expect((await h.call("open-ask")).v).toBe("1.0.0"); // busy: the new worker waits, ready
+    expect(await h.until(async () => (await h.log()).includes("initialized 2.0.0"), 30_000)).toBe(true);
+    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: 950, method: "slow", params: {} }) + "\n");
+    await Bun.sleep(100);
+
+    process.kill(oldPid!, "SIGKILL");
+    expect(await h.until(() => h.changed() === 1)).toBe(true);
+    expect(h.lines.find((l) => l.id === 950)?.error?.message).toContain("restarted");
+    expect((await h.call("whoami")).v).toBe("2.0.0");
+    expect(h.proc.exitCode).toBeNull();
+  }, 60_000);
+
+  it("refuses a new worker that speaks another MCP protocol version", async () => {
+    const h = await boot({ handoverMs: 2000 });
+    await h.point(await h.install("2.0.0", "proto"));
+    expect(await h.until(async () => (await h.log()).includes("swap-failed 1.0.0 2.0.0 protocol"))).toBe(true);
+    expect(h.changed()).toBe(0);
+    expect((await h.call("whoami")).v).toBe("1.0.0");
+  }, 30_000);
+
+  it("hands client notifications sent while the new worker waits to that worker too", async () => {
+    const h = await boot();
+    await h.point(await h.install("2.0.0"));
+    expect((await h.call("open-ask")).v).toBe("1.0.0");
+    expect(await h.until(async () => (await h.log()).includes("initialized 2.0.0"), 30_000)).toBe(true);
+    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", method: "notifications/roots/list_changed" }) + "\n");
+    h.sendRaw(JSON.stringify({ jsonrpc: "2.0", id: "srv-2", result: {} }) + "\n");
+    expect(await h.until(() => h.changed() === 1)).toBe(true);
+    expect(await h.until(async () => (await h.log()).includes("notif 2.0.0 notifications/roots/list_changed"))).toBe(true);
+  }, 30_000);
 
   it("gives up on a version after two failed attempts", async () => {
     const h = await boot({ backoffMs: 50 });
