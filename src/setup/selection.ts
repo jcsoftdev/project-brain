@@ -1,5 +1,6 @@
-import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
+import { mkdir, open } from "node:fs/promises";
+import { join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
 
 /**
@@ -70,8 +71,21 @@ export async function saveSelection(
     declined: allIds.filter((id) => !chosen.has(id)),
   };
 
-  await mkdir(dirname(path), { recursive: true });
-  await Bun.write(path, `${JSON.stringify(payload, null, 2)}\n`);
+  // Atomic: the prompt hook reads this file, and a half-written one would read as "no selection".
+  await writeFileAtomic(path, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
+/**
+ * The saved selection, telling a file that is not there (`missing`: setup never ran) from one that
+ * could not be read (`unreadable`: corrupt, or caught mid-write). Only the first means "nothing is
+ * new"; the second means "unknown, ask again later".
+ */
+export async function readSelection(
+  path: string
+): Promise<{ kind: "ok"; selection: Selection } | { kind: "missing" } | { kind: "unreadable" }> {
+  if (!existsSync(path)) return { kind: "missing" };
+  const selection = await loadSelection(path);
+  return selection ? { kind: "ok", selection } : { kind: "unreadable" };
 }
 
 /** Where one unit stands. Everything is `unseen` when nothing was ever saved. */
@@ -112,19 +126,68 @@ export function mergeSelection(
   };
 }
 
-const announcedPath = (dataDir: string) => join(dataDir, "whats-new.json");
+export interface AnnouncedUnit {
+  id: string;
+  label: string;
+  description: string;
+}
 
-/** The binary version whose new units were last announced on this machine, or null. */
-export async function announcedVersion(dataDir: string): Promise<string | null> {
+/**
+ * The new units of one binary version, computed between sessions (`maintain`, `update`) so the
+ * prompt hook only reads a file. `unknown` are units whose inspection did not answer in time: they
+ * are not listed, and the next computation looks at them again.
+ */
+export interface WhatsNewCache {
+  version: string;
+  units: AnnouncedUnit[];
+  unknown: string[];
+}
+
+const cachePath = (dataDir: string) => join(dataDir, "whats-new.json");
+const announcedPath = (dataDir: string) => join(dataDir, "whats-new-announced.json");
+
+export async function readWhatsNewCache(dataDir: string): Promise<WhatsNewCache | null> {
   try {
-    const parsed = JSON.parse(await Bun.file(announcedPath(dataDir)).text()) as { announced?: unknown };
-    return typeof parsed.announced === "string" ? parsed.announced : null;
+    const parsed = JSON.parse(await Bun.file(cachePath(dataDir)).text()) as Partial<WhatsNewCache>;
+    if (typeof parsed.version !== "string" || !Array.isArray(parsed.units) || !Array.isArray(parsed.unknown)) return null;
+    return { version: parsed.version, units: parsed.units, unknown: parsed.unknown };
   } catch {
     return null;
   }
 }
 
-/** Records that `version`'s new units were announced, so no other session repeats it. */
-export async function markAnnounced(dataDir: string, version: string): Promise<void> {
-  await writeFileAtomic(announcedPath(dataDir), `${JSON.stringify({ announced: version })}\n`);
+export async function writeWhatsNewCache(dataDir: string, cache: WhatsNewCache): Promise<void> {
+  await writeFileAtomic(cachePath(dataDir), `${JSON.stringify(cache)}\n`);
+}
+
+/** Every unit id ever announced on this machine: each is announced at most once, whatever the release. */
+export async function announcedIds(dataDir: string): Promise<Set<string>> {
+  try {
+    const parsed = JSON.parse(await Bun.file(announcedPath(dataDir)).text()) as { ids?: unknown };
+    return new Set(Array.isArray(parsed.ids) ? parsed.ids.filter((id): id is string => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export async function recordAnnounced(dataDir: string, ids: string[]): Promise<void> {
+  const all = new Set([...(await announcedIds(dataDir)), ...ids]);
+  await writeFileAtomic(announcedPath(dataDir), `${JSON.stringify({ ids: [...all] })}\n`);
+}
+
+/**
+ * Claims one announcement before it is printed, so of two sessions prompting at once only one
+ * shows it. Exclusive create on a name made of the version and the ids: the same list in the same
+ * release is claimed once, while a unit found later in that release makes a new list and a new claim.
+ */
+export async function claimAnnouncement(dataDir: string, version: string, ids: string[]): Promise<boolean> {
+  const dir = join(dataDir, "whats-new-claims");
+  await mkdir(dir, { recursive: true });
+  const key = Bun.hash([...ids].sort().join(",")).toString(36);
+  try {
+    await (await open(join(dir, `${version}-${key}`), "wx")).close();
+    return true;
+  } catch {
+    return false;
+  }
 }

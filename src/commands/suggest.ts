@@ -127,55 +127,52 @@ export interface WhatsNewOptions {
   dataDir?: string;
   version?: string;
   env?: Record<string, string | undefined>;
-  /** The entry point, which decides whether this is the installed binary. Defaults to `Bun.main`. */
-  main?: string;
-  find?: () => Promise<import("./setup.js").NewUnits>;
+  /** Whether this is the installed binary. Defaults to checking `Bun.main`; tests pass true. */
+  installed?: boolean;
 }
 
 /**
- * Printed once per upgrade per machine: the setup units that shipped since the user last chose,
- * that are neither enabled nor declined, and the one command that offers exactly those.
+ * The setup units that shipped since the user last chose, neither enabled nor declined, and the
+ * one command that offers exactly those. Never inspects a unit: `maintain` and `update` compute
+ * the list between sessions, and this only reads it and re-checks the selection, so a slow unit
+ * costs the prompt nothing. Each unit is announced at most once per machine, and the
+ * announcement is claimed before it is printed, so two sessions never both show it.
  *
  * Only the installed binary announces. A checkout carries the same version string as the release
- * it precedes, so a source run would mark that release announced before it was ever installed.
+ * it precedes, so a source run would claim that release before it was ever installed.
  * `PROJECT_BRAIN_WHATS_NEW=0` turns it off.
  */
 export async function whatsNewNoticeFor(options: WhatsNewOptions = {}): Promise<{ text: string; commit: () => Promise<void> } | null> {
   const env = options.env ?? process.env;
   if (env.PROJECT_BRAIN_WHATS_NEW === "0") return null;
-  const { isCompiledEntry, FORCE_GLOBAL_WRITES_ENV } = await import("../env/install-origin.js");
-  if (!isCompiledEntry(options.main ?? Bun.main) && env[FORCE_GLOBAL_WRITES_ENV] !== "1") return null;
+  if (!(options.installed ?? (await import("../env/install-origin.js")).isCompiledEntry(Bun.main))) return null;
 
+  const { join } = await import("node:path");
   const constants = await import("../constants.js");
   const dir = options.dataDir ?? constants.DATA_DIR;
   const current = options.version ?? constants.VERSION;
-  const { announcedVersion, markAnnounced } = await import("../setup/selection.js");
-  if ((await announcedVersion(dir)) === current) return null;
+  const { readWhatsNewCache, readSelection, membership, announcedIds, claimAnnouncement, recordAnnounced } = await import("../setup/selection.js");
+  const cache = await readWhatsNewCache(dir);
+  if (cache?.version !== current) return null;
+  // Missing: nothing is new. Unreadable (corrupt, or caught mid-write): ask again on the next prompt.
+  const saved = await readSelection(join(dir, "setup-selection.json"));
+  if (saved.kind !== "ok") return null;
+  const announced = await announcedIds(dir);
+  const units = cache.units.filter((u) => membership(saved.selection, u.id) === "unseen" && !announced.has(u.id));
+  if (units.length === 0) return null;
+  const ids = units.map((u) => u.id);
+  if (!(await claimAnnouncement(dir, current, ids))) return null;
 
-  const find =
-    options.find ??
-    (async () => {
-      const { findNewUnits, probeContext } = await import("./setup.js");
-      return findNewUnits(await probeContext());
-    });
-  const found = await find();
-  const commit = () => markAnnounced(dir, current);
-  if (found.units.length === 0) {
-    // Nothing to say for this version; a slow inspection gets another chance on the next prompt.
-    if (found.complete) await commit();
-    return null;
-  }
-
-  const listed = found.units.slice(0, WHATS_NEW_LISTED);
-  const more = found.units.length - listed.length;
-  const count = found.units.length === 1 ? "a setup unit" : `${found.units.length} setup units`;
+  const listed = units.slice(0, WHATS_NEW_LISTED);
+  const more = units.length - listed.length;
+  const count = units.length === 1 ? "a setup unit" : `${units.length} setup units`;
   const lines = [
     `project-brain ${current} has ${count} you have not chosen yet (tell the user once):`,
     ...listed.map((u) => `- ${u.id}: ${u.label}, ${firstClause(u.description)}`),
     ...(more > 0 ? [`+${more} more`] : []),
     "`project-brain setup --new` offers only these (in a terminal; `--with=<ids>` picks without a prompt). Nothing is enabled until chosen.",
   ];
-  return { text: lines.join("\n"), commit };
+  return { text: lines.join("\n"), commit: () => recordAnnounced(dir, ids) };
 }
 
 /**
