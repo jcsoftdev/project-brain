@@ -148,9 +148,9 @@ export async function upgradeNoticeFor(
   return { text: lines.join("\n"), commit: notice.commit };
 }
 
-/** Whether the user turned the hot swap on: in this environment, or in the MCP entry Claude Code launches. */
+/** Whether the hot swap is on (the default): off only when BRAIN_MCP_HOT_SWAP=0 here or in the MCP entry Claude Code launches. */
 async function hotSwapConfigured(): Promise<boolean> {
-  if (process.env.BRAIN_MCP_HOT_SWAP === "1") return true;
+  if (process.env.BRAIN_MCP_HOT_SWAP === "0") return false;
   try {
     const { homedir } = await import("node:os");
     const { join } = await import("node:path");
@@ -158,9 +158,9 @@ async function hotSwapConfigured(): Promise<boolean> {
     const config = JSON.parse(await readFile(join(homedir(), ".claude.json"), "utf8")) as {
       mcpServers?: Record<string, { env?: Record<string, string> }>;
     };
-    return config.mcpServers?.["project-brain"]?.env?.BRAIN_MCP_HOT_SWAP === "1";
+    return config.mcpServers?.["project-brain"]?.env?.BRAIN_MCP_HOT_SWAP !== "0";
   } catch {
-    return false;
+    return true;
   }
 }
 

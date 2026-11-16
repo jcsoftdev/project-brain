@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, rename, rm, symlink, writeFile, mkdir } from 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { LineFramer, launcherSignature, resolveLauncher } from "../../src/server/supervisor.js";
+import { wantsSupervisor } from "../../src/server/supervisor-gate.js";
 
 // The "binary" is an executable script behind a symlink, and an update retargets the link — the way
 // brew moves /opt/homebrew/bin/project-brain to a new keg. The worker speaks raw JSON-RPC lines, so
@@ -86,10 +87,12 @@ async function boot(opts: { termMs?: number; handoverMs?: number; backoffMs?: nu
   const runner = join(dir, "run.ts");
   await writeFile(
     runner,
-    `import { runSupervisor } from ${JSON.stringify(supervisorSrc)};
+    `import { appendFileSync } from "node:fs";
+import { runSupervisor } from ${JSON.stringify(supervisorSrc)};
 const link = ${JSON.stringify(join(bin, "project-brain"))};
 const code = await runSupervisor({
   launcher: { argv: [link], watch: link }, args: ["serve"], version: "1.0.0",
+  onSwapFailed: (f) => appendFileSync(process.env.FAKE_LOG, "swap-failed " + f.from + " " + f.to + "\\n"),
   checkIntervalMs: 50, handoverTimeoutMs: ${opts.handoverMs ?? 5000}, graceMs: 5000, orphanCheckMs: 100, backoffMs: ${opts.backoffMs ?? 600000},
 });
 process.exit(code);
@@ -222,6 +225,7 @@ describe("MCP supervisor", () => {
       expect(h.changed()).toBe(0);
       expect(h.alive(oldPid)).toBe(true);
       expect((await h.log()).filter((l) => l.startsWith("boot 2.0.0")).length).toBe(1);
+      expect(await h.until(async () => (await h.log()).includes("swap-failed 1.0.0 2.0.0"))).toBe(true);
       if (mode !== "crash") expect(await h.until(async () => !pidsOf(await h.log()).slice(1).some((p) => h.alive(p)))).toBe(true);
     }, 30_000);
   }
@@ -363,12 +367,32 @@ describe("launcher detection", () => {
     expect(resolveLauncher(real, ["/bun", "/$bunfs/root/project-brain"], "project-brain", () => other)).toEqual({ argv: [real], watch: real });
   });
 
-  it("running from source under bun launches bun + the script", () => {
-    expect(resolveLauncher("/usr/bin/bun", ["bun", "/repo/src/cli.ts"], "bun", () => null)).toEqual({
+  it("running from source under bun watches the script, never an installed project-brain on PATH", () => {
+    expect(resolveLauncher("/usr/bin/bun", ["bun", "/repo/src/cli.ts"], "bun", () => "/opt/homebrew/bin/project-brain")).toEqual({
       argv: ["/usr/bin/bun", "/repo/src/cli.ts"],
       watch: "/repo/src/cli.ts",
     });
   });
+});
+
+describe("which invocations get a supervisor", () => {
+  const cases: [string | undefined, string[], Record<string, string>, boolean][] = [
+    [undefined, [], {}, true],
+    ["serve", [], {}, true],
+    ["serve", [], { BRAIN_MCP_HOT_SWAP: "1" }, true],
+    ["serve", [], { BRAIN_MCP_HOT_SWAP: "0" }, false],
+    [undefined, [], { BRAIN_MCP_HOT_SWAP: "0" }, false],
+    ["serve", ["--http"], {}, false],
+    ["serve", ["--worker"], {}, false],
+    ["status", [], {}, false],
+    ["routing-rules", [], {}, false],
+    ["suggest", [], {}, false],
+    ["--version", [], {}, false],
+    ["sync", [], {}, false],
+  ];
+  for (const [command, args, env, expected] of cases)
+    it(`${command ?? "(no command)"} ${args.join(" ")} ${JSON.stringify(env)} -> ${expected}`, () =>
+      expect(wantsSupervisor(command, args, env)).toBe(expected));
 });
 
 describe("LineFramer", () => {

@@ -1,26 +1,20 @@
 #!/usr/bin/env bun
+import { wantsSupervisor } from "./server/supervisor-gate.js";
 
 const [command, ...args] = process.argv.slice(2);
 
 // Stdio `serve` runs as a thin supervisor around a worker (`serve --worker`) so a running session can
 // move to a newer binary after `project-brain update` without `/mcp reconnect`. Decided before the
 // preamble below and before anything heavy loads: the supervisor stays small, the worker does the work.
-// Opt-in (BRAIN_MCP_HOT_SWAP=1). The supervisor's own imports are already minimal (from source it
-// sits at bare-Bun RSS, ~33 MB); its cost comes from the release build, which compiles every module
-// into one bundle that each process parses at start: 39 MB physical footprint (70-84 MB RSS) per
-// session, against 14 MB for an empty compiled Bun program. With `bun build --compile --splitting`
-// the supervisor drops to 16 MB, which would justify making this the default. Until the build does
-// that, `serve` runs in-process by default and an update is picked up with `/mcp reconnect`;
-// check_health and `project-brain status` say when a server runs an older version than installed.
-if (
-  (command === undefined || command === "serve") &&
-  !args.includes("--http") &&
-  !args.includes("--worker") &&
-  process.env.BRAIN_MCP_HOT_SWAP === "1"
-) {
+// On by default; BRAIN_MCP_HOT_SWAP=0 runs `serve` in-process. It is affordable because the release
+// build compiles with `--splitting`: without it every process parsed the whole app bundle at start,
+// and the supervisor alone cost 39 MB of physical memory per session; split, it loads only its chunk.
+if (wantsSupervisor(command, args, process.env)) {
   const { runSupervisor, resolveLauncher } = await import("./server/supervisor.js");
   const { VERSION, DATA_DIR } = await import("./constants.js");
+  const { recordSwap, recordSwapFailure, clearSwapFailure } = await import("./hooks/session-versions.js");
   const cwd = process.cwd();
+  process.on("exit", () => clearSwapFailure(DATA_DIR, process.pid));
   const code = await runSupervisor({
     launcher: resolveLauncher(),
     args: ["serve", ...args],
@@ -28,8 +22,12 @@ if (
     orphanCheckMs: Number(process.env.BRAIN_ORPHAN_CHECK_MS) || undefined,
     // Left for the next prompt's notice, which can then say the server is already on the new version.
     onSwapped: async (swap) => {
-      const { recordSwap } = await import("./hooks/session-versions.js");
+      clearSwapFailure(DATA_DIR, process.pid);
       await recordSwap(DATA_DIR, { cwd, ...swap, at: Date.now() });
+    },
+    // Left for the worker's check_health, which then names the failure instead of a pending swap.
+    onSwapFailed: async (failure) => {
+      await recordSwapFailure(DATA_DIR, process.pid, { ...failure, at: Date.now() });
     },
   });
   process.exit(code);
@@ -233,6 +231,11 @@ Structural (offline — no Ollama probe, reads the local graph.db directly):
   trace <from> <to>        Shortest call path from <from> to <to>, [--max-depth N] (default 8, max 20)
   map                      Token-budgeted repo overview, [--budget N] [--focus a,b,c]
   code "<query>"           Keyword/BM25 code search (no embeddings needed), [--limit N] (default 10, max 50)
+
+Options for serve (stdio):
+  BRAIN_MCP_HOT_SWAP=0  Run the server in-process. By default a small supervisor
+                        moves the session to a newer binary after an update,
+                        without /mcp reconnect.
 
 Options for serve --http:
   --port <n>         HTTP listen port (default: 3000; env: BRAIN_HTTP_PORT)

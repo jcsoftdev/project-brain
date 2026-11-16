@@ -29,11 +29,15 @@ async function childrenOfServer(env: Record<string, string>) {
 }
 
 describe("stdio serve process model", () => {
-  it("runs the server in-process by default: no supervisor, no worker child", async () => {
-    expect(await childrenOfServer({})).toBe(0);
+  it("puts a supervisor in front of one worker by default", async () => {
+    expect(await childrenOfServer({})).toBe(1);
   }, 30_000);
 
-  it("BRAIN_MCP_HOT_SWAP=1 puts a supervisor in front of one worker", async () => {
+  it("BRAIN_MCP_HOT_SWAP=0 runs the server in-process: no worker child", async () => {
+    expect(await childrenOfServer({ BRAIN_MCP_HOT_SWAP: "0" })).toBe(0);
+  }, 30_000);
+
+  it("BRAIN_MCP_HOT_SWAP=1, set before it was the default, still supervises", async () => {
     expect(await childrenOfServer({ BRAIN_MCP_HOT_SWAP: "1" })).toBe(1);
   }, 30_000);
 });
