@@ -194,6 +194,8 @@ const TMP_MAX_AGE_MS = 5 * 60_000;
 const START_SKEW_MS = 2000;
 /** A record written later than this after its process started belongs to some other process. */
 const MAX_STARTUP_MS = 60_000;
+/** A process that started this long after a record was written cannot have written it. */
+const RECYCLED_AFTER_MS = 60_000;
 
 function alive(pid: number): boolean {
   try {
@@ -242,22 +244,32 @@ export async function readServers(dataDir: string): Promise<ServerRecord[]> {
   return records.filter((r): r is ServerRecord => !!r && typeof r.pid === "number" && typeof r.version === "string" && typeof r.startedAt === "number");
 }
 
+type Verdict = "live" | "unsure" | "foreign";
+
 /**
- * The records whose process is still the one that wrote them: a project-brain server, under that pid,
- * started when the record says. Anything else (a pid recycled after a crash or a reboot) is removed.
+ * Whether a record's pid is still the server that wrote it. "foreign" only on clear evidence: the pid
+ * runs something other than a project-brain server, or started well after the record was written.
+ * Anything short of that (a server that recorded itself after the snapshot, a start time just outside
+ * the window) is "unsure": not counted now, and not deleted either.
+ */
+function judge(record: ServerRecord, row: ProcessRow | undefined): Verdict {
+  if (!row) return "unsure";
+  if (!isServeCommand(row, true)) return "foreign";
+  const lag = record.startedAt - row.startedAt;
+  if (lag >= -START_SKEW_MS && lag <= MAX_STARTUP_MS) return "live";
+  return -lag > RECYCLED_AFTER_MS ? "foreign" : "unsure";
+}
+
+/**
+ * The records whose process is still the one that wrote them. Removes the ones whose pid is gone or
+ * clearly belongs to another process (recycled after a crash or a reboot); keeps the doubtful ones.
  */
 export async function liveServers(dataDir: string, rows: ProcessRow[], now: number = Date.now()): Promise<ServerRecord[]> {
   const byPid = new Map(rows.map((r) => [r.pid, r]));
-  const owns = (record: ServerRecord) => {
-    const row = byPid.get(record.pid);
-    if (!row || !isServeCommand(row, true)) return false;
-    const lag = record.startedAt - row.startedAt;
-    return lag >= -START_SKEW_MS && lag <= MAX_STARTUP_MS;
-  };
-  const live = (await readServers(dataDir)).filter(owns);
-  const kept = new Set(live.map((r) => r.pid));
-  await prune(serversDir(dataDir), (pid) => kept.has(pid), now);
-  return live;
+  const judged = (await readServers(dataDir)).map((record) => ({ record, verdict: judge(record, byPid.get(record.pid)) }));
+  const foreign = new Set(judged.filter((j) => j.verdict === "foreign").map((j) => j.record.pid));
+  await prune(serversDir(dataDir), (pid) => !foreign.has(pid) && alive(pid), now);
+  return judged.filter((j) => j.verdict === "live").map((j) => j.record);
 }
 
 /** `[[dd-]hh:]mm:ss` to seconds. */
@@ -290,6 +302,7 @@ const basename = (path: string) => path.split(/[/\\]/).pop() ?? path;
 /** The release binary, or the npm platform package's `project-brain-native` that the shim runs. */
 const BINARY = /^project-brain(-native)?(\.exe)?$/;
 const INTERPRETER = /^(bun|node)(\.exe)?$/;
+const LINUX_COMM_MAX = 15;
 /** What follows the program on a server's command line: nothing, or `serve` and its flags. */
 const SERVE_TAIL = /^\s*(serve(\s.*)?)?$/;
 
@@ -300,7 +313,13 @@ const SERVE_TAIL = /^\s*(serve(\s.*)?)?$/;
  * record can vouch for: another project's `src/cli.ts` looks the same.
  */
 export function isServeCommand(row: Pick<ProcessRow, "comm" | "args">, withSource = false): boolean {
-  const exe = basename(row.comm);
+  let exe = basename(row.comm);
+  // Linux cuts comm to 15 characters (`project-brain-native` reads `project-brain-n`): take the
+  // executable's name from the command line instead, when it extends what comm shows.
+  if (exe.length === LINUX_COMM_MAX && exe === row.comm) {
+    const full = /^(?:.*?[/\\])?(project-brain[\w.-]*)(?=\s|$)/.exec(row.args)?.[1];
+    if (full?.startsWith(exe)) exe = full;
+  }
   if (BINARY.test(exe)) {
     const at = /project-brain(-native)?(\.exe)?(?=\s|$)/.exec(row.args);
     return at !== null && SERVE_TAIL.test(row.args.slice(at.index + at[0].length));

@@ -169,6 +169,8 @@ export function defaultStatusDeps(): StatusDeps {
     },
     staleServers: async (installed, dataDir) => {
       // Without ps (Windows, slim containers) a record cannot be told from a recycled pid: unknown.
+      // `now` is taken before ps runs: etime counts to the snapshot, not to whenever this resumes.
+      const now = Date.now();
       const [meta, args] = await Promise.all([
         run("ps", ["-Ao", "pid=,ppid=,uid=,etime=,comm="], { timeout: 3000 }),
         run("ps", ["-Ao", "pid=,args="], { timeout: 3000 }),
@@ -176,7 +178,6 @@ export function defaultStatusDeps(): StatusDeps {
       if (!meta.ok || !args.ok) return null;
       const { liveServers, parseProcessTable, staleServers } = await import("../hooks/session-versions.js");
       const { resolveLauncher } = await import("../server/supervisor.js");
-      const now = Date.now();
       const rows = parseProcessTable(meta.out, args.out, now);
       const installedAt = (() => {
         try {

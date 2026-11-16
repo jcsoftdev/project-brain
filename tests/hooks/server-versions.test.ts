@@ -58,19 +58,41 @@ describe("running server records", () => {
     expect((await readdir(servers)).sort()).toEqual([`${process.pid}.json`, "42.json.42.def456.tmp"].sort());
   });
 
-  it("keeps a record only while its pid is still the server that wrote it, and removes the rest", async () => {
+  // Pids of processes that exist for the whole test: this one and its parent.
+  const LIVE = process.pid;
+  const LIVE_TOO = process.ppid;
+  const write = async (dir: string, pid: number, startedAt: number) => {
+    await mkdir(join(dir, "servers"), { recursive: true });
+    await writeFile(join(dir, "servers", `${pid}.json`), JSON.stringify({ pid, version: "0.40.0", cwd: dir, startedAt }));
+  };
+  const files = async (dir: string) => (await readdir(join(dir, "servers"))).sort();
+
+  it("counts a record while its pid is the server that wrote it, and removes it once the pid clearly is not", async () => {
     const dir = await dataDir();
     const started = NOW - 86_400_000;
-    await mkdir(join(dir, "servers"));
-    for (const pid of [10, 11, 12])
-      await writeFile(join(dir, "servers", `${pid}.json`), JSON.stringify({ pid, version: "0.40.0", cwd: dir, startedAt: started }));
+    await write(dir, LIVE, started);
+    await write(dir, LIVE_TOO, started);
+    await write(dir, DEAD_PID, started);
     const rows = [
-      row(10, BREW, { startedAt: started - 400 }), // the server itself
-      row(11, BREW, { startedAt: NOW - 60_000 }), // pid recycled by a later server
-      row(12, "/sbin/launchd", { startedAt: started - 400 }), // pid recycled by something else
+      row(LIVE, BREW, { startedAt: started - 400 }), // the server itself
+      row(LIVE_TOO, BREW, { startedAt: NOW - 120_000 }), // recycled: started a day after the record
     ];
-    expect((await liveServers(dir, rows, NOW)).map((r) => r.pid)).toEqual([10]);
-    expect(await readdir(join(dir, "servers"))).toEqual(["10.json"]);
+    expect((await liveServers(dir, rows, NOW)).map((r) => r.pid)).toEqual([LIVE]);
+    expect(await files(dir)).toEqual([`${LIVE}.json`]);
+
+    await write(dir, LIVE_TOO, started);
+    await liveServers(dir, [row(LIVE_TOO, "/sbin/launchd", { startedAt: started - 400 })], NOW); // recycled by another program
+    expect(await files(dir)).not.toContain(`${LIVE_TOO}.json`);
+  });
+
+  it("keeps a record it cannot judge: just outside the window, or written after the snapshot", async () => {
+    const dir = await dataDir();
+    await write(dir, LIVE, NOW - 10_000);
+    await write(dir, LIVE_TOO, NOW - 10_000);
+    // A whole-second rounding past the window: not counted this time, but not deleted.
+    const rows = [row(LIVE, BREW, { startedAt: NOW - 10_000 + 2500 })];
+    expect(await liveServers(dir, rows, NOW)).toEqual([]);
+    expect(await files(dir)).toEqual([`${LIVE}.json`, `${LIVE_TOO}.json`].sort());
   });
 });
 
@@ -99,6 +121,8 @@ describe("process table", () => {
     ["npm shim under node", "node", "node /usr/lib/node_modules/project-brain/bin/project-brain", true],
     ["editor opening the checkout", "nvim", "nvim /Users/me/code/project-brain", false],
     ["electron opening the checkout", "/Applications/Code.app/Contents/MacOS/Electron", "/Applications/Code.app/Contents/MacOS/Electron /Users/me/personal/project-brain", false],
+    ["linux npm native, comm cut to 15 characters", "project-brain-n", "/usr/lib/node_modules/project-brain-linux-x64/bin/project-brain-native", true],
+    ["linux sibling binary, comm cut to 15 characters", "project-brain-l", "/usr/local/bin/project-brain-landing", false],
     ["a sibling binary", "/opt/homebrew/bin/project-brain-landing", "/opt/homebrew/bin/project-brain-landing", false],
     ["a hook command", BREW, `${BREW} routing-rules`, false],
     ["status itself", BREW, `${BREW} status`, false],
