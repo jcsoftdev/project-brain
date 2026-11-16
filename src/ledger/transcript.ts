@@ -53,8 +53,8 @@ export interface TranscriptLedger {
   injections: Injection[];
   hits: HitUsage[];
   /**
-   * The MCP set's context footprint, by server: tool names and instructions present at once in the
-   * largest segment between compactions (each compaction re-announces the whole set).
+   * The MCP set's context footprint, by server: every tool name and instruction announced in the
+   * largest stretch between compactions, removals included (their text stays until the next one).
    */
   mcp: Record<string, McpServerCost>;
   /** Each server's own largest footprint in any segment, to price it where it was pruned. */
@@ -108,34 +108,58 @@ function injectedBlock(attachment: unknown): string | null {
   return text.slice(start);
 }
 
-/** The MCP set as it stands in one segment between compactions: removals take effect, re-adds replace. */
+/**
+ * The MCP set within one stretch between compactions. Everything announced in a stretch stays in
+ * context until the next compaction, so a removal never subtracts text already there; it only drops
+ * the item from what carries over. A re-add after a removal is new text and counts again.
+ */
 class McpSegment {
-  readonly tools = new Map<string, { server: string; chars: number }>();
-  readonly instructions = new Map<string, number>();
+  private readonly announced: Array<{ server: string; chars: number; tool: boolean }> = [];
+  private readonly liveTools = new Map<string, { server: string; chars: number }>();
+  private readonly liveInstructions = new Map<string, number>();
+
+  /** The next stretch after a compaction: what was still live, announced once. */
+  carryOver(): McpSegment {
+    const next = new McpSegment();
+    for (const [name, t] of this.liveTools) next.addTool(name, t.server, t.chars);
+    for (const [server, chars] of this.liveInstructions) next.addInstructions(server, chars);
+    return next;
+  }
+
+  private addTool(name: string, server: string, chars: number): void {
+    if (this.liveTools.has(name)) return;
+    this.liveTools.set(name, { server, chars });
+    this.announced.push({ server, chars, tool: true });
+  }
+
+  private addInstructions(server: string, chars: number): void {
+    if (this.liveInstructions.has(server)) return;
+    this.liveInstructions.set(server, chars);
+    this.announced.push({ server, chars, tool: false });
+  }
 
   apply(a: Record<string, unknown>): void {
     if (a.type === "deferred_tools_delta") {
-      for (const name of strings(a.removedNames)) this.tools.delete(name);
+      for (const name of strings(a.removedNames)) this.liveTools.delete(name);
       const lines = strings(a.addedLines);
       strings(a.addedNames).forEach((name, i) => {
         const server = MCP_TOOL.exec(name)?.[1];
-        if (server) this.tools.set(name, { server: mcpServerKey(server), chars: (lines[i] ?? name).length + 1 });
+        if (server) this.addTool(name, mcpServerKey(server), (lines[i] ?? name).length + 1);
       });
     } else if (a.type === "mcp_instructions_delta") {
-      for (const name of strings(a.removedNames)) this.instructions.delete(mcpServerKey(name));
+      for (const name of strings(a.removedNames)) this.liveInstructions.delete(mcpServerKey(name));
       const blocks = strings(a.addedBlocks);
-      strings(a.addedNames).forEach((name, i) => this.instructions.set(mcpServerKey(name), (blocks[i] ?? "").length));
+      strings(a.addedNames).forEach((name, i) => this.addInstructions(mcpServerKey(name), (blocks[i] ?? "").length));
     }
   }
 
   byServer(): Record<string, McpServerCost> {
     const out: Record<string, McpServerCost> = {};
-    for (const { server, chars } of this.tools.values()) {
+    for (const { server, chars, tool } of this.announced) {
       const c = (out[server] ??= { tools: 0, chars: 0 });
-      c.tools++;
+      if (tool) c.tools++;
       c.chars += chars;
     }
-    for (const [server, chars] of this.instructions) (out[server] ??= { tools: 0, chars: 0 }).chars += chars;
     return out;
   }
 }
@@ -286,7 +310,7 @@ export class TranscriptReader {
       this.segment.apply(o.attachment);
     } else if (o.type === "system" && o.subtype === "compact_boundary") {
       this.closeSegment();
-      this.segment = new McpSegment();
+      this.segment = this.segment.carryOver();
       ledger.compactions++;
     } else {
       for (const u of usagesOf(o, offset, this.brainCalls)) this.usages.push({ ...u, text: u.text.slice(0, USAGE_TEXT_MAX) });

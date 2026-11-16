@@ -96,18 +96,27 @@ describe("parseTranscript", () => {
     }
   });
 
-  it("measures the MCP set as it stands, builtin deferred tools aside and removals applied", () => {
+  it("counts tools added then removed within a stretch, since their text stays until a compaction", () => {
+    const tools = ["mcp__alpha__one", "mcp__alpha__two", "mcp__alpha__three"];
     const text = transcript([
-      toolsDelta(o, ["WebFetch", "mcp__alpha__one", "mcp__alpha__two", "mcp__beta__x"]),
-      instructionsDelta(o, { alpha: "use alpha well", beta: "beta notes" }),
-      toolsDelta(later, [], ["mcp__alpha__two"]),
-      instructionsRemoved(later, ["beta"]),
+      toolsDelta(o, ["WebFetch", ...tools]),
+      instructionsDelta(o, { alpha: "use alpha well" }),
+      toolsDelta(later, [], tools),
+      instructionsRemoved(later, ["alpha"]),
     ]);
     const { mcp } = parseTranscript(text);
-    expect(mcp).toEqual({
-      alpha: { tools: 1, chars: "mcp__alpha__one".length + 1 + "use alpha well".length },
-      beta: { tools: 1, chars: "mcp__beta__x".length + 1 },
-    });
+    expect(mcp).toEqual({ alpha: { tools: 3, chars: tools.reduce((n, t) => n + t.length + 1, 0) + "use alpha well".length } });
+  });
+
+  it("carries over only what is still live after a compaction", () => {
+    const text = transcript([
+      toolsDelta(o, ["mcp__alpha__one", "mcp__beta__x"]),
+      toolsDelta(o, [], ["mcp__beta__x"]),
+      compactBoundary(later),
+      toolsDelta(later, ["mcp__gamma__big_tool_name_that_makes_this_stretch_the_largest"]),
+    ]);
+    const { mcp } = parseTranscript(text);
+    expect(Object.keys(mcp).sort()).toEqual(["alpha", "gamma"]);
   });
 
   it("counts the set once across compactions, which re-announce it, keeping the largest segment", () => {
