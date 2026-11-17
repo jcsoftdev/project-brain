@@ -6,6 +6,9 @@ interface PaneModule {
   accountOf(config: string, baseUrl: string): string;
   folderOf(root: string, home: string): string;
   seconds(ms: number | undefined): string;
+  paint(one: { color?: string; dim?: boolean; bold?: boolean; inverse?: boolean }): { color: string; backgroundColor?: string };
+  PANE_ARGS: { backgroundColor?: string };
+  blend(hex: string, into: string, share: number): string;
   againstCompaction(usage: { tokens?: number; window: number; percent?: number }, compactionWindow: number): { tokens?: number; window: number; percent?: number };
 }
 
@@ -83,5 +86,30 @@ describe("activity pane context against the compaction window", () => {
     expect(pane.againstCompaction(live, 0)).toBe(live);
     expect(pane.againstCompaction(live, 200_000)).toBe(live);
     expect(pane.againstCompaction({ window: 1_000_000 }, 400_000)).toEqual({ window: 1_000_000 });
+  });
+});
+
+describe("activity pane palette (Dracula)", () => {
+  it("opens the pane transparent, or the engine fills it with its sidebar grey and hides the terminal's opacity and blur", () => {
+    expect(pane.PANE_ARGS.backgroundColor).toBe("transparent");
+  });
+
+  it("leaves the background to the terminal so its opacity and blur show through", () => {
+    expect(pane.paint({ color: "success" })).not.toHaveProperty("backgroundColor");
+  });
+
+  it("paints an uncoloured span as the foreground, a bold one pink and a dim one the comment grey", () => {
+    expect(pane.paint({}).color).toBe("#f8f8f2");
+    expect(pane.paint({ bold: true }).color).toBe("#ff79c6");
+    expect(pane.paint({ dim: true }).color).toBe("#6272a4");
+  });
+
+  it("fades a dim coloured span into the pane instead of leaving the dimming to the terminal", () => {
+    expect(pane.paint({ color: "success", dim: true })).toEqual({ color: pane.blend("#50fa7b", "#17141d", 0.5) });
+    expect(pane.blend("#50fa7b", "#17141d", 0.5)).toBe("#34874c");
+  });
+
+  it("draws an inverse span as a pill: its colour as the fill, the pane background as the text", () => {
+    expect(pane.paint({ color: "claude", inverse: true })).toEqual({ color: "#17141d", backgroundColor: "#ff79c6" });
   });
 });

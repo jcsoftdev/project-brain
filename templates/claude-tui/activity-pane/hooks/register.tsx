@@ -49,7 +49,8 @@ import type {
 } from '../types'
 
 const PANE = 'activity'
-const PANE_ARGS = { id: PANE, title: 'Actividad', columns: 1000 } as const
+/** `transparent` keeps the engine from filling the dock with its sidebar grey, so the terminal's opacity and blur show through the pane. */
+export const PANE_ARGS = { id: PANE, title: 'Actividad', columns: 1000, backgroundColor: 'transparent' } as const
 export const MAIN = 'main'
 const KEEP = 300
 const OUTPUT_LINES = 40
@@ -146,24 +147,46 @@ const accentColor = atom({ plugin: 'project-brain-activity', key: 'accent' } as 
 const mainModel = atom({ plugin: 'project-brain-activity', key: 'mainModel' } as const, '' as string, { shape: 'main-model-1' })
 const identity = atom({ plugin: 'project-brain-activity', key: 'identity' } as const, { account: '', sessionId: '', folder: '' } as SessionIdentityLine, { shape: 'identity-1' })
 
-/** Claude Code's session colours (/color) as the active theme's agent colours; 'default' and unknown names keep the claude tone. */
+/**
+ * The Dracula palette, as published at draculatheme.com/contribute. Roles follow how Dracula paints code:
+ * pink = keywords and titles, cyan = types and names, green = functions and success, orange = parameters and warnings,
+ * yellow = literals (strings), purple = commands and links, comment = everything secondary, red = errors.
+ */
+const DRACULA = {
+  background: '#17141d', currentLine: '#44475a', foreground: '#f8f8f2', comment: '#6272a4',
+  cyan: '#8be9fd', green: '#50fa7b', orange: '#ffb86c', pink: '#ff79c6', purple: '#bd93f9', red: '#ff5555', yellow: '#f1fa8c',
+} as const
+
+/** Claude Code's session colours (/color) as their Dracula counterparts; 'default' and unknown names keep the claude tone. */
 const SESSION_COLORS: Record<string, string> = {
-  red: 'red_FOR_SUBAGENTS_ONLY', blue: 'blue_FOR_SUBAGENTS_ONLY', green: 'green_FOR_SUBAGENTS_ONLY', yellow: 'yellow_FOR_SUBAGENTS_ONLY',
-  purple: 'purple_FOR_SUBAGENTS_ONLY', orange: 'orange_FOR_SUBAGENTS_ONLY', pink: 'pink_FOR_SUBAGENTS_ONLY', cyan: 'cyan_FOR_SUBAGENTS_ONLY',
+  red: DRACULA.red, blue: DRACULA.comment, green: DRACULA.green, yellow: DRACULA.yellow,
+  purple: DRACULA.purple, orange: DRACULA.orange, pink: DRACULA.pink, cyan: DRACULA.cyan,
 }
 
-/** The pane's palette: each tone the rows name, as the active Claude Code theme's colour, so the pane matches the chat. */
+/** The pane's palette (Dracula): each tone the rows name, painted as its Dracula colour. */
 export const PALETTE: Record<Tone, string> = {
-  success: 'success', error: 'error', warning: 'warning', subtle: 'subtle', permission: 'permission',
-  claude: 'claude', suggestion: 'suggestion', diffAdded: 'success', diffRemoved: 'error',
+  success: DRACULA.green, error: DRACULA.red, warning: DRACULA.orange, subtle: DRACULA.comment, permission: DRACULA.purple,
+  claude: DRACULA.pink, suggestion: DRACULA.cyan, literal: DRACULA.yellow, diffAdded: DRACULA.green, diffRemoved: DRACULA.red,
 }
-const COMMENT = 'subtle'
+const COMMENT = DRACULA.comment
+/** The editor's background and foreground in Dracula. The background is never painted (the terminal's opacity and blur only show through cells with no background of their own); it is what dim colours fade towards and the text on a pill. */
+export const PANE_BG = DRACULA.background
+export const PANE_FG = DRACULA.foreground
 
-/** A span's colour as the surface draws it: palette tones become hex, a dim span without colour takes the comment grey. */
-export const paint = (one: Pick<Span, 'color' | 'dim'>): { color?: string; dimColor?: boolean } => {
-  if (one.color === undefined) return one.dim ? { color: COMMENT } : {}
-  const color = (PALETTE as Record<string, string>)[one.color] ?? one.color
-  return { color, ...(one.dim ? { dimColor: true } : {}) }
+/** `hex` moved `share` of the way towards `into`: how a dim span keeps its hue on the pane's own background instead of leaving the dimming to the terminal. */
+export const blend = (hex: string, into: string, share: number): string => {
+  const parts = (value: string): number[] | undefined => (/^#[0-9a-f]{6}$/i.test(value) ? [1, 3, 5].map(at => Number.parseInt(value.slice(at, at + 2), 16)) : undefined)
+  const from = parts(hex)
+  const to = parts(into)
+  if (!from || !to) return hex
+  return `#${from.map((channel, at) => Math.round(channel + ((to[at] ?? channel) - channel) * share).toString(16).padStart(2, '0')).join('')}`
+}
+
+/** A span's colours as the surface draws them: palette tones become hex; an uncoloured span is the foreground, a bold one pink, a dim one the comment grey; a dim coloured span fades into the pane. An inverse span is a pill: its colour as the fill, the pane's background as the text. */
+export const paint = (one: Pick<Span, 'color' | 'dim' | 'bold' | 'inverse'>): { color: string; backgroundColor?: string } => {
+  const base = one.color === undefined ? (one.dim ? COMMENT : one.bold ? DRACULA.pink : PANE_FG) : (PALETTE as Record<string, string>)[one.color] ?? one.color
+  const shown = one.dim && one.color !== undefined ? blend(base, PANE_BG, 0.5) : base
+  return one.inverse ? { color: PANE_BG, backgroundColor: shown } : { color: shown }
 }
 
 /** The last `"agentColor":"<name>"` grep match in the transcript, as a colour the pane can paint. */
@@ -1095,7 +1118,7 @@ export const windowStart = (state: PaneScroll, total: number, room: number): num
 
 // ---------------------------------------------------------------- pane model
 
-export type Tone = 'success' | 'error' | 'warning' | 'subtle' | 'permission' | 'claude' | 'suggestion' | 'diffAdded' | 'diffRemoved'
+export type Tone = 'success' | 'error' | 'warning' | 'subtle' | 'permission' | 'claude' | 'suggestion' | 'literal' | 'diffAdded' | 'diffRemoved'
 export type Span = { text: string; color?: Tone | (string & {}); dim?: boolean; bold?: boolean; inverse?: boolean }
 export type Action =
   | { kind: 'toggle'; key: string }
@@ -1567,7 +1590,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     spans: [span(` ${label}${look ? ' ' : ' '}`, { inverse: isOn, bold: isOn }), ...(look ? [span(`${look.icon} `, { color: look.color, inverse: isOn })] : []), span(' ')],
   })
 
-  const header: Row[] = [{ key: 'title', cells: [{ spans: [snap.who.account !== '' ? span(fit(snap.who.account, Math.max(8, width - 24)), { color: 'success', bold: true }) : span('ACTIVIDAD', { bold: true })] }], right: [status ? [status] : [], headerRunning(snap.running), headerBlocked(snap.blocked, snap.running.now)].filter(one => one.length > 0).flatMap((one, index) => (index === 0 ? one : [span('  '), ...one])) }]
+  const header: Row[] = [{ key: 'title', cells: [{ spans: [snap.who.account !== '' ? span(fit(snap.who.account, Math.max(8, width - 24)), { color: 'literal', bold: true }) : span('ACTIVIDAD', { bold: true })] }], right: [status ? [status] : [], headerRunning(snap.running), headerBlocked(snap.blocked, snap.running.now)].filter(one => one.length > 0).flatMap((one, index) => (index === 0 ? one : [span('  '), ...one])) }]
   const facts = [mainLabel, snap.who.sessionId.slice(0, 8), snap.who.folder].filter(one => one !== '')
   if (facts.length > 0) header.push(line('session-facts', facts.join(' · '), { dim: true }))
   if (records.length > 0) {
@@ -2154,7 +2177,7 @@ export const register: Register = on => {
 
     const spansOf = (spans: Span[]) =>
       spans.map(one => (
-        <Text {...paint(one)} bold={one.bold} inverse={one.inverse}>{one.text}</Text>
+        <Text {...paint(one)} bold={one.bold}>{one.text}</Text>
       ))
     const cellOf = (rowKey: string, cell: Cell, index: number) => {
       const action = cell.action
