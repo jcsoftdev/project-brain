@@ -19,7 +19,7 @@ export const NVIM_THEME_MARKER = "-- Managed by project-brain setup (nvim:theme)
 export type NvimThemeState = "absent" | "current" | "stale" | "foreign";
 
 /** Where Neovim reads its config: $XDG_CONFIG_HOME/nvim, else ~/.config/nvim. */
-export function nvimConfigDir(home: string, xdg: string | undefined = process.env.XDG_CONFIG_HOME): string {
+export function nvimConfigDir(home: string, xdg: string | undefined): string {
   return join(xdg && xdg.startsWith("/") ? xdg : join(home, ".config"), "nvim");
 }
 

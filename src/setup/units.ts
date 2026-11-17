@@ -1,6 +1,7 @@
 import { basename, dirname, join } from "node:path";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
+import { homedir } from "node:os";
 import type { AIToolRegistrar } from "../registrars/types.js";
 import { resolveRerankerToken } from "../rerank/token.js";
 import { profileDir } from "./chrome-profile.js";
@@ -2001,7 +2002,9 @@ export function nvimUnits(): SetupUnit[] {
 /** The Neovim config the theme files go into: $XDG_CONFIG_HOME/nvim, else ~/.config/nvim. */
 const nvimConfigDirOf = async (ctx: SetupContext) => {
   const { nvimConfigDir } = await import("./nvim-theme.js");
-  return nvimConfigDir(dirname(dirname(ctx.claudeSettingsPath)));
+  const home = dirname(dirname(ctx.claudeSettingsPath));
+  // XDG_CONFIG_HOME belongs to the real user: a setup run against another home (a test, a sandbox) never follows it.
+  return nvimConfigDir(home, home === homedir() ? process.env.XDG_CONFIG_HOME : undefined);
 };
 
 function nvimThemeUnit(): SetupUnit {
