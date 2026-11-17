@@ -24,6 +24,8 @@ describe("theme registry", () => {
     expect(blend("#50fa7b", "#17141d", 0.5)).toBe("#34874c");
     expect(blend("claude", "#ffffff", 0.5)).toBe("claude");
     expect(lighten("#000000", 1)).toBe("#ffffff");
+    expect(blend("#000000", "#ffffff", 1.5)).toBe("#ffffff");
+    expect(blend("#ffffff", "#000000", -2)).toBe("#ffffff");
   });
 });
 

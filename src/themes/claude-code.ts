@@ -47,6 +47,7 @@ export function claudeCodeThemeOf(theme: ThemeDefinition): ClaudeCodeTheme {
       promptBorderShimmer: lighten(a.pink),
       planMode: a.cyan,
       autoAccept: a.green,
+      autoAcceptShimmer: lighten(a.green),
       bashBorder: a.orange,
       ide: a.cyan,
       fastMode: a.orange,

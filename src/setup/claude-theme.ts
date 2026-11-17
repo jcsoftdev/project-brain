@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
 import { claudeCodeThemeRef, claudeCodeThemeSlug, claudeCodeThemeText } from "../themes/claude-code.js";
@@ -38,16 +38,24 @@ async function readSettings(path: string): Promise<Settings | null | "unparseabl
   }
 }
 
-const writeSettings = (path: string, settings: Settings) => writeFileAtomic(path, `${JSON.stringify(settings, null, 2)}\n`);
+/** A symlinked file (dotfiles setups) is written through, not replaced by a regular file. */
+const targetOf = (path: string): Promise<string> => realpath(path).catch(() => path);
+const writeThrough = async (path: string, text: string) => writeFileAtomic(await targetOf(path), text);
+const writeSettings = (path: string, settings: Settings) => writeThrough(path, `${JSON.stringify(settings, null, 2)}\n`);
 
-export async function claudeThemeState(claudeSettingsPath: string, theme: ThemeDefinition): Promise<ClaudeThemeState> {
+/**
+ * `current` when the file is up to date and either selected or chosen away from by the user after setup applied it
+ * (the data dir still remembers the theme it replaced): a theme the person picked since is theirs, and `update` must not undo it.
+ */
+export async function claudeThemeState(claudeSettingsPath: string, dataDir: string, theme: ThemeDefinition): Promise<ClaudeThemeState> {
   const settings = await readSettings(claudeSettingsPath);
   if (settings === "unparseable") return "foreign";
   const file = claudeThemeFileOf(claudeSettingsPath, theme);
   const isSelected = settings?.theme === claudeCodeThemeRef(theme);
   if (!existsSync(file)) return isSelected ? "stale" : "absent";
   const isCurrent = (await readFile(file, "utf8")) === claudeCodeThemeText(theme);
-  return isCurrent && isSelected ? "current" : "stale";
+  const isAppliedBefore = existsSync(previousPath(dataDir));
+  return isCurrent && (isSelected || isAppliedBefore) ? "current" : "stale";
 }
 
 export async function applyClaudeTheme(claudeSettingsPath: string, dataDir: string, theme: ThemeDefinition): Promise<void> {
@@ -55,12 +63,15 @@ export async function applyClaudeTheme(claudeSettingsPath: string, dataDir: stri
   if (settings === "unparseable") return;
   const next: Settings = { ...(settings ?? {}) };
   const ref = claudeCodeThemeRef(theme);
-  if (next.theme !== ref && !existsSync(previousPath(dataDir))) {
+  const isAppliedBefore = existsSync(previousPath(dataDir));
+  if (next.theme !== ref && !isAppliedBefore) {
     await mkdir(dataDir, { recursive: true });
     await writeFile(previousPath(dataDir), `${JSON.stringify({ theme: next.theme ?? null })}\n`, "utf8");
   }
   await mkdir(dirname(claudeThemeFileOf(claudeSettingsPath, theme)), { recursive: true });
-  await writeFileAtomic(claudeThemeFileOf(claudeSettingsPath, theme), claudeCodeThemeText(theme));
+  await writeThrough(claudeThemeFileOf(claudeSettingsPath, theme), claudeCodeThemeText(theme));
+  // Applied before and the person has picked another theme since: refresh the file, keep their choice.
+  if (isAppliedBefore && next.theme !== ref) return;
   next.theme = ref;
   await mkdir(dirname(claudeSettingsPath), { recursive: true });
   await writeSettings(claudeSettingsPath, next);

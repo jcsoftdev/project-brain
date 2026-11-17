@@ -53,7 +53,7 @@ const TUI_IDS = ["tui:activity-pane", "tui:readable-replies", "tui:terminal-them
 const UNCHECKED = new Set(["tui:terminal-theme", "tui:claude-theme", "tui:skill-listing", "tui:context-gate"]);
 
 describe("Claude TUI units", () => {
-  it("are grouped, never installed silently on upgrade, and only the terminal theme, skill listing and context gate ship unchecked", () => {
+  it("are grouped, never installed silently on upgrade, and only the terminal and Claude Code themes, the skill listing and the context gate ship unchecked", () => {
     for (const id of TUI_IDS) {
       const unit = unitOf(id);
       expect(unit, id).toBeDefined();

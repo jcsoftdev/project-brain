@@ -10,7 +10,8 @@ export function blend(hex: string, into: string, share: number): string {
   const from = channels(hex);
   const to = channels(into);
   if (!from || !to) return hex;
-  const mixed = from.map((channel, at) => Math.round(channel + (to[at]! - channel) * share));
+  const t = Math.min(1, Math.max(0, share));
+  const mixed = from.map((channel, at) => Math.round(channel + (to[at]! - channel) * t));
   return `#${mixed.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 }
 
