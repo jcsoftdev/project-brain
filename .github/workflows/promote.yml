@@ -18,12 +18,14 @@ name: Promote dist-tag
 # A one-click way to point `latest` at an incomplete release would defeat the
 # guard it exists to recover from.
 #
-# Known limitation (0.34.0): npm now requires interactive 2FA for dist-tag
-# changes, and the CI token no longer bypasses it, so the Promote step fails
-# after the completeness check passes. Until trusted publishing covers
-# dist-tags, promote from a maintainer machine after this check is green:
-#   npm dist-tag add project-brain@<version> latest
-# release.yml waits 18 minutes for platform packages so this path is rare.
+# Authentication is npm trusted publishing (OIDC), not a token: npm demands an interactive
+# one-time password for dist-tag changes from a token, but not from a trusted publisher
+# that has "Allow npm dist-tag" enabled (it is off by default and separate from publishing).
+# One-time setup on npmjs.com, package project-brain, Settings, Trusted publisher: add this
+# workflow (promote.yml) for the GitHub repository, and tick "Allow npm dist-tag". After
+# that a stranded release is recovered from the Actions tab with no OTP and no laptop.
+# release.yml already reaches `latest` by itself when every platform package is visible
+# within its 18-minute wait; this workflow is the recovery path for when it was not.
 
 on:
   workflow_dispatch:
@@ -38,6 +40,9 @@ jobs:
     name: Promote ${{ inputs.version }} to latest
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
 
@@ -45,6 +50,18 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      # OIDC trusted publishing needs npm >= 11.5.1; assert it rather than discover it as a failure.
+      - name: Ensure npm supports OIDC trusted publishing
+        shell: bash
+        run: |
+          have="$(npm --version)"
+          if node -e 'const a=process.argv[1].split(".").map(Number),b=[11,5,1];process.exit((a[0]>b[0]||(a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>=b[2]))))?0:1)' "$have"; then
+            echo "npm $have is new enough for OIDC trusted publishing"
+          else
+            echo "npm $have is older than 11.5.1 - upgrading"
+            npm install -g npm@11
+          fi
 
       - name: Verify the release is complete
         shell: bash
@@ -84,5 +101,4 @@ jobs:
           npm dist-tag add "project-brain@${VERSION}" latest
           echo "latest: ${CURRENT} -> ${VERSION}"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ inputs.version }}
