@@ -11,6 +11,9 @@ import {
   CONTEXT_GATE_FILES,
   CONTEXT_GATE_PLUGIN_KEY,
   CONTEXT_GATE_PLUGIN_NAME,
+  FILE_PREVIEW_FILES,
+  FILE_PREVIEW_PLUGIN_KEY,
+  FILE_PREVIEW_PLUGIN_NAME,
   MARKETPLACE_NAME,
   SKILL_LISTING_FILES,
   SKILL_LISTING_PLUGIN_KEY,
@@ -49,11 +52,11 @@ async function seedSettings(value: unknown) {
   await writeFile(settingsPath, JSON.stringify(value, null, 2));
 }
 
-const TUI_IDS = ["tui:activity-pane", "tui:readable-replies", "tui:terminal-theme", "tui:claude-theme", "tui:skill-listing", "tui:context-gate"];
-const UNCHECKED = new Set(["tui:terminal-theme", "tui:claude-theme", "tui:skill-listing", "tui:context-gate"]);
+const TUI_IDS = ["tui:activity-pane", "tui:readable-replies", "tui:terminal-theme", "tui:claude-theme", "tui:skill-listing", "tui:context-gate", "tui:file-preview"];
+const UNCHECKED = new Set(["tui:terminal-theme", "tui:claude-theme", "tui:skill-listing", "tui:context-gate", "tui:file-preview"]);
 
 describe("Claude TUI units", () => {
-  it("are grouped, never installed silently on upgrade, and only the terminal and Claude Code themes, the skill listing and the context gate ship unchecked", () => {
+  it("are grouped, never installed silently on upgrade, and only the terminal and Claude Code themes, the skill listing, the context gate and the file preview ship unchecked", () => {
     for (const id of TUI_IDS) {
       const unit = unitOf(id);
       expect(unit, id).toBeDefined();
@@ -316,6 +319,33 @@ describe("tui:context-gate", () => {
     expect((await readSettings()).enabledPlugins[CONTEXT_GATE_PLUGIN_KEY]).toBeUndefined();
     expect(await unitOf("tui:activity-pane").inspect(ctxFor())).toBe("current");
     expect(existsSync(gateDir())).toBe(false);
+    await unitOf("tui:activity-pane").remove(ctxFor());
+    expect(await readSettings()).toEqual(USER_SETTINGS);
+    expect(await unit.inspect(ctxFor())).toBe("absent");
+  });
+});
+
+describe("tui:file-preview", () => {
+  const previewDir = () => join(marketplaceDir(dataDir), FILE_PREVIEW_PLUGIN_NAME);
+  const pluginNames = async () =>
+    JSON.parse(await readFile(join(marketplaceDir(dataDir), ".claude-plugin", "marketplace.json"), "utf8")).plugins.map((p: { name: string }) => p.name);
+
+  it("absent → apply → current → remove, other settings and the sibling mod preserved", async () => {
+    await seedSettings(USER_SETTINGS);
+    const unit = unitOf("tui:file-preview");
+    expect(await unit.inspect(ctxFor())).toBe("absent");
+
+    await unitOf("tui:activity-pane").apply(ctxFor());
+    await unit.apply(ctxFor());
+    expect(await unit.inspect(ctxFor())).toBe("current");
+    expect((await readSettings()).enabledPlugins[FILE_PREVIEW_PLUGIN_KEY]).toBe(true);
+    for (const [rel, text] of Object.entries(FILE_PREVIEW_FILES)) expect(await readFile(join(previewDir(), rel), "utf8"), rel).toBe(text);
+    expect(await pluginNames()).toEqual([ACTIVITY_PLUGIN_NAME, FILE_PREVIEW_PLUGIN_NAME]);
+
+    await unit.remove(ctxFor());
+    expect((await readSettings()).enabledPlugins[FILE_PREVIEW_PLUGIN_KEY]).toBeUndefined();
+    expect(await unitOf("tui:activity-pane").inspect(ctxFor())).toBe("current");
+    expect(existsSync(previewDir())).toBe(false);
     await unitOf("tui:activity-pane").remove(ctxFor());
     expect(await readSettings()).toEqual(USER_SETTINGS);
     expect(await unit.inspect(ctxFor())).toBe("absent");

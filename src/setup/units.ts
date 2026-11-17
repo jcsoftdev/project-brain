@@ -1990,6 +1990,7 @@ export function claudeTuiUnits(): SetupUnit[] {
     claudeThemeUnit(),
     skillListingUnit(),
     contextGateUnit(),
+    filePreviewUnit(),
   ];
 }
 
@@ -2169,6 +2170,46 @@ function skillListingUnit(): SetupUnit {
       if (next !== settings) await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
       const { skillUsagePath } = await import("../skills/usage.js");
       await rm(skillUsagePath(ctx.dataDir), { force: true });
+    },
+  };
+}
+
+function filePreviewUnit(): SetupUnit {
+  return {
+    id: "tui:file-preview",
+    group: "Claude TUI",
+    label: "File preview",
+    description:
+      "installs the project-brain-file-preview mod: under each Read, Edit and Write row and each reply that names files, a path to click for a preview (a floating window in the project's running Neovim, else a Supacode tab, else a pane) and an `open` that opens the file in your editor (PB_EDITOR, VISUAL, EDITOR, else nvim); " +
+      "only files inside the project and never secret-like ones (.env*, keys, credentials); untick to remove the mod",
+    defaultSelected: false,
+
+    async inspect(ctx): Promise<UnitState> {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable") return "foreign";
+      const { modState, FILE_PREVIEW_MOD } = await import("./claude-tui.js");
+      return modState(settings, ctx.dataDir, FILE_PREVIEW_MOD);
+    },
+
+    async apply(ctx): Promise<void> {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable") {
+        console.warn(`Warning: ${ctx.claudeSettingsPath} is not valid JSON — file preview not installed.`);
+        return;
+      }
+      const { installMod, modState, FILE_PREVIEW_MOD } = await import("./claude-tui.js");
+      if ((await modState(settings, ctx.dataDir, FILE_PREVIEW_MOD)) === "foreign") return;
+      const next = await installMod(settings, ctx.dataDir, FILE_PREVIEW_MOD);
+      await mkdir(dirname(ctx.claudeSettingsPath), { recursive: true });
+      await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+    },
+
+    async remove(ctx): Promise<void> {
+      const settings = await readClaudeSettings(ctx.claudeSettingsPath);
+      if (settings === "unparseable" || settings === null) return;
+      const { uninstallMod, FILE_PREVIEW_MOD } = await import("./claude-tui.js");
+      const next = await uninstallMod(settings, ctx.dataDir, FILE_PREVIEW_MOD);
+      if (next !== settings) await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
     },
   };
 }

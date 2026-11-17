@@ -20,7 +20,7 @@ flowchart TD
   subgraph START["Session start"]
     S1["SessionStart hooks (~/.claude/settings.json)<br/>routing-rules · worktree-hook session<br/>session-title notice · jev-env"]
     S2["engram plugin SessionStart<br/>(lives in the engram plugin, not here)"]
-    S3["Mods load (session.start)<br/>activity pane · skill-listing · context-gate"]
+    S3["Mods load (session.start)<br/>activity pane · skill-listing · context-gate · file-preview"]
   end
 
   P["You type a prompt"]
@@ -112,13 +112,14 @@ Defaults are what a first `setup` would tick. "Off" means unticking the unit in 
 
 ### Mods (Claude Code plugins in a local marketplace)
 
-All three are written to `~/.project-brain/claude-plugins/` and registered in `~/.claude/settings.json` under `extraKnownMarketplaces["project-brain"]` and `enabledPlugins["<mod>@project-brain"]`. Sources live in `templates/claude-tui/<mod>/`. They need Claude Code 2.1.287 or later and do not load when `disableAllHooks` is set.
+All four are written to `~/.project-brain/claude-plugins/` and registered in `~/.claude/settings.json` under `extraKnownMarketplaces["project-brain"]` and `enabledPlugins["<mod>@project-brain"]`. Sources live in `templates/claude-tui/<mod>/`. They need Claude Code 2.1.287 or later and do not load when `disableAllHooks` is set.
 
 | Piece | What it does | Where it lives | Unit | Turn it off | Default |
 |---|---|---|---|---|---|
 | Activity pane | Right pane: todos, commands, uncommitted changes with diffs, subagents, CI runs (`gh`), blocked items, Filtros savings; `/activity` reopens it. Sets `tui` to `fullscreen` | `project-brain-activity` mod; `templates/claude-tui/activity-pane/` | `tui:activity-pane` | Untick (restores your previous `tui` from `previous-tui.json`) | on |
 | Compact skill listing | Lists skills by name only; general-use skills keep their description. With Jev, the suggest hook brings picked skills in full; without it, the 15 most used keep theirs | `project-brain-skill-listing` mod; `~/.project-brain/skills.json`, `skill-usage.json` | `tui:skill-listing` | Untick; `BRAIN_SKILL_PICKER=0` falls back to usage mode | off |
 | Context gate | Before injected hook text reaches the model, Jev scores each piece against the prompt; under 0.5 is dropped and logged. engram, project-brain and `contextAllow` signatures are never filtered | `project-brain-context-gate` mod; log in `~/.project-brain/context-gate-log.json` | `tui:context-gate` | Untick; `BRAIN_CONTEXT_GATE=0`; `"contextGate": false` in `skills.json` | off |
+| File preview | Path and `open` controls under Read, Edit and Write rows and replies that name project files: preview in a float of the project's running Neovim (else a Supacode tab, else a pane), open in the editor. Project files only; secret-like names refused | `project-brain-file-preview` mod; `PB_EDITOR`, `PB_NVIM_SERVER`, `PB_PREVIEW_ROOTS`, `PB_PREVIEW_IMAGES` | `tui:file-preview` | Untick | off |
 | Readable replies | Marked block in `~/.claude/CLAUDE.md`: result first, evidence last | `~/.claude/CLAUDE.md` | `tui:readable-replies` | Untick (deletes only the block) | on |
 | Terminal theme | Marked block at the end of the Ghostty config: the active theme's colours, opacity 0.88, blur 20, translucent cells | `~/Library/Application Support/com.mitchellh.ghostty/config.ghostty` (or `~/.config/ghostty/`) | `tui:terminal-theme` | Untick (deletes only the block) | off |
 | Claude Code theme | Custom theme file generated from the same theme definition (`src/themes`): chat, prompt, permissions and the `/diff` view | `~/.claude/themes/project-brain-<theme>.json`, `theme` in `~/.claude/settings.json` | `tui:claude-theme` | Untick (deletes the file, restores the previous `theme`) | off |

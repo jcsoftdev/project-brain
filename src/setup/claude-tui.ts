@@ -36,6 +36,14 @@ import gateHooksJson from "../../templates/claude-tui/context-gate/hooks/hooks.j
 import gateRegisterTsx from "../../templates/claude-tui/context-gate/hooks/register.tsx" with { type: "text" };
 // @ts-expect-error TypeScript refuses a value import of a .d.ts; Bun's text attribute embeds it as a string.
 import gateTypesDts from "../../templates/claude-tui/context-gate/types/index.d.ts" with { type: "text" };
+import previewPluginJson from "../../templates/claude-tui/file-preview/.claude-plugin/plugin.json" with { type: "text" };
+import previewHooksJson from "../../templates/claude-tui/file-preview/hooks/hooks.json" with { type: "text" };
+// @ts-expect-error TypeScript resolves the .tsx as source (and wants --jsx); Bun's text attribute embeds it as a string.
+import previewRegisterTsx from "../../templates/claude-tui/file-preview/hooks/register.tsx" with { type: "text" };
+// @ts-expect-error TypeScript resolves the .ts as source (with no default export); Bun's text attribute embeds it as a string.
+import previewCoreTs from "../../templates/claude-tui/file-preview/hooks/core.ts" with { type: "text" };
+// @ts-expect-error TypeScript refuses a value import of a .d.ts; Bun's text attribute embeds it as a string.
+import previewTypesDts from "../../templates/claude-tui/file-preview/types/index.d.ts" with { type: "text" };
 
 export const MARKETPLACE_NAME = "project-brain";
 
@@ -106,7 +114,24 @@ export const CONTEXT_GATE_MOD: Mod = {
   files: CONTEXT_GATE_FILES,
 };
 
-const MODS: Mod[] = [ACTIVITY_MOD, SKILL_LISTING_MOD, CONTEXT_GATE_MOD];
+export const FILE_PREVIEW_PLUGIN_NAME = "project-brain-file-preview";
+export const FILE_PREVIEW_PLUGIN_KEY = `${FILE_PREVIEW_PLUGIN_NAME}@${MARKETPLACE_NAME}`;
+
+export const FILE_PREVIEW_FILES: Record<string, string> = {
+  ".claude-plugin/plugin.json": previewPluginJson as unknown as string,
+  "hooks/hooks.json": previewHooksJson as unknown as string,
+  "hooks/register.tsx": previewRegisterTsx as string,
+  "hooks/core.ts": previewCoreTs as unknown as string,
+  "types/index.d.ts": previewTypesDts as string,
+};
+
+export const FILE_PREVIEW_MOD: Mod = {
+  name: FILE_PREVIEW_PLUGIN_NAME,
+  description: "Preview and open controls for file paths in Claude Code, installed by project-brain setup.",
+  files: FILE_PREVIEW_FILES,
+};
+
+const MODS: Mod[] = [ACTIVITY_MOD, SKILL_LISTING_MOD, CONTEXT_GATE_MOD, FILE_PREVIEW_MOD];
 
 /**
  * Names only the mods that are installed: a plugin entry whose source directory is missing could

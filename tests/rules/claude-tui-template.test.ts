@@ -6,6 +6,8 @@ import {
   ACTIVITY_PLUGIN_NAME,
   CONTEXT_GATE_FILES,
   CONTEXT_GATE_PLUGIN_NAME,
+  FILE_PREVIEW_FILES,
+  FILE_PREVIEW_PLUGIN_NAME,
   SKILL_LISTING_FILES,
   SKILL_LISTING_PLUGIN_NAME,
 } from "../../src/setup/claude-tui.js";
@@ -27,6 +29,7 @@ const MODS = [
   { dir: "activity-pane", name: ACTIVITY_PLUGIN_NAME, files: ACTIVITY_PANE_FILES },
   { dir: "skill-listing", name: SKILL_LISTING_PLUGIN_NAME, files: SKILL_LISTING_FILES },
   { dir: "context-gate", name: CONTEXT_GATE_PLUGIN_NAME, files: CONTEXT_GATE_FILES },
+  { dir: "file-preview", name: FILE_PREVIEW_PLUGIN_NAME, files: FILE_PREVIEW_FILES },
 ];
 
 for (const { dir, name, files } of MODS) {
@@ -72,5 +75,13 @@ describe("mod types", () => {
   it("are self-contained: no import() and no import statement", () => {
     expect(SKILL_LISTING_FILES["types/index.d.ts"]).not.toMatch(/\bimport\b/);
     expect(CONTEXT_GATE_FILES["types/index.d.ts"]).not.toMatch(/\bimport\b/);
+    expect(FILE_PREVIEW_FILES["types/index.d.ts"]).not.toMatch(/\bimport\b/);
+  });
+});
+
+describe("file-preview names", () => {
+  it("names its state key after the plugin", () => {
+    expect(FILE_PREVIEW_FILES["types/index.d.ts"]).toContain(`'${FILE_PREVIEW_PLUGIN_NAME}': {`);
+    expect(FILE_PREVIEW_FILES["hooks/register.tsx"]).toContain(`plugin: '${FILE_PREVIEW_PLUGIN_NAME}'`);
   });
 });

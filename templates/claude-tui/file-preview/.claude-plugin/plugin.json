@@ -1,0 +1,7 @@
+{
+  "name": "project-brain-file-preview",
+  "version": "0.1.0",
+  "description": "Adds preview and open controls under the file paths in Read, Edit and Write rows and in replies: a preview floats in the project's running Neovim, an open goes to your editor.",
+  "author": { "name": "jcsoftdev" },
+  "types": "./types/index.d.ts"
+}
