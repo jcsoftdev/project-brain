@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { allUnits, type SetupContext } from "../../src/setup/units.js";
 import {
   DRACULA_TERMINAL,
+  TERMINAL_THEME_BEGIN,
+  TERMINAL_THEME_END,
+  applyTerminalTheme,
+  readTerminalConfig,
+  removeTerminalTheme,
   TERMINAL_THEME_BLOCK,
   ghosttyConfigPath,
   terminalThemeState,
@@ -83,5 +88,67 @@ describe("tui:terminal-theme unit", () => {
     await unit().remove(ctx());
     expect(await readFile(path, "utf8")).toBe("font-size = 14\n");
     expect(await unit().inspect(ctx())).toBe("absent");
+  });
+});
+
+describe("terminal theme block: what a user's file can throw at it", () => {
+  const LONE_BEGIN = `font-size = 14\n${TERMINAL_THEME_BEGIN}\nfont-family = Iosevka\nkeybind = a=b\n`;
+
+  it("never guesses where an unpaired marker ends: the file is foreign and nothing is deleted", () => {
+    expect(terminalThemeState(LONE_BEGIN)).toBe("foreign");
+    expect(withTerminalTheme(LONE_BEGIN)).toBe(LONE_BEGIN);
+    expect(withoutTerminalTheme(LONE_BEGIN)).toBe(LONE_BEGIN);
+    expect(terminalThemeState(`a = 1\n${TERMINAL_THEME_END}\n`)).toBe("foreign");
+    expect(terminalThemeState(`${TERMINAL_THEME_BEGIN}\n${TERMINAL_THEME_BEGIN}\n${TERMINAL_THEME_END}\n`)).toBe("foreign");
+  });
+
+  it("collapses duplicated blocks into one, and removes every copy", () => {
+    const twice = `${TERMINAL_THEME_BLOCK}\n\nfont-size = 14\n\n${TERMINAL_THEME_BLOCK}\n`;
+    expect(terminalThemeState(twice)).toBe("stale");
+    const healed = withTerminalTheme(twice);
+    expect(healed.split(TERMINAL_THEME_BEGIN).length - 1).toBe(1);
+    expect(healed).toContain("font-size = 14");
+    expect(withoutTerminalTheme(twice)).toBe("font-size = 14\n");
+  });
+
+  it("keeps a CRLF file CRLF and still recognises its block", () => {
+    const crlf = "font-size = 14\r\n";
+    const applied = withTerminalTheme(crlf);
+    expect(applied.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(terminalThemeState(applied)).toBe("current");
+    expect(withoutTerminalTheme(applied)).toBe(crlf);
+  });
+
+  it("leaves no extra blank lines when the block sat in the middle of the file", () => {
+    const middle = `a = 1\n\n${TERMINAL_THEME_BLOCK}\n\nb = 2\n`;
+    expect(withoutTerminalTheme(middle)).toBe("a = 1\n\nb = 2\n");
+  });
+
+  it("reads a missing file as empty but refuses to treat any other read failure as empty", async () => {
+    expect(await readTerminalConfig(join(home, "nope", "config"))).toBe("");
+    const asDirectory = join(home, "dir-as-config");
+    await mkdir(asDirectory, { recursive: true });
+    await expect(readTerminalConfig(asDirectory)).rejects.toThrow();
+    await expect(removeTerminalTheme(asDirectory)).rejects.toThrow();
+  });
+
+  it("does not touch a foreign file on apply or remove", async () => {
+    await mkdir(dirname(config), { recursive: true });
+    await writeFile(config, LONE_BEGIN);
+    await applyTerminalTheme(config);
+    await removeTerminalTheme(config);
+    expect(await readFile(config, "utf8")).toBe(LONE_BEGIN);
+  });
+
+  it("writes through a symlinked config instead of replacing the link", async () => {
+    const real = join(home, "dotfiles", "ghostty");
+    await mkdir(dirname(real), { recursive: true });
+    await writeFile(real, "font-size = 14\n");
+    await mkdir(dirname(config), { recursive: true });
+    await symlink(real, config);
+    await applyTerminalTheme(config);
+    expect(terminalThemeState(await readFile(real, "utf8"))).toBe("current");
+    await removeTerminalTheme(config);
+    expect(await readFile(real, "utf8")).toBe("font-size = 14\n");
   });
 });

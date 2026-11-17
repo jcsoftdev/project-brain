@@ -1,17 +1,22 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { writeFileAtomic } from "../atomic-write.js";
 
 /**
  * The Dracula theme as a managed block in the user's Ghostty config, so the terminal and the activity pane
  * (which paints the same palette) agree. Supacode embeds Ghostty and merges this same file.
  * Ghostty keeps the last value of a repeated key, so the block goes at the end and wins over what the user
  * wrote above it; removing it hands every key back without the rest of the file having been touched.
+ *
+ * The block is found by whole marker lines. A marker with no partner (a begin without its end, a stray end,
+ * a begin inside a block) is not something this module wrote, so the file is reported `foreign` and left alone:
+ * guessing where such a block ends would delete the user's own lines.
  */
 export const TERMINAL_THEME_BEGIN = "# >>> project-brain terminal theme (Dracula) >>>";
 export const TERMINAL_THEME_END = "# <<< project-brain terminal theme <<<";
 
-/** Dracula's published colours, and its standard ANSI set. */
+/** Dracula's published colours and standard ANSI set; the background is the owner's own (#17141d), not Dracula's #282a36. */
 export const DRACULA_TERMINAL = {
   background: "17141d",
   foreground: "f8f8f2",
@@ -39,6 +44,7 @@ export const TERMINAL_THEME_BODY = [
 ].join("\n");
 
 export const TERMINAL_THEME_BLOCK = `${TERMINAL_THEME_BEGIN}\n${TERMINAL_THEME_BODY}\n${TERMINAL_THEME_END}`;
+const BLOCK_LINES = TERMINAL_THEME_BLOCK.split("\n");
 
 /** The Ghostty config the user already has, else the platform's default location for a new one. */
 export function ghosttyConfigPath(home: string, platform: NodeJS.Platform = process.platform): string {
@@ -53,41 +59,99 @@ export function ghosttyConfigPath(home: string, platform: NodeJS.Platform = proc
   return platform === "darwin" ? candidates[0]! : candidates[2]!;
 }
 
-const BLOCK = new RegExp(`\\n?${escape(TERMINAL_THEME_BEGIN)}[\\s\\S]*?${escape(TERMINAL_THEME_END)}\\n?`);
-function escape(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export type TerminalThemeState = "absent" | "current" | "stale" | "foreign";
+
+/** Where each well-formed block sits (inclusive line indexes); `isBroken` when a marker has no partner. */
+function scan(lines: string[]): { blocks: Array<{ start: number; end: number }>; isBroken: boolean } {
+  const blocks: Array<{ start: number; end: number }> = [];
+  let open: number | null = null;
+  let isBroken = false;
+  lines.forEach((line, index) => {
+    if (line === TERMINAL_THEME_BEGIN) {
+      if (open !== null) isBroken = true;
+      open = index;
+    } else if (line === TERMINAL_THEME_END) {
+      if (open === null) isBroken = true;
+      else blocks.push({ start: open, end: index });
+      open = null;
+    }
+  });
+  return { blocks, isBroken: isBroken || open !== null };
 }
 
-export type TerminalThemeState = "absent" | "current" | "stale";
+const eolOf = (text: string): string => (text.includes("\r\n") ? "\r\n" : "\n");
+const linesOf = (text: string): string[] => text.split(/\r?\n/);
 
 export function terminalThemeState(text: string): TerminalThemeState {
-  const match = text.match(BLOCK);
-  if (!match) return "absent";
-  return match[0].trim() === TERMINAL_THEME_BLOCK ? "current" : "stale";
+  const lines = linesOf(text);
+  const { blocks, isBroken } = scan(lines);
+  if (isBroken) return "foreign";
+  const only = blocks[0];
+  if (only === undefined) return "absent";
+  const same = blocks.length === 1 && lines.slice(only.start, only.end + 1).join("\n") === TERMINAL_THEME_BLOCK;
+  return same ? "current" : "stale";
 }
 
-/** The text with the block written at its end (replacing a previous one); nothing outside the block changes. */
+/** The lines left once every block, and the one blank line setup put in front of it, is gone. */
+function withoutBlocks(lines: string[], blocks: Array<{ start: number; end: number }>): string[] {
+  const dropped = new Set<number>();
+  for (const { start, end } of blocks) {
+    for (let at = start; at <= end; at++) dropped.add(at);
+    if (start > 0 && lines[start - 1]!.trim() === "" && !dropped.has(start - 1)) dropped.add(start - 1);
+    // A block that opened the file has no blank line before it to take along, so take the one after it.
+    if (start === 0) for (let at = end + 1; at < lines.length && lines[at]!.trim() === "" && at < lines.length - 1; at++) dropped.add(at);
+  }
+  const kept = lines.filter((_, index) => !dropped.has(index));
+  while (kept.length > 0 && kept[kept.length - 1]!.trim() === "") kept.pop();
+  return kept;
+}
+
+const join_ = (lines: string[], eol: string): string => (lines.length === 0 ? "" : `${lines.join(eol)}${eol}`);
+
+/** The text with exactly one block at its end; nothing outside the block changes. A file with an unpaired marker comes back as it was. */
 export function withTerminalTheme(text: string): string {
-  const without = text.replace(BLOCK, "\n").trimEnd();
-  return `${without === "" ? "" : `${without}\n\n`}${TERMINAL_THEME_BLOCK}\n`;
+  const lines = linesOf(text);
+  const { blocks, isBroken } = scan(lines);
+  if (isBroken) return text;
+  const kept = withoutBlocks(lines, blocks);
+  return join_([...kept, ...(kept.length > 0 ? [""] : []), ...BLOCK_LINES], eolOf(text));
 }
 
-/** The text without the block; a file that only held the block comes back empty. */
+/** The text without any block; a file that only held the block comes back empty, one with an unpaired marker as it was. */
 export function withoutTerminalTheme(text: string): string {
-  const rest = text.replace(BLOCK, "\n").trimEnd();
-  return rest === "" ? "" : `${rest}\n`;
+  const lines = linesOf(text);
+  const { blocks, isBroken } = scan(lines);
+  if (isBroken || blocks.length === 0) return text;
+  return join_(withoutBlocks(lines, blocks), eolOf(text));
 }
 
+/** The file's text; a missing file is empty, any other failure (permissions, I/O) is an error, never an empty file. */
 export async function readTerminalConfig(path: string): Promise<string> {
-  return readFile(path, "utf8").catch(() => "");
+  try {
+    return await readFile(path, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw err;
+  }
+}
+
+/** A symlinked config is written through, not replaced by a regular file. */
+const targetOf = (path: string): Promise<string> => realpath(path).catch(() => path);
+
+async function write(path: string, text: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFileAtomic(await targetOf(path), text);
 }
 
 export async function applyTerminalTheme(path: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, withTerminalTheme(await readTerminalConfig(path)));
+  const before = await readTerminalConfig(path);
+  const after = withTerminalTheme(before);
+  if (after !== before) await write(path, after);
 }
 
 export async function removeTerminalTheme(path: string): Promise<void> {
   if (!existsSync(path)) return;
-  await writeFile(path, withoutTerminalTheme(await readTerminalConfig(path)));
+  const before = await readTerminalConfig(path);
+  const after = withoutTerminalTheme(before);
+  if (after !== before) await write(path, after);
 }
