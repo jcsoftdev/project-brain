@@ -34,10 +34,18 @@ on:
         description: "Version to promote to latest (e.g. 0.23.0, no leading v)"
         required: true
         type: string
+      tag:
+        description: "dist-tag to point at that version"
+        required: false
+        default: latest
+        type: choice
+        options:
+          - latest
+          - next
 
 jobs:
   promote:
-    name: Promote ${{ inputs.version }} to latest
+    name: Promote ${{ inputs.version }} to ${{ inputs.tag }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -93,12 +101,13 @@ jobs:
         shell: bash
         run: |
           VERSION="${VERSION#v}"
-          CURRENT="$(npm view project-brain dist-tags.latest --prefer-online 2>/dev/null || echo none)"
+          CURRENT="$(npm view project-brain "dist-tags.${TAG}" --prefer-online 2>/dev/null || echo none)"
           if [ "${CURRENT}" = "${VERSION}" ]; then
-            echo "latest already points at ${VERSION}, nothing to do."
+            echo "${TAG} already points at ${VERSION}, nothing to do."
             exit 0
           fi
-          npm dist-tag add "project-brain@${VERSION}" latest
-          echo "latest: ${CURRENT} -> ${VERSION}"
+          npm dist-tag add "project-brain@${VERSION}" "${TAG}"
+          echo "${TAG}: ${CURRENT} -> ${VERSION}"
         env:
           VERSION: ${{ inputs.version }}
+          TAG: ${{ inputs.tag }}
