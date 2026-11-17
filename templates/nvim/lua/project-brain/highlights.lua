@@ -2,6 +2,12 @@
 -- The palette changes per theme; this file does not: every role below is a palette colour or a blend of two.
 local M = {}
 
+-- Row tint of an added or deleted line, and the stronger tint of the words that changed inside it.
+M.LINE_TINT = 0.12
+M.WORD_TINT = 0.22
+-- A changed line stays below an added or deleted one: its changed words carry the meaning.
+M.CHANGE_TINT = 0.06
+
 local function channels(hex)
   hex = hex:gsub("^#", "")
   return tonumber(hex:sub(1, 2), 16), tonumber(hex:sub(3, 4), 16), tonumber(hex:sub(5, 6), 16)
@@ -41,10 +47,36 @@ function M.colors(c, p)
   c.git = { add = a.green, change = a.orange, delete = a.red, ignore = p.comment }
   c.gitSigns = { add = a.green, change = a.orange, delete = a.red }
   c.diff = {
-    add = M.blend(p.background, a.green, 0.16),
-    delete = M.blend(p.background, a.red, 0.16),
-    change = M.blend(p.background, a.cyan, 0.07),
-    text = M.blend(p.background, a.orange, 0.32),
+    add = M.blend(p.background, a.green, M.LINE_TINT),
+    delete = M.blend(p.background, a.red, M.LINE_TINT),
+    change = M.blend(p.background, a.cyan, M.CHANGE_TINT),
+    text = M.blend(p.background, a.orange, M.WORD_TINT),
+  }
+end
+
+--- How code is painted, by role; the same table as `syntax` in src/themes/roles.ts.
+function M.syntax(p)
+  local a = p.accents
+  return {
+    keyword = a.pink,
+    operator = a.pink,
+    ["function"] = a.green,
+    builtin = a.cyan,
+    type = a.cyan,
+    string = a.yellow,
+    escape = a.pink,
+    regexp = a.orange,
+    number = a.purple,
+    constant = a.purple,
+    parameter = a.orange,
+    variable = p.foreground,
+    comment = p.comment,
+    tag = a.pink,
+    tagDelimiter = p.comment,
+    attribute = a.green,
+    heading = a.purple,
+    link = a.cyan,
+    raw = a.green,
   }
 end
 
@@ -61,11 +93,11 @@ function M.groups(hl, c, p)
   end
 
   -- Diff: green is added, red is removed, a changed line is only faintly tinted so the changed words stand out.
-  set("DiffAdd", { bg = tint(a.green, 0.16) })
-  set("DiffChange", { bg = tint(a.cyan, 0.07) })
-  set("DiffDelete", { bg = tint(a.red, 0.16), fg = M.blend(a.red, bg, 0.5) })
-  set("DiffText", { bg = tint(a.orange, 0.32), bold = true })
-  set("DiffTextAdd", { bg = tint(a.green, 0.34), bold = true })
+  set("DiffAdd", { bg = tint(a.green, M.LINE_TINT) })
+  set("DiffChange", { bg = tint(a.cyan, M.CHANGE_TINT) })
+  set("DiffDelete", { bg = tint(a.red, M.LINE_TINT), fg = M.blend(a.red, bg, 0.5) })
+  set("DiffText", { bg = tint(a.orange, M.WORD_TINT), bold = true })
+  set("DiffTextAdd", { bg = tint(a.green, M.WORD_TINT), bold = true })
   set("diffAdded", { fg = a.green })
   set("diffRemoved", { fg = a.red })
   set("diffChanged", { fg = a.orange })
@@ -74,14 +106,14 @@ function M.groups(hl, c, p)
   set("GitSignsAdd", { fg = a.green })
   set("GitSignsChange", { fg = a.orange })
   set("GitSignsDelete", { fg = a.red })
-  set("GitSignsAddInline", { bg = tint(a.green, 0.34) })
-  set("GitSignsChangeInline", { bg = tint(a.orange, 0.32) })
-  set("GitSignsDeleteInline", { bg = tint(a.red, 0.34) })
-  set("GitSignsAddLn", { bg = tint(a.green, 0.16) })
+  set("GitSignsAddInline", { bg = tint(a.green, M.WORD_TINT) })
+  set("GitSignsChangeInline", { bg = tint(a.orange, M.WORD_TINT) })
+  set("GitSignsDeleteInline", { bg = tint(a.red, M.WORD_TINT) })
+  set("GitSignsAddLn", { bg = tint(a.green, M.LINE_TINT) })
   set("GitSignsChangeLn", { bg = tint(a.orange, 0.1) })
-  set("GitSignsDeleteLn", { bg = tint(a.red, 0.16) })
-  set("GitSignsAddPreview", { bg = tint(a.green, 0.16) })
-  set("GitSignsDeletePreview", { bg = tint(a.red, 0.16) })
+  set("GitSignsDeleteLn", { bg = tint(a.red, M.LINE_TINT) })
+  set("GitSignsAddPreview", { bg = tint(a.green, M.LINE_TINT) })
+  set("GitSignsDeletePreview", { bg = tint(a.red, M.LINE_TINT) })
 
   -- Syntax.
   local function many(names, spec)
@@ -89,37 +121,38 @@ function M.groups(hl, c, p)
       set(name, spec)
     end
   end
-  set("Comment", { fg = p.comment, italic = true })
-  set("@comment", { fg = p.comment, italic = true })
+  local sx = M.syntax(p)
+  set("Comment", { fg = sx.comment, italic = true })
+  set("@comment", { fg = sx.comment, italic = true })
   many({ "Keyword", "Statement", "Conditional", "Repeat", "Exception", "Operator", "Include",
     "@keyword", "@keyword.return", "@keyword.conditional", "@keyword.repeat", "@keyword.import",
     "@keyword.exception", "@keyword.operator", "@keyword.modifier", "@keyword.coroutine", "@operator",
-    "@lsp.type.keyword", "@lsp.type.operator" }, { fg = a.pink })
+    "@lsp.type.keyword", "@lsp.type.operator" }, { fg = sx.keyword })
   many({ "Function", "@function", "@function.call", "@function.method", "@function.method.call",
-    "@lsp.type.function", "@lsp.type.method" }, { fg = a.green })
-  many({ "@keyword.function" }, { fg = a.pink })
-  many({ "@function.builtin", "@variable.builtin" }, { fg = a.cyan, italic = true })
+    "@lsp.type.function", "@lsp.type.method" }, { fg = sx["function"] })
+  many({ "@keyword.function" }, { fg = sx.keyword })
+  many({ "@function.builtin", "@variable.builtin" }, { fg = sx.builtin, italic = true })
   many({ "Type", "Structure", "@type", "@constructor", "@lsp.type.class", "@lsp.type.interface",
     "@lsp.type.enum", "@lsp.type.struct", "@lsp.type.type", "@lsp.type.typeParameter", "@module", "@namespace" },
-    { fg = a.cyan })
-  many({ "@type.builtin" }, { fg = a.cyan, italic = true })
-  many({ "String", "Character", "@string", "@character", "@lsp.type.string" }, { fg = a.yellow })
-  many({ "@string.escape", "@string.special" }, { fg = a.pink })
-  many({ "@string.regexp" }, { fg = a.orange })
+    { fg = sx.type })
+  many({ "@type.builtin" }, { fg = sx.builtin, italic = true })
+  many({ "String", "Character", "@string", "@character", "@lsp.type.string" }, { fg = sx.string })
+  many({ "@string.escape", "@string.special" }, { fg = sx.escape })
+  many({ "@string.regexp" }, { fg = sx.regexp })
   many({ "Number", "Float", "Boolean", "Constant", "@number", "@number.float", "@boolean", "@constant",
-    "@constant.builtin", "@lsp.type.enumMember" }, { fg = a.purple })
+    "@constant.builtin", "@lsp.type.enumMember" }, { fg = sx.number })
   many({ "@variable", "@variable.member", "@property", "@lsp.type.variable", "@lsp.type.property",
-    "@punctuation.delimiter", "@punctuation.bracket" }, { fg = fg })
-  many({ "@variable.parameter", "@lsp.type.parameter" }, { fg = a.orange, italic = true })
-  many({ "@tag", "@tag.builtin" }, { fg = a.pink })
-  many({ "@tag.attribute", "@attribute", "@lsp.type.decorator" }, { fg = a.green })
-  many({ "@tag.delimiter" }, { fg = p.comment })
+    "@punctuation.delimiter", "@punctuation.bracket" }, { fg = sx.variable })
+  many({ "@variable.parameter", "@lsp.type.parameter" }, { fg = sx.parameter, italic = true })
+  many({ "@tag", "@tag.builtin" }, { fg = sx.tag })
+  many({ "@tag.attribute", "@attribute", "@lsp.type.decorator" }, { fg = sx.attribute })
+  many({ "@tag.delimiter" }, { fg = sx.tagDelimiter })
   many({ "@markup.heading", "@markup.heading.1", "@markup.heading.2", "@markup.heading.3", "@markup.heading.4",
-    "@markup.heading.5", "@markup.heading.6" }, { fg = a.purple, bold = true })
+    "@markup.heading.5", "@markup.heading.6" }, { fg = sx.heading, bold = true })
   set("@markup.strong", { bold = true })
   set("@markup.italic", { italic = true })
-  many({ "@markup.link", "@markup.link.url" }, { fg = a.cyan, underline = true })
-  set("@markup.raw", { fg = a.green })
+  many({ "@markup.link", "@markup.link.url" }, { fg = sx.link, underline = true })
+  set("@markup.raw", { fg = sx.raw })
 
   -- Diagnostics.
   set("DiagnosticError", { fg = a.red })

@@ -32,7 +32,7 @@ export function claudeCodeThemeOf(theme: ThemeDefinition): ClaudeCodeTheme {
       inverseText: bg,
       inactive: text.muted,
       inactiveShimmer: blend(comment, fg, 0.55),
-      subtle: text.comment,
+      subtle: text.hint,
       suggestion: a.cyan,
       permission: a.purple,
       permissionShimmer: lighten(a.purple),
@@ -62,10 +62,10 @@ export function claudeCodeThemeOf(theme: ThemeDefinition): ClaudeCodeTheme {
       diffAddedWord: diff.textAdd,
       diffRemovedWord: diff.textDelete,
 
-      userMessageBackground: raised(0.55),
+      userMessageBackground: surface.float,
       userMessageBackgroundHover: raised(0.8),
       bashMessageBackgroundColor: raised(0.35),
-      memoryBackgroundColor: raised(0.55),
+      memoryBackgroundColor: surface.float,
       selectionBg: surface.selection,
       composerSidebarBackground: surface.base,
 

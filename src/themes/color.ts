@@ -15,5 +15,22 @@ export function blend(hex: string, into: string, share: number): string {
   return `#${mixed.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 }
 
+const luminance = (rgb: [number, number, number]): number => {
+  const [r, g, b] = rgb.map((channel) => {
+    const v = channel / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+};
+
+/** WCAG 2.x contrast ratio (1..21) between two `#rrggbb` colours; NaN when either is not one. */
+export function contrast(a: string, b: string): number {
+  const first = channels(a);
+  const second = channels(b);
+  if (!first || !second) return Number.NaN;
+  const [light, dark] = [luminance(first), luminance(second)].sort((x, y) => y - x);
+  return (light! + 0.05) / (dark! + 0.05);
+}
+
 /** The colour a little closer to white: the "shimmer" a highlighted row pulses to. */
 export const lighten = (hex: string, share = 0.25): string => blend(hex, "#ffffff", share);

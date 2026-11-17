@@ -96,30 +96,30 @@ local c = { git = {}, gitSigns = {}, diff = {} }
 h.colors(c, p)
 local hl = {}
 h.groups(hl, c, p)
-io.write(vim.json.encode({ colors = c, hl = hl }))
+io.write(vim.json.encode({ colors = c, hl = hl, syntax = h.syntax(p) }))
 `
     );
-    const out = Bun.spawnSync([NVIM!, "--headless", "-u", "NONE", "-l", probe], { stdout: "pipe", stderr: "pipe" });
+    const out = Bun.spawnSync([NVIM!, "--headless", "--clean", "-l", probe], { stdout: "pipe", stderr: "pipe" });
     expect(out.stderr.toString()).toBe("");
-    return JSON.parse(out.stdout.toString()) as { colors: Record<string, any>; hl: Record<string, any> };
+    return JSON.parse(out.stdout.toString()) as { colors: Record<string, any>; hl: Record<string, any>; syntax: Record<string, string> };
   };
 
   it("paints a diff that reads as green added, red removed, and a stronger tint on changed words", async () => {
     const { hl } = await evaluate();
     const bg = theme.background;
-    expect(hl.DiffAdd.bg).toBe(blend(bg, theme.accents.green, 0.16));
-    expect(hl.DiffDelete.bg).toBe(blend(bg, theme.accents.red, 0.16));
-    expect(hl.DiffChange.bg).toBe(blend(bg, theme.accents.cyan, 0.07));
-    expect(hl.DiffText.bg).toBe(blend(bg, theme.accents.orange, 0.32));
+    expect(hl.DiffAdd.bg).toBe(blend(bg, theme.accents.green, 0.12));
+    expect(hl.DiffDelete.bg).toBe(blend(bg, theme.accents.red, 0.12));
+    expect(hl.DiffChange.bg).toBe(blend(bg, theme.accents.cyan, 0.06));
+    expect(hl.DiffText.bg).toBe(blend(bg, theme.accents.orange, 0.22));
     expect(hl.DiffText.bold).toBe(true);
-    expect(hl.DiffTextAdd.bg).toBe(blend(bg, theme.accents.green, 0.34));
+    expect(hl.DiffTextAdd.bg).toBe(blend(bg, theme.accents.green, 0.22));
     // The deleted-line filler (the hatch) is a quiet red, not a loud one.
     expect(hl.DiffDelete.fg).toBe(blend(theme.accents.red, bg, 0.5));
   });
 
   it("agrees with the TypeScript blend, so the Lua and the registry cannot drift", async () => {
     const { colors } = await evaluate();
-    expect(colors.diff.add).toBe(blend(theme.background, theme.accents.green, 0.16));
+    expect(colors.diff.add).toBe(blend(theme.background, theme.accents.green, 0.12));
     expect(colors.bg).toBe(theme.background);
     expect(colors.bg_highlight).toBe(blend(theme.background, theme.selection, 0.45));
   });
@@ -137,7 +137,8 @@ io.write(vim.json.encode({ colors = c, hl = hl }))
     expect(colors.dark5).toBe(roles.text.muted);
     expect(colors.border).toBe(roles.border.idle);
     expect(colors.border_highlight).toBe(roles.border.focus);
-    expect(colors.git).toEqual(roles.git);
+    const { unstaged: _unstaged, ...lineGit } = roles.git;
+    expect(colors.git).toEqual(lineGit);
     expect([colors.error, colors.warning, colors.info, colors.hint]).toEqual([
       roles.status.error,
       roles.status.warning,
@@ -149,6 +150,45 @@ io.write(vim.json.encode({ colors = c, hl = hl }))
     expect(hl.DiffTextAdd.bg).toBe(roles.diff.textAdd);
     expect(hl.GitSignsDeleteInline.bg).toBe(roles.diff.textDelete);
     expect(hl.DiffDelete).toEqual({ bg: roles.diff.delete, fg: roles.diff.deleteFiller });
+    expect(hl.DiffAdd.bg).toBe(roles.diff.add);
+    expect(hl.DiffChange.bg).toBe(roles.diff.change);
+    expect(hl.GitSignsAddInline.bg).toBe(roles.diff.textAdd);
+    expect(hl.GitSignsChangeInline.bg).toBe(roles.diff.text);
+    expect(hl.GitSignsAddLn.bg).toBe(roles.diff.add);
+    expect(hl.GitSignsDeleteLn.bg).toBe(roles.diff.delete);
+    expect(hl.diffLine.fg).toBe(roles.diff.hunk);
+    expect(hl.diffFile).toEqual({ fg: roles.diff.file, bold: true });
+    expect(hl.Search).toEqual({ bg: roles.surface.search, fg: roles.text.fg });
+    expect(hl.IncSearch).toEqual({ bg: roles.surface.searchCurrent, fg: roles.text.onAccent });
+    expect(colors.blue).toBe(roles.text.path);
+  });
+
+  it("paints code from the same syntax roles the TypeScript hands to every other tool", async () => {
+    const { hl, syntax } = await evaluate();
+    const roles = uiRolesOf(theme).syntax;
+    expect(syntax).toEqual(roles);
+    const painted: [string, keyof typeof roles][] = [
+      ["@keyword", "keyword"],
+      ["@operator", "operator"],
+      ["@function", "function"],
+      ["@function.builtin", "builtin"],
+      ["@type", "type"],
+      ["@string", "string"],
+      ["@string.escape", "escape"],
+      ["@string.regexp", "regexp"],
+      ["@number", "number"],
+      ["@constant", "constant"],
+      ["@variable.parameter", "parameter"],
+      ["@variable", "variable"],
+      ["@comment", "comment"],
+      ["@tag", "tag"],
+      ["@tag.delimiter", "tagDelimiter"],
+      ["@attribute", "attribute"],
+      ["@markup.heading", "heading"],
+      ["@markup.link", "link"],
+      ["@markup.raw", "raw"],
+    ];
+    for (const [group, role] of painted) expect(hl[group].fg, group).toBe(roles[role]);
   });
 
   it("paints code the way the theme does: pink keywords, green functions, yellow strings, purple numbers", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { blend, lighten, THEMES, themeById, uiRolesOf } from "../../src/themes/index.js";
+import { blend, contrast, lighten, READABLE_CONTRAST, THEMES, themeById, uiRolesOf } from "../../src/themes/index.js";
 import { claudeCodeThemeOf, claudeCodeThemeRef } from "../../src/themes/claude-code.js";
 
 const HEX = /^#[0-9a-f]{6}$/;
@@ -53,6 +53,14 @@ describe.each(THEMES.map((theme) => [theme.id, theme] as const))("Claude Code th
     expect(overrides.diffAddedDimmed).not.toBe(overrides.diffAdded);
   });
 
+  it("puts the user's messages on the raised float layer and keeps hint text readable on it", () => {
+    const { surface, text } = uiRolesOf(theme);
+    expect(overrides.userMessageBackground).toBe(surface.float);
+    expect(overrides.memoryBackgroundColor).toBe(surface.float);
+    expect(contrast(overrides.subtle!, overrides.userMessageBackground!)).toBeGreaterThanOrEqual(READABLE_CONTRAST);
+    expect(contrast(text.fg, overrides.userMessageBackgroundHover!)).toBeGreaterThanOrEqual(READABLE_CONTRAST);
+  });
+
   it("keeps the role colours the activity pane uses, so the two agree", () => {
     expect(overrides.success).toBe(theme.accents.green);
     expect(overrides.error).toBe(theme.accents.red);
@@ -60,7 +68,7 @@ describe.each(THEMES.map((theme) => [theme.id, theme] as const))("Claude Code th
     expect(overrides.permission).toBe(theme.accents.purple);
     expect(overrides.suggestion).toBe(theme.accents.cyan);
     expect(overrides.claude).toBe(theme.accents.pink);
-    expect(overrides.subtle).toBe(theme.comment);
+    expect(overrides.subtle).toBe(uiRolesOf(theme).text.hint);
     expect(overrides.text).toBe(theme.foreground);
   });
 });
