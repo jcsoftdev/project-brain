@@ -3,7 +3,7 @@ import { atom, read, update } from 'claude-code'
 import type { ContextCategory, Register, SessionCompactResult, SessionContextBreakdown, SessionContextUsage } from 'claude-code'
 
 import type { Api, Row, Span, Tone } from './register'
-import { clean, compact, contextPercentOf, fit, span } from './register'
+import { againstCompaction, clean, compact, contextPercentOf, fit, span } from './register'
 
 /** One breakdown row the pane keeps: deferred schemas sit outside the window and are dropped. */
 export type ContextRowKind = 'used' | 'free' | 'buffer'
@@ -113,7 +113,7 @@ export const compactionLabel = (record: CompactionRecord, now: number): string =
 
 /** The live fill against the session's measured window; the breakdown's own figure only before a response came back. */
 export const livePercent = (part: Pick<ContextPart, 'usage' | 'breakdown'>): number | undefined => {
-  const measured = contextPercentOf(part.usage)
+  const measured = contextPercentOf(againstCompaction(part.usage, part.breakdown.window))
   if (measured !== undefined) return measured
   const { total, window } = part.breakdown
   return window > 0 && total > 0 ? (total / window) * 100 : undefined
