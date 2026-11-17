@@ -94,7 +94,7 @@ export interface SetupContext {
 export interface SetupUnit {
   /** Stable across releases — it is persisted in the selection file. */
   id: string;
-  group: "Hosts" | "Guidance" | "Skills" | "Claude TUI" | "Neovim" | "Other";
+  group: "Hosts" | "Guidance" | "Skills" | "Claude TUI" | "Neovim" | "Terminal tools" | "Other";
   label: string;
   /** One line, shown beside the checkbox. */
   description: string;
