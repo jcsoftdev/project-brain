@@ -42,7 +42,7 @@ describe("UI roles", () => {
         delete: "#331c24",
         change: "#1e212a",
         text: "#4a382e",
-        textAdd: "#244732",
+        textAdd: "#224230",
         textDelete: "#4a2229",
         deleteFiller: "#8b3539",
         addDim: "#1d2b26",
@@ -129,6 +129,16 @@ describe("UI roles", () => {
       for (const color of [text.fg, accent.pink, accent.purple]) expect(contrast(color, tint)).toBeGreaterThanOrEqual(READABLE_CONTRAST);
     }
     expect(contrast(text.fg, diff.textAdd)).toBeGreaterThanOrEqual(READABLE_CONTRAST);
+  });
+
+  it("keeps every code and diff text colour readable on the green word tint, except the comment colour that is already quiet on the base", () => {
+    for (const theme of THEMES) {
+      const { syntax, diff, text, surface } = uiRolesOf(theme);
+      const colours = { ...syntax, fg: text.fg, hunk: diff.hunk, file: diff.file };
+      const checked = Object.entries(colours).filter(([, color]) => contrast(color, surface.base) >= READABLE_CONTRAST);
+      expect(checked.map(([role]) => role)).toEqual(expect.arrayContaining(["keyword", "number", "string", "function", "variable", "fg", "hunk", "file"]));
+      for (const [role, color] of checked) expect([role, contrast(color, diff.textAdd) >= READABLE_CONTRAST]).toEqual([role, true]);
+    }
   });
 
   it("keeps hint text readable on every layer text sits on, and quieter than muted text", () => {

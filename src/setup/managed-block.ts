@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath } from "node:fs/promises";
+import { lstat, mkdir, readFile, readlink, realpath } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
@@ -15,6 +15,13 @@ export interface BlockMarkers {
 }
 
 export type BlockState = "absent" | "current" | "stale" | "foreign";
+
+/**
+ * A unit's state once its tool is gone: what it wrote still reports `current` or `stale`, so the owner can untick it
+ * and have it removed; with nothing of its own on disk there is nothing to offer, and it is `unavailable`.
+ */
+export const stateWithoutTool = <S extends string>(state: S): S | "unavailable" =>
+  state === "current" || state === "stale" ? state : "unavailable";
 
 type Span = { start: number; end: number };
 
@@ -97,13 +104,32 @@ export async function readTextOrEmpty(path: string): Promise<string> {
   }
 }
 
-/** A symlinked file is written through, not replaced by a regular file. */
-const targetOf = (path: string): Promise<string> => realpath(path).catch(() => path);
-
-async function write(path: string, text: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFileAtomic(await targetOf(path), text);
+/**
+ * Where a write to `path` lands: a symlinked file is written through, never replaced by a regular file.
+ *
+ * A link whose target is missing (a dotfiles checkout moved, a volume not mounted) is refused rather than followed:
+ * creating its target could build a fresh tree where a mount point belongs, and writing over the link loses it.
+ */
+export async function writeTargetOf(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    const link = await lstat(path).catch(() => null);
+    if (link?.isSymbolicLink()) {
+      throw new Error(`${path} is a symlink to ${await readlink(path)}, which does not exist; restore it or remove the link, then run setup again`);
+    }
+    return path;
+  }
 }
+
+/** Writes `text` atomically to `path`, through a symlink when `path` is one. */
+export async function writeThroughLink(path: string, text: string): Promise<void> {
+  const target = await writeTargetOf(path);
+  await mkdir(dirname(target), { recursive: true });
+  await writeFileAtomic(target, text);
+}
+
+const write = writeThroughLink;
 
 export async function applyBlock(path: string, markers: BlockMarkers, block: string): Promise<void> {
   const before = await readTextOrEmpty(path);

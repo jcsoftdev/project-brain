@@ -26,6 +26,7 @@ export function starshipThemeUnit(which: Which = Bun.which): SetupUnit {
     },
 
     async apply(ctx): Promise<void> {
+      if (!which("starship")) return;
       const { applyStarshipTheme } = await import("./starship-theme.js");
       const { themeById } = await import("../themes/index.js");
       await applyStarshipTheme(await starshipConfigOf(ctx), themeById());

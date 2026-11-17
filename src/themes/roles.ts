@@ -107,6 +107,8 @@ export interface UiRoles {
 
 const LINE_TINT = 0.12;
 const WORD_TINT = 0.22;
+// Green is the brightest accent, so its word tint stays lower to keep pink and purple code at 4.5:1 on it.
+const ADD_WORD_TINT = 0.2;
 const CHANGE_TINT = 0.06;
 
 export function uiRolesOf(theme: ThemeDefinition): UiRoles {
@@ -148,7 +150,7 @@ export function uiRolesOf(theme: ThemeDefinition): UiRoles {
       delete: tint(a.red, LINE_TINT),
       change: tint(a.cyan, CHANGE_TINT),
       text: tint(a.orange, WORD_TINT),
-      textAdd: tint(a.green, WORD_TINT),
+      textAdd: tint(a.green, ADD_WORD_TINT),
       textDelete: tint(a.red, WORD_TINT),
       deleteFiller: blend(a.red, bg, 0.5),
       addDim: tint(a.green, 0.1),

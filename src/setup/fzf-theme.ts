@@ -1,5 +1,5 @@
 import { basename, join } from "node:path";
-import { applyBlock, blockState, readTextOrEmpty, removeBlock, withBlock, withoutBlock, type BlockMarkers } from "./managed-block.js";
+import { applyBlock, blockState, readTextOrEmpty, removeBlock, stateWithoutTool, withBlock, withoutBlock, type BlockMarkers } from "./managed-block.js";
 import { themeById, uiRolesOf, type ThemeDefinition } from "../themes/index.js";
 
 /**
@@ -93,8 +93,9 @@ export const withFzfTheme = (text: string, theme: ThemeDefinition = themeById())
 export const withoutFzfTheme = (text: string): string => withoutBlock(text, MARKERS);
 
 export async function fzfThemeState({ rcPath, which = Bun.which, theme = themeById() }: FzfThemeTarget): Promise<FzfThemeState> {
-  if (rcPath === null || which("fzf") === null) return "unavailable";
-  return fzfThemeStateOf(await readTextOrEmpty(rcPath), theme);
+  if (rcPath === null) return "unavailable";
+  const state = fzfThemeStateOf(await readTextOrEmpty(rcPath), theme);
+  return which("fzf") === null ? stateWithoutTool(state) : state;
 }
 
 export async function applyFzfTheme({ rcPath, which = Bun.which, theme = themeById() }: FzfThemeTarget): Promise<void> {

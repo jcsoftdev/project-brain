@@ -27,6 +27,7 @@ export function tmuxThemeUnit(which: Which = Bun.which): SetupUnit {
     },
 
     async apply(ctx): Promise<void> {
+      if (!which("tmux")) return;
       const { applyTmuxTheme, tmuxReloadHint } = await import("./tmux-theme.js");
       const { themeById } = await import("../themes/index.js");
       const path = await tmuxConfigOf(ctx);

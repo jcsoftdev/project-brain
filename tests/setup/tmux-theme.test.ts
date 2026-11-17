@@ -101,9 +101,15 @@ describe("which tmux config gets the block", () => {
 describe("tmux theme block in the file", () => {
   const userConfig = "set -g mouse on\nset -g @plugin 'tmux-plugins/tpm'\n\nrun '~/.tmux/plugins/tpm/tpm'\n";
 
-  it("is unavailable without tmux, whatever the file holds", async () => {
+  it("is unavailable without tmux only while no block of ours is there, so a block can still be unticked", async () => {
     const path = join(home, ".tmux.conf");
+    await write(path, userConfig);
+    expect(await tmuxThemeState(path, theme, missing)).toBe("unavailable");
     await applyTmuxTheme(path, theme);
+    expect(await tmuxThemeState(path, theme, missing)).toBe("current");
+    await write(path, `${userConfig}\n${TMUX_THEME_BEGIN}\nset -g status-style "fg=red"\n${TMUX_THEME_END}\n`);
+    expect(await tmuxThemeState(path, theme, missing)).toBe("stale");
+    await write(path, `${userConfig}${TMUX_THEME_BEGIN}\n`);
     expect(await tmuxThemeState(path, theme, missing)).toBe("unavailable");
   });
 
@@ -173,8 +179,17 @@ describe("tmux theme unit", () => {
     expect(unit.defaultSelected).toBe(false);
   });
 
-  it("is unavailable when tmux is not on PATH", async () => {
-    expect(await tmuxThemeUnit(missing).inspect(ctx())).toBe("unavailable");
+  it("is unavailable when tmux is not on PATH, never writes then, and still removes a block it left", async () => {
+    const gone = tmuxThemeUnit(missing);
+    const path = join(home, ".config", "tmux", "tmux.conf");
+    expect(await gone.inspect(ctx())).toBe("unavailable");
+    await gone.apply(ctx());
+    expect(await Bun.file(path).exists()).toBe(false);
+    await applyTmuxTheme(path, theme);
+    expect(await gone.inspect(ctx())).toBe("current");
+    await gone.remove(ctx());
+    expect(await Bun.file(path).text()).toBe("");
+    expect(await gone.inspect(ctx())).toBe("unavailable");
   });
 
   it("writes the block into the home it is given and removes it", async () => {

@@ -180,8 +180,15 @@ describe("fzf theme unit", () => {
     expect(await readFile(join(home, ".bashrc"), "utf8")).toContain(fzfColorOptionOf(theme));
   });
 
-  it("reports unavailable when fzf is not on PATH", async () => {
-    expect(await fzfThemeUnit({ which: missing, shell: "/bin/zsh" }).inspect(ctx())).toBe("unavailable");
+  it("reports unavailable when fzf is not on PATH, unless a block of ours is left to untick", async () => {
+    const gone = fzfThemeUnit({ which: missing, shell: "/bin/zsh" });
+    expect(await gone.inspect(ctx())).toBe("unavailable");
+    await fzfThemeUnit({ which: installed, shell: "/bin/zsh" }).apply(ctx());
+    expect(await gone.inspect(ctx())).toBe("current");
+    await gone.apply(ctx());
+    await gone.remove(ctx());
+    expect(await readFile(rc, "utf8")).toBe("");
+    expect(await gone.inspect(ctx())).toBe("unavailable");
   });
 });
 

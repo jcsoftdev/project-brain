@@ -43,10 +43,11 @@ export function lazygitThemeUnit(options: LazygitUnitDeps = {}): SetupUnit {
     defaultSelected: false,
 
     async inspect(ctx): Promise<UnitState> {
-      if (!deps.which("lazygit")) return "unavailable";
       const { lazygitThemeState } = await import("./lazygit-theme.js");
+      const { stateWithoutTool } = await import("./managed-block.js");
       const { themeById } = await import("../themes/index.js");
-      return lazygitThemeState(await pathsOf(ctx, deps), themeById());
+      const state = await lazygitThemeState(await pathsOf(ctx, deps), themeById());
+      return deps.which("lazygit") ? state : stateWithoutTool(state);
     },
 
     async apply(ctx): Promise<void> {

@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
-import { readFile, readdir, realpath, rm, rmdir } from "node:fs/promises";
+import { readFile, readdir, rm, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
 import { uiRolesOf, type ThemeDefinition } from "../themes/index.js";
-import { applyBlock, blockState, readTextOrEmpty, removeBlock, type BlockMarkers } from "./managed-block.js";
+import { applyBlock, blockState, readTextOrEmpty, removeBlock, writeThroughLink, type BlockMarkers } from "./managed-block.js";
 
 export const BAT_THEME_MARKER = "<!-- Managed by project-brain setup (terminal:bat-theme). Edits are overwritten; untick the unit in `project-brain setup` to remove. -->";
 export const BAT_CONFIG_BEGIN = "# >>> project-brain bat theme >>>";
@@ -26,6 +26,15 @@ export interface BatPaths {
 export type BatEnv = Readonly<Record<string, string | undefined>>;
 
 export type RebuildCache = () => Promise<void>;
+
+/**
+ * Left in bat's cache directory when this unit built the first cache there. bat refuses to run at all on a cache
+ * another bat version built, so a cache the owner never asked for must not outlive the unit: removal clears it.
+ */
+export const BAT_CACHE_MARKER = ".project-brain-built";
+/** The files `bat cache --clear` deletes; nothing else in the cache directory is bat's. */
+const BAT_CACHE_FILES = ["themes.bin", "syntaxes.bin", "metadata.yaml"] as const;
+const BAT_VERSION_LINE = /^bat_version:\s*["']?([^"'\s]+)/m;
 
 const absoluteOr = (value: string | undefined, fallback: string): string => (value && value.startsWith("/") ? value : fallback);
 const nonEmptyOr = (value: string | undefined, fallback: string): string => (value ? value : fallback);
@@ -53,6 +62,13 @@ export const batCacheBuildArgv = (bin: string, paths: BatPaths): string[] => [
   "--target",
   paths.cacheDir,
 ];
+
+export const batCacheClearArgv = (bin: string, paths: BatPaths): string[] => [bin, "cache", "--clear", "--target", paths.cacheDir];
+
+/** What `bat cache --clear` does, for when bat itself is gone. */
+export async function clearBatCacheFiles(paths: BatPaths): Promise<void> {
+  for (const name of BAT_CACHE_FILES) await rm(join(paths.cacheDir, name), { force: true });
+}
 
 export const batConfigBlockOf = (theme: ThemeDefinition): string =>
   [BAT_CONFIG_BEGIN, `--theme="${batThemeName(theme)}"`, BAT_CONFIG_END].join("\n");
@@ -201,20 +217,29 @@ function combined(parts: BatThemeState[]): BatThemeState {
   return parts.every((part) => part === "current") ? "current" : "stale";
 }
 
-export async function batThemeState(paths: BatPaths, theme: ThemeDefinition): Promise<BatThemeState> {
+const cacheVersionOf = async (paths: BatPaths): Promise<string | null> => {
+  const metadata = await readOrNull(join(paths.cacheDir, "metadata.yaml"));
+  return metadata === null ? null : (BAT_VERSION_LINE.exec(metadata)?.[1] ?? "");
+};
+
+/**
+ * With `installedVersion` (what `bat --version` reports), written files are only `current` while the cache was built
+ * by that bat: without a cache bat does not know the theme, and with another version's cache bat exits with an error.
+ */
+export async function batThemeState(paths: BatPaths, theme: ThemeDefinition, installedVersion?: string): Promise<BatThemeState> {
   const file = themeFileState(await readOrNull(batThemeFile(paths, theme)), batThemeXml(theme));
   const config = blockState(await readTextOrEmpty(paths.configFile), CONFIG_MARKERS, batConfigBlockOf(theme));
-  return combined([file, config]);
+  const state = combined([file, config]);
+  if (state !== "current" || installedVersion === undefined) return state;
+  return (await cacheVersionOf(paths)) === installedVersion ? "current" : "stale";
 }
-
-const writeThrough = async (path: string, text: string): Promise<void> => {
-  await writeFileAtomic(await realpath(path).catch(() => path), text);
-};
 
 export async function applyBatTheme(paths: BatPaths, theme: ThemeDefinition, rebuildCache: RebuildCache): Promise<void> {
   if ((await batThemeState(paths, theme)) === "foreign") return;
-  await writeThrough(batThemeFile(paths, theme), batThemeXml(theme));
+  const hadCache = existsSync(join(paths.cacheDir, "metadata.yaml"));
+  await writeThroughLink(batThemeFile(paths, theme), batThemeXml(theme));
   await rebuildCache();
+  if (!hadCache) await writeFileAtomic(join(paths.cacheDir, BAT_CACHE_MARKER), "");
   await applyBlock(paths.configFile, CONFIG_MARKERS, batConfigBlockOf(theme));
 }
 
@@ -240,7 +265,28 @@ async function removeConfigBlock(configFile: string): Promise<void> {
   if (existsSync(configFile) && (await readTextOrEmpty(configFile)) === "") await rm(configFile, { force: true });
 }
 
-export async function removeBatTheme(paths: BatPaths, rebuildCache: RebuildCache): Promise<void> {
+async function hasEntries(dir: string): Promise<boolean> {
+  try {
+    return (await readdir(dir)).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+const hasOwnerAssets = async (paths: BatPaths): Promise<boolean> =>
+  (await hasEntries(join(paths.configDir, "themes"))) || (await hasEntries(join(paths.configDir, "syntaxes")));
+
+/**
+ * Takes the theme out of bat's cache too: a cache this unit built first, with no themes or syntaxes of the owner's
+ * left to carry, is cleared; any other cache is rebuilt, and from then on it is the owner's.
+ */
+export async function removeBatTheme(paths: BatPaths, rebuildCache: RebuildCache, clearCache: RebuildCache): Promise<void> {
   await removeConfigBlock(paths.configFile);
-  if (await removeManagedThemeFiles(join(paths.configDir, "themes"))) await rebuildCache();
+  const removed = await removeManagedThemeFiles(join(paths.configDir, "themes"));
+  const marker = join(paths.cacheDir, BAT_CACHE_MARKER);
+  const builtHere = existsSync(marker);
+  if (!removed && !builtHere) return;
+  if (builtHere && !(await hasOwnerAssets(paths))) await clearCache();
+  else await rebuildCache();
+  await rm(marker, { force: true });
 }

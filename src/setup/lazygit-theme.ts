@@ -1,9 +1,9 @@
-import { readFile, realpath, rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
-import { writeFileAtomic } from "../atomic-write.js";
 import { type UiRoles, uiRolesOf } from "../themes/roles.js";
 import type { ThemeDefinition } from "../themes/types.js";
+import { writeThroughLink } from "./managed-block.js";
 
 /**
  * lazygit's theme, as a `.lazygit.yml` in the home directory. lazygit 0.66 loads a `.lazygit.yml` from every parent
@@ -116,8 +116,7 @@ export async function lazygitThemeState(paths: LazygitThemePaths, theme: ThemeDe
 
 export async function applyLazygitTheme(paths: LazygitThemePaths, theme: ThemeDefinition): Promise<void> {
   if ((await lazygitThemeState(paths, theme)) === "foreign") return;
-  const target = await realpath(paths.themeFile).catch(() => paths.themeFile);
-  await writeFileAtomic(target, lazygitThemeYaml(theme));
+  await writeThroughLink(paths.themeFile, lazygitThemeYaml(theme));
 }
 
 export async function removeLazygitTheme(paths: LazygitThemePaths): Promise<void> {

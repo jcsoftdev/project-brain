@@ -160,6 +160,15 @@ describe("terminal:lazygit-theme unit", () => {
     expect(existsSync(join(dir, ".lazygit.yml"))).toBe(false);
   });
 
+  it("still reports its file once lazygit is gone, so unticking deletes it", async () => {
+    const missing = lazygitThemeUnit({ which: () => null });
+    await unit.apply(ctxOf(dir));
+    expect(await missing.inspect(ctxOf(dir))).toBe("current");
+    await missing.remove(ctxOf(dir));
+    expect(existsSync(join(dir, ".lazygit.yml"))).toBe(false);
+    expect(await missing.inspect(ctxOf(dir))).toBe("unavailable");
+  });
+
   it("writes ~/.lazygit.yml, reads the owner's config from the platform dir, and removes only its file", async () => {
     const ownerConfig = join(dir, "Library", "Application Support", "lazygit", "config.yml");
     await mkdir(join(ownerConfig, ".."), { recursive: true });

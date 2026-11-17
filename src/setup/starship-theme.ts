@@ -1,10 +1,8 @@
-import { mkdir, realpath } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { writeFileAtomic } from "../atomic-write.js";
+import { join } from "node:path";
 import { uiRolesOf } from "../themes/roles.js";
 import type { ThemeDefinition } from "../themes/types.js";
-import { blockState, readTextOrEmpty, withBlock, withoutBlock, type BlockMarkers, type BlockState } from "./managed-block.js";
+import { blockState, readTextOrEmpty, withBlock, withoutBlock, stateWithoutTool, writeThroughLink, type BlockMarkers, type BlockState } from "./managed-block.js";
 
 export type Which = (name: string) => string | null;
 export type StarshipThemeState = BlockState | "unavailable";
@@ -101,33 +99,42 @@ function ownsPaletteChoice(ownerText: string, theme: ThemeDefinition): boolean {
   return "palette" in owner || (palettes !== undefined && starshipPaletteName(theme) in palettes);
 }
 
+/** The owner now picks a palette of their own; ours can only collide with it (a duplicate `palette` is invalid TOML). */
+const yieldsToOwner = (text: string, theme: ThemeDefinition): boolean => ownsPaletteChoice(withoutStarshipTheme(text), theme);
+
+/**
+ * `stale`, not `foreign`, when the owner's own palette collides with blocks of ours: those blocks are still ours to
+ * take out, so unticking (or applying, which yields to the owner) can repair the file. Without blocks of ours, or with
+ * an owner config that does not parse on its own, the file is the owner's and is left alone.
+ */
 export function starshipThemeStateOf(text: string, theme: ThemeDefinition): BlockState {
   const select = blockState(text, STARSHIP_SELECT_MARKERS, starshipSelectBlock(theme));
   const palette = blockState(text, STARSHIP_PALETTE_MARKERS, starshipPaletteBlock(theme));
   if (select === "foreign" || palette === "foreign") return "foreign";
-  if (ownsPaletteChoice(withoutStarshipTheme(text), theme)) return "foreign";
+  if (yieldsToOwner(text, theme)) {
+    const hasOurs = select !== "absent" || palette !== "absent";
+    return hasOurs && parsesAsToml(withoutStarshipTheme(text)) !== null ? "stale" : "foreign";
+  }
   if (parsesAsToml(withStarshipTheme(text, theme)) === null) return "foreign";
   if (select === "absent" && palette === "absent") return "absent";
   return select === "current" && palette === "current" ? "current" : "stale";
 }
 
 export async function starshipThemeState(path: string, theme: ThemeDefinition, which: Which): Promise<StarshipThemeState> {
-  if (!which("starship")) return "unavailable";
-  return starshipThemeStateOf(await readTextOrEmpty(path), theme);
+  const state = starshipThemeStateOf(await readTextOrEmpty(path), theme);
+  return which("starship") ? state : stateWithoutTool(state);
 }
-
-const targetOf = (path: string): Promise<string> => realpath(path).catch(() => path);
 
 async function writeIfChanged(path: string, before: string, after: string): Promise<void> {
-  if (after === before) return;
-  await mkdir(dirname(path), { recursive: true });
-  await writeFileAtomic(await targetOf(path), after);
+  if (after !== before) await writeThroughLink(path, after);
 }
 
+/** Writes both blocks; when the owner has a palette of their own, takes ours out instead, since the two cannot coexist. */
 export async function applyStarshipTheme(path: string, theme: ThemeDefinition): Promise<void> {
   const before = await readTextOrEmpty(path);
   if (starshipThemeStateOf(before, theme) === "foreign") return;
-  await writeIfChanged(path, before, withStarshipTheme(before, theme));
+  const after = yieldsToOwner(before, theme) ? withoutStarshipTheme(before) : withStarshipTheme(before, theme);
+  await writeIfChanged(path, before, after);
 }
 
 export async function removeStarshipTheme(path: string): Promise<void> {

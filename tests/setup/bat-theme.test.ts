@@ -6,9 +6,11 @@ import { dirname, join } from "node:path";
 import {
   BAT_CONFIG_BEGIN,
   BAT_CONFIG_END,
+  BAT_CACHE_MARKER,
   BAT_THEME_MARKER,
   applyBatTheme,
   batCacheBuildArgv,
+  batCacheClearArgv,
   batPaths,
   batScopeRules,
   batThemeFile,
@@ -27,14 +29,19 @@ const roles = uiRolesOf(theme);
 let home: string;
 let paths: BatPaths;
 let rebuilds: number;
+let clears: number;
 const rebuild = async () => {
   rebuilds += 1;
+};
+const clear = async () => {
+  clears += 1;
 };
 
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "pb-bat-theme-"));
   paths = batPaths(home, {});
   rebuilds = 0;
+  clears = 0;
 });
 afterEach(() => rm(home, { recursive: true, force: true }));
 
@@ -123,10 +130,10 @@ describe("bat theme files", () => {
     await writeFile(paths.configFile, mine);
     await applyBatTheme(paths, theme, rebuild);
     expect(await configText()).toBe(`${mine}\n${BAT_CONFIG_BEGIN}\n--theme="${batThemeName(theme)}"\n${BAT_CONFIG_END}\n`);
-    await removeBatTheme(paths, rebuild);
+    await removeBatTheme(paths, rebuild, clear);
     expect(await configText()).toBe(mine);
     expect(existsSync(batThemeFile(paths, theme))).toBe(false);
-    expect(rebuilds).toBe(2);
+    expect([rebuilds, clears]).toEqual([1, 1]);
   });
 
   it("calls an edited theme stale and puts it back on apply", async () => {
@@ -149,7 +156,7 @@ describe("bat theme files", () => {
     await writeFile(file, "<plist>mine</plist>\n");
     expect(await batThemeState(paths, theme)).toBe("foreign");
     await applyBatTheme(paths, theme, rebuild);
-    await removeBatTheme(paths, rebuild);
+    await removeBatTheme(paths, rebuild, clear);
     expect(await readFile(file, "utf8")).toBe("<plist>mine</plist>\n");
     expect(existsSync(paths.configFile)).toBe(false);
     expect(rebuilds).toBe(0);
@@ -161,7 +168,7 @@ describe("bat theme files", () => {
     await writeFile(paths.configFile, broken);
     expect(await batThemeState(paths, theme)).toBe("foreign");
     await applyBatTheme(paths, theme, rebuild);
-    await removeBatTheme(paths, rebuild);
+    await removeBatTheme(paths, rebuild, clear);
     expect(await configText()).toBe(broken);
     expect(existsSync(batThemeFile(paths, theme))).toBe(false);
   });
@@ -171,18 +178,53 @@ describe("bat theme files", () => {
     await mkdir(dirname(other), { recursive: true });
     await writeFile(other, "<plist/>\n");
     await applyBatTheme(paths, theme, rebuild);
-    await removeBatTheme(paths, rebuild);
+    await removeBatTheme(paths, rebuild, clear);
     expect(await readFile(other, "utf8")).toBe("<plist/>\n");
     expect(existsSync(paths.configFile)).toBe(false);
     expect(await batThemeState(paths, theme)).toBe("absent");
   });
 
   it("removes the themes directory it made and rebuilds nothing when nothing was there", async () => {
-    await removeBatTheme(paths, rebuild);
+    await removeBatTheme(paths, rebuild, clear);
     expect(rebuilds).toBe(0);
     await applyBatTheme(paths, theme, rebuild);
-    await removeBatTheme(paths, rebuild);
+    await removeBatTheme(paths, rebuild, clear);
     expect(existsSync(join(paths.configDir, "themes"))).toBe(false);
+  });
+
+  it("clears on removal a cache it built first, and leaves no marker behind", async () => {
+    await applyBatTheme(paths, theme, rebuild);
+    expect(existsSync(join(paths.cacheDir, BAT_CACHE_MARKER))).toBe(true);
+    await removeBatTheme(paths, rebuild, clear);
+    expect([rebuilds, clears]).toEqual([1, 1]);
+    expect(existsSync(join(paths.cacheDir, BAT_CACHE_MARKER))).toBe(false);
+  });
+
+  it("rebuilds, never clears, a cache the owner already had", async () => {
+    await mkdir(paths.cacheDir, { recursive: true });
+    await writeFile(join(paths.cacheDir, "metadata.yaml"), "bat_version: 0.26.1\n");
+    await applyBatTheme(paths, theme, rebuild);
+    expect(existsSync(join(paths.cacheDir, BAT_CACHE_MARKER))).toBe(false);
+    await removeBatTheme(paths, rebuild, clear);
+    expect([rebuilds, clears]).toEqual([2, 0]);
+  });
+
+  it("rebuilds a cache it built when the owner has added themes of their own since, and hands it over", async () => {
+    await applyBatTheme(paths, theme, rebuild);
+    await writeFile(join(paths.configDir, "themes", "Mine.tmTheme"), "<plist/>\n");
+    await removeBatTheme(paths, rebuild, clear);
+    expect([rebuilds, clears]).toEqual([2, 0]);
+    expect(existsSync(join(paths.cacheDir, BAT_CACHE_MARKER))).toBe(false);
+  });
+
+  it("calls the theme stale while the cache is missing or was built by another bat", async () => {
+    await applyBatTheme(paths, theme, rebuild);
+    expect(await batThemeState(paths, theme)).toBe("current");
+    expect(await batThemeState(paths, theme, "0.26.1")).toBe("stale");
+    await writeFile(join(paths.cacheDir, "metadata.yaml"), "bat_version: 0.24.0\ncreation_time:\n  secs_since_epoch: 1\n");
+    expect(await batThemeState(paths, theme, "0.26.1")).toBe("stale");
+    await writeFile(join(paths.cacheDir, "metadata.yaml"), "bat_version: 0.26.1\n");
+    expect(await batThemeState(paths, theme, "0.26.1")).toBe("current");
   });
 
   it("does not write the --theme block when the cache rebuild fails", async () => {
@@ -217,7 +259,29 @@ describe("terminal:bat-theme unit", () => {
     expect(await unit.inspect(ctxFor(home, run))).toBe("current");
     await unit.remove(ctxFor(home, run));
     expect(await unit.inspect(ctxFor(home, run))).toBe("absent");
-    expect(calls).toEqual([batCacheBuildArgv("/bin/bat", paths), batCacheBuildArgv("/bin/bat", paths)]);
+    expect(calls).toEqual([batCacheBuildArgv("/bin/bat", paths), batCacheClearArgv("/bin/bat", paths)]);
+  });
+
+  it("compares the cache with the installed bat's version", async () => {
+    const { run } = recorder();
+    const unit = batThemeUnit(() => "/bin/bat", () => "0.26.1");
+    await unit.apply(ctxFor(home, run));
+    expect(await unit.inspect(ctxFor(home, run))).toBe("stale");
+    await writeFile(join(paths.cacheDir, "metadata.yaml"), "bat_version: 0.26.1\n");
+    expect(await unit.inspect(ctxFor(home, run))).toBe("current");
+  });
+
+  it("still reports what it wrote once bat is gone, so unticking removes it and clears the cache it built", async () => {
+    const { run } = recorder();
+    await batThemeUnit(() => "/bin/bat").apply(ctxFor(home, run));
+    await writeFile(join(paths.cacheDir, "metadata.yaml"), "bat_version: 0.26.1\n");
+    const gone = batThemeUnit(() => null);
+    expect(await gone.inspect(ctxFor(home, run))).toBe("current");
+    await gone.apply(ctxFor(home, run));
+    await gone.remove(ctxFor(home, run));
+    expect(existsSync(batThemeFile(paths, theme))).toBe(false);
+    expect(existsSync(join(paths.cacheDir, "metadata.yaml"))).toBe(false);
+    expect(await gone.inspect(ctxFor(home, run))).toBe("unavailable");
   });
 
   it("reports a failed cache rebuild", async () => {
@@ -261,5 +325,18 @@ describe.skipIf(!realBat)("the real bat", () => {
     for (const hex of [roles.syntax.keyword, roles.syntax.string, roles.syntax.number, roles.syntax.comment, roles.syntax.function]) {
       expect(painted).toContain(truecolour(hex));
     }
+  });
+
+  it("reads current against the installed bat, and leaves bat working with no cache of its own after removal", async () => {
+    const unit = batThemeUnit(() => realBat);
+    await unit.apply(ctxFor(home, runIsolated));
+    expect(await unit.inspect(ctxFor(home, runIsolated))).toBe("current");
+    await unit.remove(ctxFor(home, runIsolated));
+    expect(existsSync(join(paths.cacheDir, "themes.bin"))).toBe(false);
+    const sample = join(home, "sample.sh");
+    await writeFile(sample, "echo hi\n");
+    const child = Bun.spawn([realBat!, "--paging=never", "--color=never", sample], { env: isolatedEnv(), stdout: "pipe", stderr: "pipe" });
+    const [err, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    expect([code, err]).toEqual([0, ""]);
   });
 });

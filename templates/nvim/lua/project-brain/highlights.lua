@@ -5,6 +5,8 @@ local M = {}
 -- Row tint of an added or deleted line, and the stronger tint of the words that changed inside it.
 M.LINE_TINT = 0.12
 M.WORD_TINT = 0.22
+-- Green is the brightest accent, so its word tint stays lower to keep pink and purple code at 4.5:1 on it.
+M.ADD_WORD_TINT = 0.20
 -- A changed line stays below an added or deleted one: its changed words carry the meaning.
 M.CHANGE_TINT = 0.06
 
@@ -97,7 +99,7 @@ function M.groups(hl, c, p)
   set("DiffChange", { bg = tint(a.cyan, M.CHANGE_TINT) })
   set("DiffDelete", { bg = tint(a.red, M.LINE_TINT), fg = M.blend(a.red, bg, 0.5) })
   set("DiffText", { bg = tint(a.orange, M.WORD_TINT), bold = true })
-  set("DiffTextAdd", { bg = tint(a.green, M.WORD_TINT), bold = true })
+  set("DiffTextAdd", { bg = tint(a.green, M.ADD_WORD_TINT), bold = true })
   set("diffAdded", { fg = a.green })
   set("diffRemoved", { fg = a.red })
   set("diffChanged", { fg = a.orange })
@@ -106,7 +108,7 @@ function M.groups(hl, c, p)
   set("GitSignsAdd", { fg = a.green })
   set("GitSignsChange", { fg = a.orange })
   set("GitSignsDelete", { fg = a.red })
-  set("GitSignsAddInline", { bg = tint(a.green, M.WORD_TINT) })
+  set("GitSignsAddInline", { bg = tint(a.green, M.ADD_WORD_TINT) })
   set("GitSignsChangeInline", { bg = tint(a.orange, M.WORD_TINT) })
   set("GitSignsDeleteInline", { bg = tint(a.red, M.WORD_TINT) })
   set("GitSignsAddLn", { bg = tint(a.green, M.LINE_TINT) })

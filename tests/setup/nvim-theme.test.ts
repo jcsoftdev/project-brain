@@ -112,7 +112,7 @@ io.write(vim.json.encode({ colors = c, hl = hl, syntax = h.syntax(p) }))
     expect(hl.DiffChange.bg).toBe(blend(bg, theme.accents.cyan, 0.06));
     expect(hl.DiffText.bg).toBe(blend(bg, theme.accents.orange, 0.22));
     expect(hl.DiffText.bold).toBe(true);
-    expect(hl.DiffTextAdd.bg).toBe(blend(bg, theme.accents.green, 0.22));
+    expect(hl.DiffTextAdd.bg).toBe(blend(bg, theme.accents.green, 0.2));
     // The deleted-line filler (the hatch) is a quiet red, not a loud one.
     expect(hl.DiffDelete.fg).toBe(blend(theme.accents.red, bg, 0.5));
   });

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { applyBlock, blockState, readTextOrEmpty, removeBlock, type BlockMarkers } from "./managed-block.js";
+import { applyBlock, blockState, readTextOrEmpty, removeBlock, stateWithoutTool, type BlockMarkers } from "./managed-block.js";
 import { uiRolesOf, type UiRoles } from "../themes/roles.js";
 import { themeById, type ThemeDefinition } from "../themes/index.js";
 
@@ -85,8 +85,8 @@ export async function tmuxThemeState(
   theme: ThemeDefinition = themeById(),
   which: Which = Bun.which
 ): Promise<TmuxThemeState> {
-  if (!which("tmux")) return "unavailable";
-  return blockState(await readTextOrEmpty(path), MARKERS, tmuxThemeBlockOf(theme));
+  const state = blockState(await readTextOrEmpty(path), MARKERS, tmuxThemeBlockOf(theme));
+  return which("tmux") ? state : stateWithoutTool(state);
 }
 
 export const applyTmuxTheme = (path: string, theme: ThemeDefinition = themeById()): Promise<void> =>

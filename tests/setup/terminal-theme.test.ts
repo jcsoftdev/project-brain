@@ -169,3 +169,24 @@ describe("mixed line endings", () => {
     expect(withoutBlock(applied, markers)).toBe(rc);
   });
 });
+
+describe("a symlink whose target is missing", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "pb-dangling-"));
+  });
+  afterEach(() => rm(dir, { recursive: true, force: true }));
+
+  it("is refused with its target named, and stays a symlink with nothing created where it points", async () => {
+    const { applyBlock } = await import("../../src/setup/managed-block.js");
+    const { lstat } = await import("node:fs/promises");
+    const { existsSync } = await import("node:fs");
+    const rc = join(dir, ".zshrc");
+    const missing = join(dir, "unmounted-dotfiles", "zshrc");
+    await symlink(missing, rc);
+    const markers = { begin: "# >>> m >>>", end: "# <<< m <<<" };
+    await expect(applyBlock(rc, markers, "# >>> m >>>\nx\n# <<< m <<<")).rejects.toThrow(missing);
+    expect((await lstat(rc)).isSymbolicLink()).toBe(true);
+    expect(existsSync(dirname(missing))).toBe(false);
+  });
+});

@@ -172,9 +172,17 @@ describe("starship theme files", () => {
     expect(starshipConfigPath("/h", "/elsewhere/s.toml")).toBe("/elsewhere/s.toml");
   });
 
-  it("is unavailable without starship on PATH", async () => {
+  it("is unavailable without starship on PATH, never writes then, and still removes blocks it left", async () => {
     expect(await starshipThemeState(config, theme, missing)).toBe("unavailable");
-    expect(await starshipThemeUnit(missing).inspect(ctx())).toBe("unavailable");
+    const gone = starshipThemeUnit(missing);
+    expect(await gone.inspect(ctx())).toBe("unavailable");
+    await gone.apply(ctx());
+    expect(existsSync(config)).toBe(false);
+    await applyStarshipTheme(config, theme);
+    expect(await gone.inspect(ctx())).toBe("current");
+    await gone.remove(ctx());
+    expect(await readFile(config, "utf8")).toBe("");
+    expect(await gone.inspect(ctx())).toBe("unavailable");
   });
 
   it("applies, reports current, and removes back to the owner's exact bytes", async () => {
@@ -206,6 +214,31 @@ describe("starship theme files", () => {
     await applyStarshipTheme(config, theme);
     expect(await readFile(config, "utf8")).toBe(OWN_PALETTE);
     expect(await starshipThemeState(config, theme, installed)).toBe("foreign");
+  });
+
+  it("lets its blocks be taken out after the owner adds a palette of their own, and never touches the owner's", async () => {
+    await mkdir(dirname(config), { recursive: true });
+    await writeFile(config, OWNER_WITH_TABLES);
+    await applyStarshipTheme(config, theme);
+    const withOwnerPalette = `palette = "mine"\n${await readFile(config, "utf8")}`;
+    await writeFile(config, withOwnerPalette);
+    expect(() => parse(withOwnerPalette)).toThrow();
+    expect(await starshipThemeState(config, theme, installed)).toBe("stale");
+    await removeStarshipTheme(config);
+    const owner = await readFile(config, "utf8");
+    expect(parse(owner).palette).toBe("mine");
+    expect(owner).not.toContain("project-brain");
+    expect(await starshipThemeState(config, theme, installed)).toBe("foreign");
+  });
+
+  it("yields to the owner's palette on apply instead of writing a duplicate key", async () => {
+    await mkdir(dirname(config), { recursive: true });
+    await applyStarshipTheme(config, theme);
+    await writeFile(config, `${await readFile(config, "utf8")}\n${OWN_PALETTE}`);
+    expect(await starshipThemeState(config, theme, installed)).toBe("stale");
+    await applyStarshipTheme(config, theme);
+    expect(parse(await readFile(config, "utf8")).palette).toBe("mine");
+    expect(await readFile(config, "utf8")).not.toContain("project-brain");
   });
 
   it("does nothing on removal when the file does not exist", async () => {
