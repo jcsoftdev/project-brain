@@ -18,19 +18,25 @@ export type BlockState = "absent" | "current" | "stale" | "foreign";
 
 type Span = { start: number; end: number };
 
-const eolOf = (text: string): string => (text.includes("\r\n") ? "\r\n" : "\n");
-const linesOf = (text: string): string[] => text.split(/\r?\n/);
-const joined = (lines: string[], eol: string): string => (lines.length === 0 ? "" : `${lines.join(eol)}${eol}`);
+/** Lines keep their own trailing CR, so a file that mixes LF and CRLF comes back with every line ending as it was. */
+const linesOf = (text: string): string[] => text.split("\n");
+const bare = (line: string): string => (line.endsWith("\r") ? line.slice(0, -1) : line);
+const isCrlf = (text: string): boolean => {
+  const crlf = text.split("\r\n").length - 1;
+  return crlf > 0 && crlf * 2 >= text.split("\n").length - 1;
+};
+const joined = (lines: string[]): string => (lines.length === 0 ? "" : `${lines.join("\n")}\n`);
 
 function scan(lines: string[], markers: BlockMarkers): { blocks: Span[]; isBroken: boolean } {
   const blocks: Span[] = [];
   let open: number | null = null;
   let isBroken = false;
   lines.forEach((line, index) => {
-    if (line === markers.begin) {
+    const text = bare(line);
+    if (text === markers.begin) {
       if (open !== null) isBroken = true;
       open = index;
-    } else if (line === markers.end) {
+    } else if (text === markers.end) {
       if (open === null) isBroken = true;
       else blocks.push({ start: open, end: index });
       open = null;
@@ -45,7 +51,7 @@ export function blockState(text: string, markers: BlockMarkers, expected: string
   if (isBroken) return "foreign";
   const only = blocks[0];
   if (only === undefined) return "absent";
-  const same = blocks.length === 1 && lines.slice(only.start, only.end + 1).join("\n") === expected;
+  const same = blocks.length === 1 && lines.slice(only.start, only.end + 1).map(bare).join("\n") === expected;
   return same ? "current" : "stale";
 }
 
@@ -69,7 +75,8 @@ export function withBlock(text: string, markers: BlockMarkers, block: string): s
   const { blocks, isBroken } = scan(lines, markers);
   if (isBroken) return text;
   const kept = withoutBlocks(lines, blocks);
-  return joined([...kept, ...(kept.length > 0 ? [""] : []), ...block.split("\n")], eolOf(text));
+  const cr = isCrlf(text) ? "\r" : "";
+  return joined([...kept, ...(kept.length > 0 ? [cr] : []), ...block.split("\n").map((line) => `${line}${cr}`)]);
 }
 
 /** The text without any block; a file that only held the block comes back empty, one with an unpaired marker as it was. */
@@ -77,7 +84,7 @@ export function withoutBlock(text: string, markers: BlockMarkers): string {
   const lines = linesOf(text);
   const { blocks, isBroken } = scan(lines, markers);
   if (isBroken || blocks.length === 0) return text;
-  return joined(withoutBlocks(lines, blocks), eolOf(text));
+  return joined(withoutBlocks(lines, blocks));
 }
 
 /** The file's text; a missing file is empty, any other failure (permissions, I/O) is an error, never an empty file. */

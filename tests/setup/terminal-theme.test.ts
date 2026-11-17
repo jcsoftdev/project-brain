@@ -157,3 +157,15 @@ describe("terminal theme block: what a user's file can throw at it", () => {
     expect(await readFile(real, "utf8")).toBe("font-size = 14\n");
   });
 });
+
+describe("mixed line endings", () => {
+  it("keep every line's own ending through apply and remove", async () => {
+    const { withBlock, withoutBlock } = await import("../../src/setup/managed-block.js");
+    const markers = { begin: "# >>> m >>>", end: "# <<< m <<<" };
+    const rc = "export A=1\nexport B=2\r\nexport C=3\n";
+    const applied = withBlock(rc, markers, "# >>> m >>>\nx\n# <<< m <<<");
+    expect(applied.startsWith(rc)).toBe(true);
+    expect(applied.split("\n").filter((line) => line.endsWith("\r"))).toHaveLength(1);
+    expect(withoutBlock(applied, markers)).toBe(rc);
+  });
+});

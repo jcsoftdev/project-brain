@@ -92,7 +92,7 @@ describe("fzf theme block", () => {
       FZF_THEME_BEGIN,
       `# ${theme.label}`,
       "if command -v fzf >/dev/null 2>&1; then",
-      `  export FZF_DEFAULT_OPTS="$FZF_DEFAULT_OPTS ${fzfColorOptionOf(theme)}"`,
+      `  export FZF_DEFAULT_OPTS="\${FZF_DEFAULT_OPTS-} ${fzfColorOptionOf(theme)}"`,
       "fi",
       FZF_THEME_END,
     ]);
