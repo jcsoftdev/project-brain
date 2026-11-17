@@ -120,7 +120,8 @@ All three are written to `~/.project-brain/claude-plugins/` and registered in `~
 | Compact skill listing | Lists skills by name only; general-use skills keep their description. With Jev, the suggest hook brings picked skills in full; without it, the 15 most used keep theirs | `project-brain-skill-listing` mod; `~/.project-brain/skills.json`, `skill-usage.json` | `tui:skill-listing` | Untick; `BRAIN_SKILL_PICKER=0` falls back to usage mode | off |
 | Context gate | Before injected hook text reaches the model, Jev scores each piece against the prompt; under 0.5 is dropped and logged. engram, project-brain and `contextAllow` signatures are never filtered | `project-brain-context-gate` mod; log in `~/.project-brain/context-gate-log.json` | `tui:context-gate` | Untick; `BRAIN_CONTEXT_GATE=0`; `"contextGate": false` in `skills.json` | off |
 | Readable replies | Marked block in `~/.claude/CLAUDE.md`: result first, evidence last | `~/.claude/CLAUDE.md` | `tui:readable-replies` | Untick (deletes only the block) | on |
-| Terminal theme (Dracula) | Marked block at the end of the Ghostty config: Dracula colours, opacity 0.88, blur 20 | `~/Library/Application Support/com.mitchellh.ghostty/config.ghostty` (or `~/.config/ghostty/`) | `tui:terminal-theme` | Untick (deletes only the block) | off |
+| Terminal theme | Marked block at the end of the Ghostty config: the active theme's colours, opacity 0.88, blur 20, translucent cells | `~/Library/Application Support/com.mitchellh.ghostty/config.ghostty` (or `~/.config/ghostty/`) | `tui:terminal-theme` | Untick (deletes only the block) | off |
+| Claude Code theme | Custom theme file generated from the same theme definition (`src/themes`): chat, prompt, permissions and the `/diff` view | `~/.claude/themes/project-brain-<theme>.json`, `theme` in `~/.claude/settings.json` | `tui:claude-theme` | Untick (deletes the file, restores the previous `theme`) | off |
 
 ### Delegation
 

@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { allUnits, type SetupContext } from "../../src/setup/units.js";
 import {
-  DRACULA_TERMINAL,
   TERMINAL_THEME_BEGIN,
   TERMINAL_THEME_END,
   applyTerminalTheme,
@@ -16,6 +15,7 @@ import {
   withTerminalTheme,
   withoutTerminalTheme,
 } from "../../src/setup/terminal-theme.js";
+import { themeById } from "../../src/themes/index.js";
 // @ts-expect-error Bun's text attribute embeds the .tsx as a string.
 import registerTsx from "../../templates/claude-tui/activity-pane/hooks/register.tsx" with { type: "text" };
 
@@ -42,9 +42,14 @@ describe("terminal theme block", () => {
 
   it("uses the same colours as the activity pane's palette", () => {
     const pane = registerTsx as string;
-    for (const hex of [DRACULA_TERMINAL.background, DRACULA_TERMINAL.foreground, DRACULA_TERMINAL.selection, ...DRACULA_TERMINAL.palette.slice(1, 7)]) {
-      expect(pane).toContain(`#${hex}`);
+    const theme = themeById("dracula");
+    for (const hex of [theme.background, theme.foreground, theme.selection, theme.comment, ...Object.values(theme.accents)]) {
+      expect(pane).toContain(`'${hex}'`);
     }
+  });
+
+  it("makes cells with their own background (tabs, pills, diff rows) as translucent as the rest", () => {
+    expect(TERMINAL_THEME_BLOCK).toContain("background-opacity-cells = true");
   });
 
   it("goes at the end and leaves everything the user wrote untouched", () => {

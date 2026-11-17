@@ -49,8 +49,8 @@ async function seedSettings(value: unknown) {
   await writeFile(settingsPath, JSON.stringify(value, null, 2));
 }
 
-const TUI_IDS = ["tui:activity-pane", "tui:readable-replies", "tui:terminal-theme", "tui:skill-listing", "tui:context-gate"];
-const UNCHECKED = new Set(["tui:terminal-theme", "tui:skill-listing", "tui:context-gate"]);
+const TUI_IDS = ["tui:activity-pane", "tui:readable-replies", "tui:terminal-theme", "tui:claude-theme", "tui:skill-listing", "tui:context-gate"];
+const UNCHECKED = new Set(["tui:terminal-theme", "tui:claude-theme", "tui:skill-listing", "tui:context-gate"]);
 
 describe("Claude TUI units", () => {
   it("are grouped, never installed silently on upgrade, and only the terminal theme, skill listing and context gate ship unchecked", () => {

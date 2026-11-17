@@ -2,9 +2,10 @@ import { mkdir, readFile, realpath } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { writeFileAtomic } from "../atomic-write.js";
+import { themeById, type ThemeDefinition } from "../themes/index.js";
 
 /**
- * The Dracula theme as a managed block in the user's Ghostty config, so the terminal and the activity pane
+ * The active theme (see src/themes) as a managed block in the user's Ghostty config, so the terminal and the activity pane
  * (which paints the same palette) agree. Supacode embeds Ghostty and merges this same file.
  * Ghostty keeps the last value of a repeated key, so the block goes at the end and wins over what the user
  * wrote above it; removing it hands every key back without the rest of the file having been touched.
@@ -13,38 +14,36 @@ import { writeFileAtomic } from "../atomic-write.js";
  * a begin inside a block) is not something this module wrote, so the file is reported `foreign` and left alone:
  * guessing where such a block ends would delete the user's own lines.
  */
-export const TERMINAL_THEME_BEGIN = "# >>> project-brain terminal theme (Dracula) >>>";
+export const TERMINAL_THEME_BEGIN = "# >>> project-brain terminal theme >>>";
 export const TERMINAL_THEME_END = "# <<< project-brain terminal theme <<<";
-
-/** Dracula's published colours and standard ANSI set; the background is the owner's own (#17141d), not Dracula's #282a36. */
-export const DRACULA_TERMINAL = {
-  background: "17141d",
-  foreground: "f8f8f2",
-  selection: "44475a",
-  palette: [
-    "21222c", "ff5555", "50fa7b", "f1fa8c", "bd93f9", "ff79c6", "8be9fd", "f8f8f2",
-    "6272a4", "ff6e6e", "69ff94", "ffffa5", "d6acff", "ff92df", "a4ffff", "ffffff",
-  ],
-} as const;
 
 /** Translucent enough to see the desktop through, blurred enough to keep text readable. */
 export const TERMINAL_OPACITY = 0.88;
 export const TERMINAL_BLUR = 20;
 
-export const TERMINAL_THEME_BODY = [
-  `background = ${DRACULA_TERMINAL.background}`,
-  `foreground = ${DRACULA_TERMINAL.foreground}`,
-  `selection-background = ${DRACULA_TERMINAL.selection}`,
-  `selection-foreground = ${DRACULA_TERMINAL.foreground}`,
-  `cursor-color = ${DRACULA_TERMINAL.foreground}`,
-  `cursor-text = ${DRACULA_TERMINAL.background}`,
-  ...DRACULA_TERMINAL.palette.map((hex, index) => `palette = ${index}=#${hex}`),
-  `background-opacity = ${TERMINAL_OPACITY}`,
-  `background-blur = ${TERMINAL_BLUR}`,
-].join("\n");
+const bare = (hex: string): string => hex.replace(/^#/, "");
 
-export const TERMINAL_THEME_BLOCK = `${TERMINAL_THEME_BEGIN}\n${TERMINAL_THEME_BODY}\n${TERMINAL_THEME_END}`;
-const BLOCK_LINES = TERMINAL_THEME_BLOCK.split("\n");
+/** The block for a theme: its colours, then the opacity and blur the pane is drawn for. */
+export function terminalThemeBlockOf(theme: ThemeDefinition = themeById()): string {
+  return [
+    TERMINAL_THEME_BEGIN,
+    `# ${theme.label}`,
+    `background = ${bare(theme.background)}`,
+    `foreground = ${bare(theme.foreground)}`,
+    `selection-background = ${bare(theme.selection)}`,
+    `selection-foreground = ${bare(theme.foreground)}`,
+    `cursor-color = ${bare(theme.foreground)}`,
+    `cursor-text = ${bare(theme.background)}`,
+    ...theme.ansi.map((hex, index) => `palette = ${index}=${hex}`),
+    `background-opacity = ${TERMINAL_OPACITY}`,
+    `background-blur = ${TERMINAL_BLUR}`,
+    // Tabs, pills and diff rows are cells with a background of their own; without this they stay opaque.
+    "background-opacity-cells = true",
+    TERMINAL_THEME_END,
+  ].join("\n");
+}
+
+export const TERMINAL_THEME_BLOCK = terminalThemeBlockOf();
 
 /** The Ghostty config the user already has, else the platform's default location for a new one. */
 export function ghosttyConfigPath(home: string, platform: NodeJS.Platform = process.platform): string {
@@ -82,13 +81,13 @@ function scan(lines: string[]): { blocks: Array<{ start: number; end: number }>;
 const eolOf = (text: string): string => (text.includes("\r\n") ? "\r\n" : "\n");
 const linesOf = (text: string): string[] => text.split(/\r?\n/);
 
-export function terminalThemeState(text: string): TerminalThemeState {
+export function terminalThemeState(text: string, theme: ThemeDefinition = themeById()): TerminalThemeState {
   const lines = linesOf(text);
   const { blocks, isBroken } = scan(lines);
   if (isBroken) return "foreign";
   const only = blocks[0];
   if (only === undefined) return "absent";
-  const same = blocks.length === 1 && lines.slice(only.start, only.end + 1).join("\n") === TERMINAL_THEME_BLOCK;
+  const same = blocks.length === 1 && lines.slice(only.start, only.end + 1).join("\n") === terminalThemeBlockOf(theme);
   return same ? "current" : "stale";
 }
 
@@ -109,12 +108,12 @@ function withoutBlocks(lines: string[], blocks: Array<{ start: number; end: numb
 const join_ = (lines: string[], eol: string): string => (lines.length === 0 ? "" : `${lines.join(eol)}${eol}`);
 
 /** The text with exactly one block at its end; nothing outside the block changes. A file with an unpaired marker comes back as it was. */
-export function withTerminalTheme(text: string): string {
+export function withTerminalTheme(text: string, theme: ThemeDefinition = themeById()): string {
   const lines = linesOf(text);
   const { blocks, isBroken } = scan(lines);
   if (isBroken) return text;
   const kept = withoutBlocks(lines, blocks);
-  return join_([...kept, ...(kept.length > 0 ? [""] : []), ...BLOCK_LINES], eolOf(text));
+  return join_([...kept, ...(kept.length > 0 ? [""] : []), ...terminalThemeBlockOf(theme).split("\n")], eolOf(text));
 }
 
 /** The text without any block; a file that only held the block comes back empty, one with an unpaired marker as it was. */
@@ -143,9 +142,9 @@ async function write(path: string, text: string): Promise<void> {
   await writeFileAtomic(await targetOf(path), text);
 }
 
-export async function applyTerminalTheme(path: string): Promise<void> {
+export async function applyTerminalTheme(path: string, theme: ThemeDefinition = themeById()): Promise<void> {
   const before = await readTerminalConfig(path);
-  const after = withTerminalTheme(before);
+  const after = withTerminalTheme(before, theme);
   if (after !== before) await write(path, after);
 }
 

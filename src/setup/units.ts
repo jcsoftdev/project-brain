@@ -1952,6 +1952,7 @@ export function claudeTuiUnits(): SetupUnit[] {
     },
 
     terminalThemeUnit(),
+    claudeThemeUnit(),
     skillListingUnit(),
     contextGateUnit(),
   ];
@@ -1963,13 +1964,43 @@ const ghosttyConfigOf = async (ctx: SetupContext) => {
   return ghosttyConfigPath(dirname(dirname(ctx.claudeSettingsPath)));
 };
 
+function claudeThemeUnit(): SetupUnit {
+  return {
+    id: "tui:claude-theme",
+    group: "Claude TUI",
+    label: "Claude Code theme (Dracula)",
+    description:
+      "writes a Claude Code custom theme to ~/.claude/themes/project-brain-dracula.json and sets `theme` to it, so the chat, the prompt and the /diff view use the same palette as the terminal and the activity pane; " +
+      "untick to delete the file and put your previous `theme` value back",
+    defaultSelected: false,
+
+    async inspect(ctx): Promise<UnitState> {
+      const { claudeThemeState } = await import("./claude-theme.js");
+      const { themeById } = await import("../themes/index.js");
+      return claudeThemeState(ctx.claudeSettingsPath, themeById());
+    },
+
+    async apply(ctx): Promise<void> {
+      const { applyClaudeTheme } = await import("./claude-theme.js");
+      const { themeById } = await import("../themes/index.js");
+      await applyClaudeTheme(ctx.claudeSettingsPath, ctx.dataDir, themeById());
+    },
+
+    async remove(ctx): Promise<void> {
+      const { removeClaudeTheme } = await import("./claude-theme.js");
+      const { themeById } = await import("../themes/index.js");
+      await removeClaudeTheme(ctx.claudeSettingsPath, ctx.dataDir, themeById());
+    },
+  };
+}
+
 function terminalThemeUnit(): SetupUnit {
   return {
     id: "tui:terminal-theme",
     group: "Claude TUI",
     label: "Terminal theme (Dracula)",
     description:
-      "adds a marked block to your Ghostty config (Supacode reads the same file): Dracula colours, background opacity 0.88 and blur 20, matching the activity pane; untick to delete only the block",
+      "adds a marked block to your Ghostty config (Supacode reads the same file): Dracula colours, background opacity 0.88 and blur 20 (tabs and pills included), matching the activity pane; untick to delete only the block",
     defaultSelected: false,
 
     async inspect(ctx): Promise<UnitState> {
