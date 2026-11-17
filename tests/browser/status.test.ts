@@ -14,6 +14,12 @@ const probe = (over: boolean) => ({
 const base = { profile: "/d/chrome-profile", profileUsed: true, pageCount: 3, restartCommand: "restart-it" };
 
 describe("browser status", () => {
+  it("warns that sub-agents land in the owner's own Chrome when the server runs on autoConnect, and not otherwise", () => {
+    const attached = buildStatus({ ...base, probe: { ...probe(false), mode: "autoConnect" as const } });
+    expect(formatStatus(attached).join("\n")).toContain("WARNING: autoConnect");
+    expect(formatStatus(buildStatus({ ...base, probe: probe(false) })).join("\n")).not.toContain("WARNING");
+  });
+
   it("reports what it can when nothing is running, and the bridge as unavailable", () => {
     const s = buildStatus({ ...base, probe: null, pageCount: null });
     expect(s).toMatchObject({ running: false, mode: "not running", server: null, budget: null, pages: "unavailable" });

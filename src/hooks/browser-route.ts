@@ -20,8 +20,11 @@ const BROWSER_TOOL_PREFIX = "mcp__chrome-devtools__";
 export const BROWSER_ROUTE_NOTICE =
   "project-brain browser route: chrome-devtools drives one shared headless browser on a dedicated " +
   "persistent profile (sign in once with `project-brain browser login`). Reuse it, open your own " +
-  "page and close it when you are done; for a separate session on the same URL pass " +
-  "`isolatedContext` to `new_page`. The owner's real Chrome only if the owner explicitly asks.";
+  "page with `new_page` and an `isolatedContext` named `<agent>-<role>` (the same name shares a session, " +
+  "different names isolate cookies and storage), keep at most 4 pages open and close every one when you " +
+  "are done, even on failure. The owner's real Chrome (claude-in-chrome) only if the owner explicitly asks. " +
+  "If chrome-devtools calls start timing out, stop and report it instead of opening more pages " +
+  "(`project-brain browser status` shows the mode and the open pages).";
 
 /**
  * The notice for this payload, or null when it is not a chrome-devtools call. `overBudget` adds

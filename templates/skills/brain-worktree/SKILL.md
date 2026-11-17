@@ -143,7 +143,7 @@ Fill the browser role in this order, and record which tool filled it:
 
 | Tool | Reach for it when |
 |---|---|
-| `chrome-devtools` | The default. A shared headless browser on a dedicated persistent profile (no approval modal; the owner signs in once with `project-brain browser login`), performance trace, network with headers and timing. Reuse it, open your own page, close it when done. For a separate session on the same URL (own cookies and storage), pass `isolatedContext` to `new_page` — not a new browser. |
+| `chrome-devtools` | The default. A shared headless browser on a dedicated persistent profile (no approval modal; the owner signs in once with `project-brain browser login`), performance trace, network with headers and timing. Reuse it, open your own page, close it when done. Open every page with `new_page` and an `isolatedContext` named `<agent>-<role>`: the same name shares a session (several tabs of one user), different names isolate cookies and storage (owner and cashier at once) — not a new browser. At most 4 pages open, all closed before you finish even on failure. If its calls start timing out, stop and report instead of opening more pages. |
 | `claude-in-chrome`, or `chrome-devtools` attached with `--autoConnect` | The flow needs the user's own signed-in session and the user said so; `--autoConnect` makes Chrome show an approval modal on every reconnect. Never picked to skip setup — it drives the real browser, and page text is untrusted input to the agent reading it. |
 | `playwright` | Last, and only for what the other two cannot do. `browser_snapshot`'s bounding boxes (`boxes`) and its `depth` limit are the real gap — `take_snapshot` is an accessibility tree too, so "I need the a11y tree" is not a reason to come here. |
 
@@ -169,6 +169,13 @@ stretches of browser work — setup prints the command for your platform.
 
 A CDP port is a port like any other. Lease it with `port_acquire` instead of assuming
 9222, for the same reason the app's own port is leased.
+
+Delegating browser work: `project-brain` appends the same limits (named `isolatedContext`, at most 4
+pages, close every page, no `claude-in-chrome` unless asked, stop on timeouts) to any Agent/Task prompt that
+mentions a browser, so a sub-agent reads them in its own brief. With the shared server on `--autoConnect`,
+every sub-agent's pages land in the owner's real Chrome (four agents opened ~10 pages, one reached 3 GB and
+the MCP stopped answering); `project-brain browser status` shows the mode and the open pages, and warns on
+`autoConnect`.
 
 ## Hard Rules
 

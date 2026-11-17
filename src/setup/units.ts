@@ -975,7 +975,7 @@ export function otherUnits(): SetupUnit[] {
       group: "Other",
       label: "chrome-devtools autoConnect",
       description:
-        "opt-in: browser tools drive your own logged-in Chrome instead of the default headless browser; needs the chrome://inspect toggle, and costs a growing attachment",
+        "opt-in: browser tools, sub-agents included, drive your own logged-in Chrome instead of the default headless browser; needs the chrome://inspect toggle, and costs a growing attachment",
 
       // The only unit that ships unchecked. Every other one installs something
       // of ours; this one hands an MCP server full control of the browser the
@@ -1074,7 +1074,7 @@ export function otherUnits(): SetupUnit[] {
         }
         return (
           `chrome-devtools shared server still runs with --autoConnect (your own Chrome); Chrome asks for approval on every ` +
-          `reconnect of it, and the default is now a shared headless browser on its own profile. To switch, untick "chrome-devtools autoConnect" in setup ` +
+          `reconnect of it, every sub-agent opens its pages in that Chrome (one run left ~10 pages, one at 3 GB, and the MCP stopped answering), and the default is now a shared headless browser on its own profile. To switch, untick "chrome-devtools autoConnect" in setup ` +
           `(or run setup --without=config:chrome-autoconnect) — setup reloads the service itself.`
         );
       },

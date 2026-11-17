@@ -49,6 +49,7 @@ export function formatStatus(s: Status): string[] {
     lines.push(`memory: server ${s.server.rssMb} MB, with its browser ${s.server.treeRssMb} MB`);
     lines.push(`budget: ${s.budget!.maxMb} MB — ${s.budget!.over ? "OVER BUDGET" : "within budget"}`);
   }
+  if (s.mode === "autoConnect") lines.push("WARNING: autoConnect — every sub-agent opens its pages in your own Chrome; switch with setup (untick chrome-devtools autoConnect)");
   lines.push(`open pages: ${s.pages}`);
   if (s.restartCommand) lines.push(`restart when no session is mid-task: ${s.restartCommand}`);
   return lines;

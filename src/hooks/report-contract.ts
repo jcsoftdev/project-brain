@@ -1,5 +1,5 @@
 /**
- * PreToolUse hook: append the report contract to every delegation prompt.
+ * PreToolUse hook: append the report contract to every delegation prompt, and the browser limits to the ones about a browser.
  *
  * `updatedInput` replaces the WHOLE tool input, so every other field is copied
  * through. No `permissionDecision` is returned on purpose: `allow` would also skip
@@ -9,6 +9,7 @@
  * Fails open: anything unexpected prints nothing, and the call goes out as written.
  */
 
+import { withBrowserBrief } from "../rules/browser-brief.js";
 import { withReportContract } from "../rules/report-contract.js";
 
 const SPAWN_TOOLS = new Set(["Task", "Agent"]);
@@ -25,7 +26,7 @@ export function reportContractOutput(payload: unknown): object | null {
   const input = payload.tool_input;
   if (!isPlainObject(input) || typeof input.prompt !== "string") return null;
 
-  const prompt = withReportContract(input.prompt);
+  const prompt = withBrowserBrief(withReportContract(input.prompt));
   if (prompt === input.prompt) return null;
 
   return {

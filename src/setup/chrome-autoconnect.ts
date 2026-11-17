@@ -51,7 +51,9 @@ export const ATTACHMENT_COST_NOTE =
   "What it costs: an attached server never releases the connection, so it grows as it " +
   "buffers what the browser reports — measured at 1.6 GB after ~2 days. A host runs one " +
   "server per session, so this is one attachment per open session, not one in total. " +
-  "Restarting the session is what frees it.";
+  "Restarting the session is what frees it. It also puts every sub-agent's pages in your own Chrome: four " +
+  "agents in parallel opened about ten pages, one reached 3 GB and the MCP stopped answering, leaving " +
+  "pages the agents could no longer close.";
 
 /** What the flag looks like when we write it. Both spellings are read back. */
 const CANONICAL_FLAG = "--autoConnect";
