@@ -2,6 +2,11 @@ import { basename, dirname, join } from "node:path";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
+import { batThemeUnit } from "./units-bat.js";
+import { fzfThemeUnit } from "./units-fzf.js";
+import { lazygitThemeUnit } from "./units-lazygit.js";
+import { starshipThemeUnit } from "./units-starship.js";
+import { tmuxThemeUnit } from "./units-tmux.js";
 import type { AIToolRegistrar } from "../registrars/types.js";
 import { resolveRerankerToken } from "../rerank/token.js";
 import { profileDir } from "./chrome-profile.js";
@@ -1647,7 +1652,7 @@ async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, 
  * Code's.
  */
 export function allUnits(ctx: SetupContext): SetupUnit[] {
-  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...claudeTuiUnits(), ...nvimUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit(), mcpPruneJevUnit()];
+  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...claudeTuiUnits(), ...nvimUnits(), ...terminalToolUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit(), mcpPruneJevUnit()];
 }
 
 
@@ -1997,6 +2002,10 @@ const ghosttyConfigOf = async (ctx: SetupContext) => {
 /** The Neovim setup: the colour theme now; options, keymaps, languages and tools as their own units. */
 export function nvimUnits(): SetupUnit[] {
   return [nvimThemeUnit()];
+}
+
+export function terminalToolUnits(): SetupUnit[] {
+  return [batThemeUnit(), fzfThemeUnit(), lazygitThemeUnit(), tmuxThemeUnit(), starshipThemeUnit()];
 }
 
 /** The Neovim config the theme files go into: $XDG_CONFIG_HOME/nvim, else ~/.config/nvim. */
