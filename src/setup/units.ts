@@ -997,7 +997,11 @@ export function otherUnits(): SetupUnit[] {
           const service = await findSharedChromeService(ctx);
           if (!service) return "unavailable";
           const state = entryAutoConnectState({ args: service.chromeArgs });
-          if (state === "present") return "current";
+          if (state === "present") {
+            // On the service this tool installed, the flag counts as chosen only when the owner ticked it here;
+            // before that it was the default, and the shared-server unit moves it away.
+            return !service.ours || (await autoConnectOptedIn(ctx)) ? "current" : "absent";
+          }
           // Only the service this tool installed is ours to rewrite.
           return service.ours && state === "missing" ? "absent" : "foreign";
         }
@@ -1029,6 +1033,9 @@ export function otherUnits(): SetupUnit[] {
           });
         }
 
+        await mkdir(ctx.dataDir, { recursive: true });
+        await Bun.write(autoConnectOptInPath(ctx), `${JSON.stringify({ optIn: true })}\n`);
+
         // The flag is half of it. Chrome refuses the connection until the user
         // flips the toggle themselves, so saying so here is not a nicety — it
         // is the difference between a working setup and a silent failure later.
@@ -1048,6 +1055,7 @@ export function otherUnits(): SetupUnit[] {
         const { upsertJsonConfig } = await import("../registrars/json-config.js");
 
         await retargetOwnService(ctx, (a) => argsWithoutAutoConnect(a, profileDir(ctx.dataDir)));
+        await rm(autoConnectOptInPath(ctx), { force: true });
         for (const { path, containerKey, names } of await chromeDevtoolsTargets(ctx)) {
           if (names.length === 0) continue;
           await upsertJsonConfig(path, (config) => {
@@ -1065,19 +1073,6 @@ export function otherUnits(): SetupUnit[] {
       label: "chrome-devtools shared server",
       description:
         "one shared headless chrome-devtools browser for every session instead of one server per session; installs a login service",
-
-      async notice(ctx): Promise<string | null> {
-        const { entryAutoConnectState } = await import("./chrome-autoconnect.js");
-        const service = await findSharedChromeService(ctx);
-        if (!service?.ours || entryAutoConnectState({ args: service.chromeArgs }) !== "present") {
-          return null;
-        }
-        return (
-          `chrome-devtools shared server still runs with --autoConnect (your own Chrome); Chrome asks for approval on every ` +
-          `reconnect of it, every sub-agent opens its pages in that Chrome (one run left ~10 pages, one at 3 GB, and the MCP stopped answering), and the default is now a shared headless browser on its own profile. To switch, untick "chrome-devtools autoConnect" in setup ` +
-          `(or run setup --without=config:chrome-autoconnect) — setup reloads the service itself.`
-        );
-      },
 
       // Unchecked for the same reason as autoConnect, plus one of its own: this
       // is the only unit that installs an OS service and a Python tool. Both
@@ -1101,7 +1096,9 @@ export function otherUnits(): SetupUnit[] {
         if (service) {
           // The service is up but some host was never moved across, so the
           // machine is paying for both arrangements at once.
-          return stillSpawning ? "stale" : "current";
+          // A server still on --autoConnect that nobody opted into is the old default: it puts every
+          // sub-agent's pages in the owner's own Chrome, and `apply` moves it to the headless profile.
+          return stillSpawning || (await isLegacyAutoConnect(ctx, service)) ? "stale" : "current";
         }
 
         // Nothing to move means nothing to offer: this unit only ever converts
@@ -1114,6 +1111,23 @@ export function otherUnits(): SetupUnit[] {
         const { upsertJsonConfig } = await import("../registrars/json-config.js");
         const kind = mod.serviceKindFor(process.platform);
         if (!kind) return;
+
+        // An existing service on --autoConnect that nobody opted into: put it on the headless profile.
+        // `update` re-applies a unit only when it is stale, so without this the old default stayed forever.
+        const running = await findSharedChromeService(ctx);
+        if (running?.ours && (await isLegacyAutoConnect(ctx, running))) {
+          const { argsWithoutAutoConnect } = await import("./chrome-autoconnect.js");
+          const profile = profileDir(ctx.dataDir);
+          await prepareProfile([`--userDataDir=${profile}`], profile);
+          if (await retargetOwnService(ctx, (a) => argsWithoutAutoConnect(a, profile))) {
+            console.log(
+              `\nchrome-devtools shared server: it was running with --autoConnect, which opens every ` +
+                `sub-agent's pages in your own Chrome. It now runs headless on its own profile. To go back, ` +
+                `tick "chrome-devtools autoConnect" in setup.`
+            );
+          }
+          if ((await chromeDevtoolsEntries(ctx)).length === 0) return;
+        }
 
         const bridgeBin = await ensureBridge();
         if (!bridgeBin) {
@@ -1484,6 +1498,21 @@ async function prepareProfile(command: string[], profile: string): Promise<void>
   }
 }
 
+/** Written when the owner ticks the autoConnect unit; its absence on a service with the flag means it is the old default. */
+const autoConnectOptInPath = (ctx: SetupContext) => `${ctx.dataDir}/chrome-autoconnect.json`;
+
+const autoConnectOptedIn = (ctx: SetupContext): Promise<boolean> => Bun.file(autoConnectOptInPath(ctx)).exists();
+
+/** The service this tool installed runs --autoConnect and the owner never opted into it. */
+async function isLegacyAutoConnect(
+  ctx: SetupContext,
+  service: { ours: boolean; chromeArgs: string[] }
+): Promise<boolean> {
+  if (!service.ours) return false;
+  const { entryAutoConnectState } = await import("./chrome-autoconnect.js");
+  return entryAutoConnectState({ args: service.chromeArgs }) === "present" && !(await autoConnectOptedIn(ctx));
+}
+
 const sharedLogPath =(ctx: SetupContext) => `${ctx.dataDir}/chrome-devtools-shared.log`;
 
 /**
@@ -1541,7 +1570,7 @@ async function installSharedService(
     // `bootout` fails when nothing is loaded yet, which is the normal first
     // install — the bootstrap that follows is the one whose result matters.
     try {
-      await Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" }).exited;
+      await (ctx?.runService ?? runServiceCommand)(cmd);
     } catch {
       /* reported by the bootstrap/enable that follows */
     }

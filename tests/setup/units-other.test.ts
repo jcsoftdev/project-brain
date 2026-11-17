@@ -510,20 +510,80 @@ describe("a shared chrome-devtools service that is already running", () => {
     expect(await unit.inspect(ctx)).toBe("absent");
   });
 
-  it("tells an existing --autoConnect install how to move to the headless default, and says nothing otherwise", async () => {
-    const { SERVICE_LABEL } = await import("../../src/setup/chrome-shared-server.js");
+  const unitsById = async () => {
     const { otherUnits } = await import("../../src/setup/units.js");
-    const shared = otherUnits().find((u) => u.id === "service:chrome-shared-server")!;
+    return (id: string) => otherUnits().find((u) => u.id === id)!;
+  };
+  const stubbed = (ctx: SetupContext) => {
+    const calls: string[][] = [];
+    ctx.runService = async (argv) => {
+      calls.push(argv);
+      return 0;
+    };
+    return calls;
+  };
+  const serviceText = async (ctx: SetupContext, label: string) => {
+    const { serviceKindFor } = await import("../../src/setup/chrome-shared-server.js");
+    const ext = serviceKindFor(process.platform) === "launchd" ? "plist" : "service";
+    return Bun.file(join(ctx.serviceDir!, `${label}.${ext}`)).text();
+  };
 
-    const attached = await withService(["chrome-devtools-mcp", "--autoConnect"], SERVICE_LABEL);
-    if (!attached.kind) return;
-    expect(await shared.notice!(attached.ctx)).toContain("config:chrome-autoconnect");
+  it("moves a service this tool installed on --autoConnect, that nobody opted into, to the headless profile on update", async () => {
+    const { SERVICE_LABEL } = await import("../../src/setup/chrome-shared-server.js");
+    const unit = await unitsById();
+    const legacy = await withService(["chrome-devtools-mcp", "--autoConnect"], SERVICE_LABEL);
+    if (!legacy.kind) return;
+    const calls = stubbed(legacy.ctx);
+    const shared = unit("service:chrome-shared-server");
+
+    // Stale, so `update` (which re-applies only stale units) reaches it; and not mistaken for the owner's choice.
+    expect(await shared.inspect(legacy.ctx)).toBe("stale");
+    expect(await unit("config:chrome-autoconnect").inspect(legacy.ctx)).toBe("absent");
+
+    await shared.apply(legacy.ctx);
+
+    const text = await serviceText(legacy.ctx, SERVICE_LABEL);
+    expect(text).not.toContain("autoConnect");
+    expect(text).toContain("--headless");
+    expect(text).toContain(`--userDataDir=${join(legacy.ctx.dataDir, "chrome-profile")}`);
+    expect(calls.some((c) => c.includes("bootstrap") || c.includes("enable"))).toBe(true);
+    expect(await shared.inspect(legacy.ctx)).toBe("current");
+  });
+
+  it("keeps --autoConnect once the owner ticked it, and takes it away again when they untick it", async () => {
+    const { SERVICE_LABEL } = await import("../../src/setup/chrome-shared-server.js");
+    const unit = await unitsById();
+    const headless = await withService(["chrome-devtools-mcp", "--headless"], SERVICE_LABEL);
+    if (!headless.kind) return;
+    stubbed(headless.ctx);
+    const autoConnect = unit("config:chrome-autoconnect");
+    const shared = unit("service:chrome-shared-server");
+
+    await autoConnect.apply(headless.ctx);
+    expect(await serviceText(headless.ctx, SERVICE_LABEL)).toContain("--autoConnect");
+    expect(await autoConnect.inspect(headless.ctx)).toBe("current");
+    expect(await shared.inspect(headless.ctx)).toBe("current");
+    await shared.apply(headless.ctx);
+    expect(await serviceText(headless.ctx, SERVICE_LABEL)).toContain("--autoConnect");
+
+    await autoConnect.remove(headless.ctx);
+    expect(await serviceText(headless.ctx, SERVICE_LABEL)).not.toContain("--autoConnect");
+    expect(await autoConnect.inspect(headless.ctx)).toBe("absent");
+  });
+
+  it("leaves a headless service and a service someone else installed as they are", async () => {
+    const { SERVICE_LABEL } = await import("../../src/setup/chrome-shared-server.js");
+    const unit = await unitsById();
+    const shared = unit("service:chrome-shared-server");
 
     const headless = await withService(["chrome-devtools-mcp", "--headless"], SERVICE_LABEL);
-    expect(await shared.notice!(headless.ctx)).toBeNull();
+    if (!headless.kind) return;
+    expect(await shared.inspect(headless.ctx)).toBe("current");
 
     const theirs = await withService(["chrome-devtools-mcp", "--autoConnect"]);
-    expect(await shared.notice!(theirs.ctx)).toBeNull();
+    const calls = stubbed(theirs.ctx);
+    expect(await shared.inspect(theirs.ctx)).toBe("foreign");
+    expect(calls).toEqual([]);
   });
 
   it("reports a shared server someone else installed as theirs, not as not available", async () => {
