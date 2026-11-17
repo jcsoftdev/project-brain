@@ -1,25 +1,28 @@
 export const TEXT_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
-export const HEAD_BYTES = 64 * 1024
-export const SNIFF_BYTES = 8192
+export const READ_CAP_BYTES = 192 * 1024
 export const DEBOUNCE_MS = 120
-export const NVIM_TIMEOUT_MS = 1500
+export const NVIM_TIMEOUT_MS = 700
+export const READ_TIMEOUT_MS = 2000
 export const LAUNCH_TIMEOUT_MS = 5000
 export const THUMB_TIMEOUT_MS = 8000
 export const THUMB_MAX_PX = 800
-export const FLOAT_MAX_LINES = 2000
+export const FAILED_SERVER_TTL_MS = 30_000
 export const PANE_LINES = 200
 export const PANE_COLUMNS = 400
 export const MAX_PATHS_PER_ROW = 6
+export const RENDER_CACHE_LIMIT = 200
 
 export const PATH_TOOLS: readonly string[] = ['Read', 'Edit', 'Write']
 
 /**
  * Names never previewed or opened: the owner records demos, so a key or a
- * token must never reach the screen by a click. Globs over the file's base
- * name, matched case-insensitively; one list, unit-tested.
+ * token must never reach the screen by a click. Globs matched,
+ * case-insensitively, against the file's name and against every directory
+ * between the project root and it.
  */
 export const SECRET_NAMES: readonly string[] = [
   '.env*',
+  'env.production*',
   '*.pem',
   '*.key',
   'id_rsa*',
@@ -33,15 +36,54 @@ export const SECRET_NAMES: readonly string[] = [
   '.netrc',
   '.pgpass',
   '.git-credentials',
+  '.pypirc',
+  'kubeconfig*',
+  'secrets.*',
+  '*.tfvars',
+  '*.tfvars.json',
+  'terraform.tfstate*',
+  '.dev.vars',
+  '*.kdbx',
+  '*.token',
+  '.vault-token',
+  '*.asc',
+  '*.ppk',
+  '.htpasswd',
+  '.mcp.json',
+  '*.keystore',
+  '*.jks',
+  'service-account*.json',
+  '.zsh_history',
+  '.bash_history',
+  '.claude.json',
 ]
 
-/** Directories whose whole content counts as secret, by any path component. */
-export const SECRET_DIRS: readonly string[] = ['.ssh', '.gnupg', '.aws']
+/** Directories whose whole content counts as secret, at any depth. */
+export const SECRET_DIRS: readonly string[] = ['.ssh', '.gnupg', '.aws', '.kube']
+
+/** Globs over the last components of the path: a file secret only in its directory. */
+export const SECRET_PATHS: readonly string[] = ['.docker/config.json', '.git/config', '.claude/settings*.json', '.config/gh/hosts.yml']
+
+/**
+ * Content that refuses a whole preview, by label; the label is what the
+ * person is told, never the text that matched.
+ */
+export const SECRET_CONTENT: ReadonlyArray<{ label: string; pattern: RegExp }> = [
+  { label: 'a private key', pattern: /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/ },
+  { label: 'a PuTTY key', pattern: /PuTTY-User-Key-File-\d/ },
+  { label: 'an AWS access key id', pattern: /\bAKIA[0-9A-Z]{16}\b/ },
+  { label: 'a GitHub token', pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})/ },
+  { label: 'an API key (sk-)', pattern: /\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}/ },
+  { label: 'a Slack token', pattern: /\bxox[abpor]-[A-Za-z0-9-]{10,}/ },
+  { label: 'a Google API key', pattern: /\bAIza[0-9A-Za-z_-]{35}/ },
+  { label: 'a JWT', pattern: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/ },
+]
+
+const ASSIGNMENT = /(?:password|passwd|secret|token|api[_-]?key)[\w.-]{0,40}["']?[ \t]{0,8}[:=][ \t]{0,8}["']?([A-Za-z0-9+/=_-]{16,512})/gi
 
 export const IMAGE_EXTS: readonly string[] = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'heic']
 export const VIDEO_EXTS: readonly string[] = ['mp4', 'mov', 'webm', 'mkv']
 
-const PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/
 const UNSAFE_CHARS = /[\u0000-\u001f\u007f]/
 
 export type Kind = 'text' | 'image' | 'video'
@@ -50,7 +92,8 @@ export type Target = { path: string; line: number }
 const globToRegExp = (glob: string): RegExp =>
   new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.')}$`, 'i')
 
-const SECRET_PATTERNS = SECRET_NAMES.map(globToRegExp)
+const NAME_PATTERNS = SECRET_NAMES.map(globToRegExp)
+const PATH_PATTERNS = SECRET_PATHS.map(glob => glob.split('/').map(globToRegExp))
 
 export const baseName = (path: string): string => path.slice(path.lastIndexOf('/') + 1)
 
@@ -67,21 +110,39 @@ export const kindOf = (path: string): Kind => {
   return 'text'
 }
 
-export const isSecretName = (path: string): boolean => {
-  if (SECRET_PATTERNS.some(pattern => pattern.test(baseName(path)))) return true
-  const dirs = path.split('/').slice(0, -1).map(part => part.toLowerCase())
-  return SECRET_DIRS.some(dir => dirs.includes(dir))
+export const isInside = (real: string, root: string): boolean => {
+  const base = root.replace(/\/+$/, '')
+  if (base === '') return real.startsWith('/')
+  return real === base || real.startsWith(`${base}/`)
+}
+
+/** The components under the root that holds the path, or all of them when none does. */
+const componentsUnder = (path: string, roots: readonly string[]): string[] => {
+  const root = roots.find(candidate => isInside(path, candidate))
+  const rest = root === undefined ? path : path.slice(root.replace(/\/+$/, '').length)
+  return rest.split('/').filter(part => part !== '')
+}
+
+export const isSecretName = (path: string, roots: readonly string[] = []): boolean => {
+  const parts = componentsUnder(path, roots)
+  if (parts.some(part => NAME_PATTERNS.some(pattern => pattern.test(part)))) return true
+  if (parts.slice(0, -1).some(part => SECRET_DIRS.includes(part.toLowerCase()))) return true
+  return PATH_PATTERNS.some(globs => globs.length <= parts.length && globs.every((glob, i) => glob.test(parts[parts.length - globs.length + i]!)))
+}
+
+/** The label of the first secret the text holds, or undefined. */
+export const secretInContent = (text: string): string | undefined => {
+  for (const { label, pattern } of SECRET_CONTENT) if (pattern.test(text)) return label
+  for (const match of text.matchAll(ASSIGNMENT)) {
+    const value = match[1] ?? ''
+    if (/[0-9]/.test(value) && /[A-Za-z]/.test(value)) return 'a password or token assignment'
+  }
+  return undefined
 }
 
 export const isUnsafeSpelling = (path: string): boolean => path === '' || UNSAFE_CHARS.test(path)
 
-export const hasPrivateKey = (head: string): boolean => PRIVATE_KEY.test(head)
-
-export const looksBinary = (bytes: Uint8Array): boolean => {
-  const end = Math.min(bytes.length, SNIFF_BYTES)
-  for (let i = 0; i < end; i++) if (bytes[i] === 0) return true
-  return false
-}
+export const looksBinary = (bytes: Uint8Array): boolean => bytes.includes(0)
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
@@ -92,7 +153,7 @@ export const decodeBase64 = (text: string): Uint8Array => {
   let value = 0
   let at = 0
   for (const char of clean) {
-    value = (value << 6) | B64.indexOf(char)
+    value = ((value << 6) | B64.indexOf(char)) & 0xffffff
     bits += 6
     if (bits >= 8) {
       bits -= 8
@@ -114,13 +175,14 @@ export const absoluteOf = (spelled: string, cwd: string): string => {
   return `/${parts.join('/')}`
 }
 
-export const isInside = (real: string, root: string): boolean => {
-  const base = root.replace(/\/+$/, '')
-  return base !== '' && (real === base || real.startsWith(`${base}/`))
-}
-
 export const splitRoots = (value: string | undefined): string[] =>
   (value ?? '').split(':').map(part => part.trim()).filter(part => part.startsWith('/'))
+
+/** A root that is the home folder or `/` would put every dotfile in reach: never a preview root. */
+export const isForbiddenRoot = (real: string, home: string | undefined): boolean => {
+  const trimmed = real.replace(/\/+$/, '')
+  return trimmed === '' || (home !== undefined && home !== '' && trimmed === home.replace(/\/+$/, ''))
+}
 
 export type PathFacts = {
   spelled: string
@@ -131,15 +193,73 @@ export type PathFacts = {
 
 export type Verdict = { ok: true; real: string } | { ok: false; reason: string }
 
-/** The one gate in front of every preview and open: spelling, existence, roots, secret names. */
+/** The gate by name and place, in front of every preview and open; the bytes are checked again when read. */
 export const checkTarget = (facts: PathFacts): Verdict => {
   if (isUnsafeSpelling(facts.spelled)) return { ok: false, reason: 'the path holds a control character' }
+  if (facts.roots.length === 0) return { ok: false, reason: 'no project root to preview from (home and / are never one)' }
   if (facts.real === undefined || facts.kind === undefined) return { ok: false, reason: 'the file does not exist' }
   if (isUnsafeSpelling(facts.real)) return { ok: false, reason: 'the path holds a control character' }
   if (facts.kind !== 'file') return { ok: false, reason: 'not a regular file' }
   if (!facts.roots.some(root => isInside(facts.real!, root))) return { ok: false, reason: 'outside the project roots' }
-  if (isSecretName(facts.spelled) || isSecretName(facts.real)) return { ok: false, reason: 'a secret-like file is never shown' }
+  if (isSecretName(baseName(facts.spelled)) || isSecretName(facts.real, facts.roots)) return { ok: false, reason: 'a secret-like file is never shown' }
   return { ok: true, real: facts.real }
+}
+
+/**
+ * Reads a file once, by argv: opened with O_NOFOLLOW (a symlink swapped in
+ * fails) and O_NONBLOCK (a FIFO cannot hang it), then fstat on that handle:
+ * a regular file with one link, still reachable at the same absolute path
+ * with no symlink on the way. Prints `OK <size> <truncated>` and the base64
+ * of at most `cap` bytes, or `ERR <code>`.
+ */
+export const READ_ONCE_PERL = [
+  'use strict;',
+  'use Fcntl qw(O_RDONLY O_NOFOLLOW O_NONBLOCK S_ISREG);',
+  'use Cwd qw(abs_path);',
+  'use MIME::Base64 qw(encode_base64);',
+  'my ($path, $cap) = @ARGV;',
+  'sub out { print "ERR $_[0]\\n"; exit 0 }',
+  'sysopen(my $fh, $path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK) or out("open");',
+  'my @st = stat($fh) or out("open");',
+  'S_ISREG($st[2]) or out("notfile");',
+  '$st[3] == 1 or out("links");',
+  'my $now = abs_path($path);',
+  'my @again = lstat($path);',
+  '(defined $now && $now eq $path && @again && $again[0] == $st[0] && $again[1] == $st[1]) or out("moved");',
+  'my $want = $st[7] < $cap ? $st[7] : $cap;',
+  'my $buf = "";',
+  'while (length($buf) < $want) { my $n = sysread($fh, $buf, $want - length($buf), length($buf)); last unless $n; }',
+  'print "OK $st[7] ", ($st[7] > length($buf) ? 1 : 0), "\\n", encode_base64($buf, ""), "\\n";',
+].join(' ')
+
+export const readOnceArgv = (real: string, cap = READ_CAP_BYTES): string[] => ['perl', '-e', READ_ONCE_PERL, '--', real, String(cap)]
+
+const READ_ERRORS: Record<string, string> = {
+  open: 'the file could not be opened without following a link',
+  notfile: 'not a regular file',
+  links: 'a file with more than one hard link is never shown',
+  moved: 'the file moved while it was being read',
+}
+
+export type ReadOnce = { ok: true; size: number; truncated: boolean; base64: string; bytes: Uint8Array } | { ok: false; reason: string }
+
+export const parseReadOnce = (stdout: string): ReadOnce => {
+  const [head = '', body = ''] = stdout.split('\n')
+  const error = /^ERR (\w+)$/.exec(head)
+  if (error) return { ok: false, reason: READ_ERRORS[error[1]!] ?? 'the file could not be read' }
+  const ok = /^OK (\d+) ([01])$/.exec(head)
+  if (!ok || !/^[A-Za-z0-9+/=]*$/.test(body)) return { ok: false, reason: 'the file could not be read' }
+  return { ok: true, size: Number(ok[1]), truncated: ok[2] === '1', base64: body, bytes: decodeBase64(body) }
+}
+
+export type Shown = { ok: true; text: string } | { ok: false; reason: string }
+
+/** Every byte that will be shown, checked: not binary, no secret by content. */
+export const checkContent = (bytes: Uint8Array, decode: (bytes: Uint8Array) => string): Shown => {
+  if (looksBinary(bytes)) return { ok: false, reason: 'a binary file is not previewed' }
+  const text = decode(bytes)
+  const secret = secretInContent(text)
+  return secret === undefined ? { ok: true, text } : { ok: false, reason: `it holds what looks like ${secret}` }
 }
 
 export const toolTarget = (tool: string, input: unknown): Target | undefined => {
@@ -153,7 +273,11 @@ export const toolTarget = (tool: string, input: unknown): Target | undefined => 
 
 const PATH_TOKEN = /(^|[\s(\[`'"])((?:\.{1,2}\/|\/)?(?:[\w.@+-]+\/)*[\w@+-][\w.@+-]*\.[A-Za-z0-9]{1,10})(?::(\d{1,7}))?(?=$|[\s)\]`'",;!?]|[.:](?:\s|$))/gm
 
-/** Path-like tokens of a markdown text, first seen first: `src/a.ts`, `./b.md:12`, `/abs/c.json`. */
+/**
+ * Path-like tokens of a markdown text, first seen first, by shape alone (no
+ * file system at render): anything with a slash, or a bare `name.ext` inside
+ * a code span, so prose such as "Node.js" grows no button.
+ */
 export const detectPaths = (text: string, limit = MAX_PATHS_PER_ROW): Target[] => {
   const found: Target[] = []
   const seen = new Set<string>()
@@ -161,8 +285,9 @@ export const detectPaths = (text: string, limit = MAX_PATHS_PER_ROW): Target[] =
     const path = match[2] ?? ''
     const start = (match.index ?? 0) + (match[1]?.length ?? 0)
     if (text.slice(Math.max(0, start - 3), start).includes('://')) continue
-    if (!path.includes('/') && !/^[\w@+-][\w.@+-]*\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(path)) continue
-    if (/^\d+(\.\d+)+$/.test(path) || /^v\d/.test(path) || isUnsafeSpelling(path)) continue
+    const isBare = !path.includes('/')
+    if (isBare && (match[1] !== '`' || !/^[\w@+-][\w.@+-]*\.[A-Za-z][A-Za-z0-9]{0,9}$/.test(path))) continue
+    if (/^\d+(\.\d+)+$/.test(path) || isUnsafeSpelling(path) || isSecretName(path)) continue
     if (seen.has(path)) continue
     seen.add(path)
     found.push({ path, line: match[3] === undefined ? 0 : Number(match[3]) })
@@ -241,7 +366,11 @@ export const editorArgv = (editor: readonly string[], file: string, line: number
   return [...editor, file]
 }
 
-/** POSIX single quoting, for the one string a shell reads: the command a new terminal tab runs. */
+/**
+ * POSIX single quoting, for the one string a shell reads: the command a new
+ * Supacode tab runs. Checked against `sh`; fish reads `\'` inside single
+ * quotes differently and is not covered.
+ */
 export const shQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`
 
 export const supacodeTabArgv = (title: string, command: readonly string[], background: boolean): string[] => [
@@ -261,31 +390,34 @@ export const readOnlyNvimArgv = (file: string, line: number): string[] => ['nvim
 export const vimString = (value: string): string => `'${value.replace(/'/g, "''")}'`
 
 /**
- * Lua run inside the owner's Neovim through `luaeval(code, _A)`: a scratch
- * buffer (never the file's own) in a floating window opened with
- * `enter = false` and `focusable = false`, so focus, cursor and the current
- * window stay where they were. A non-focusable float cannot take `q`, so it
+ * Lua run inside the owner's Neovim through `luaeval(code, _A)`. It never
+ * opens the path: the lines arrive as base64 of the bytes the mod read and
+ * checked, the path is only the title. A scratch buffer in a floating window
+ * opened with `enter = false` and `focusable = false`, so focus, cursor and
+ * the current window stay put. A non-focusable float cannot take `q`, so it
  * closes on the next cursor move, insert or buffer change in the owner's
  * window, or when the next preview replaces it.
  */
 export const FLOAT_LUA = [
   '(function(a)',
-  'local path, line, max = a[1], a[2], a[3]',
+  'local title, data, line = a[1], a[2], a[3]',
   'local api = vim.api',
   'local prev = vim.g.pb_file_preview_win',
   'if prev and api.nvim_win_is_valid(prev) then pcall(api.nvim_win_close, prev, true) end',
-  'local lines = vim.fn.readfile(path, "", max)',
+  'local lines = vim.split(vim.base64.decode(data), "\\n", { plain = true })',
+  'for i, l in ipairs(lines) do lines[i] = l:gsub("\\r$", "") end',
+  'if #lines > 1 and lines[#lines] == "" then table.remove(lines) end',
   'local buf = api.nvim_create_buf(false, true)',
   'api.nvim_buf_set_lines(buf, 0, -1, false, lines)',
   'vim.bo[buf].bufhidden = "wipe"',
   'vim.bo[buf].modifiable = false',
-  'local ft = vim.filetype.match({ filename = path })',
+  'local ft = vim.filetype.match({ filename = title, buf = buf })',
   'local lang = ft and vim.treesitter.language.get_lang(ft)',
   'if lang then pcall(vim.treesitter.start, buf, lang) end',
   'local cols, rows = vim.o.columns, vim.o.lines',
   'local width = math.max(20, math.floor(cols * 0.8))',
   'local height = math.max(3, math.min(math.max(#lines, 1), math.floor(rows * 0.7)))',
-  'local win = api.nvim_open_win(buf, false, { relative = "editor", row = math.floor((rows - height) / 2) - 1, col = math.floor((cols - width) / 2), width = width, height = height, style = "minimal", border = "rounded", title = " " .. vim.fn.fnamemodify(path, ":~:.") .. " ", title_pos = "center", focusable = false, zindex = 200 })',
+  'local win = api.nvim_open_win(buf, false, { relative = "editor", row = math.floor((rows - height) / 2) - 1, col = math.floor((cols - width) / 2), width = width, height = height, style = "minimal", border = "rounded", title = " " .. vim.fn.fnamemodify(title, ":~:.") .. " ", title_pos = "center", focusable = false, zindex = 200 })',
   'if line > 0 and #lines > 0 then local target = math.min(line, #lines) api.nvim_win_call(win, function() vim.fn.winrestview({ lnum = target, topline = math.max(1, target - 3) }) end) end',
   'vim.g.pb_file_preview_win = win',
   'local group = api.nvim_create_augroup("pb_file_preview", { clear = true })',
@@ -294,26 +426,44 @@ export const FLOAT_LUA = [
   'end)(_A)',
 ].join(' ')
 
+/** `tab drop` at the line, only while the path is still a regular file: a FIFO swapped in would hang the editor. */
 export const OPEN_LUA = [
   '(function(a)',
+  'local st = vim.uv.fs_lstat(a[1])',
+  'if not st or st.type ~= "file" then return 0 end',
   'vim.cmd.drop({ args = { vim.fn.fnameescape(a[1]) }, mods = { tab = 1 } })',
   'if a[2] > 0 then pcall(vim.api.nvim_win_set_cursor, 0, { a[2], 0 }) vim.cmd("normal! zz") end',
   'return 1',
   'end)(_A)',
 ].join(' ')
 
-const luaevalExpr = (code: string, path: string, ...numbers: number[]): string =>
-  `luaeval(${vimString(code)}, [${[vimString(path), ...numbers.map(n => String(Math.max(0, Math.floor(n))))].join(', ')}])`
+const whole = (n: number) => String(Math.max(0, Math.floor(n)))
 
-export const floatExpr = (path: string, line: number, maxLines = FLOAT_MAX_LINES): string =>
-  luaevalExpr(FLOAT_LUA, path, line, Math.max(maxLines, line + 100))
+export const floatExpr = (title: string, base64: string, line: number): string =>
+  `luaeval(${vimString(FLOAT_LUA)}, [${vimString(title)}, ${vimString(base64.replace(/[^A-Za-z0-9+/=]/g, ''))}, ${whole(line)}])`
 
-export const openExpr = (path: string, line: number): string => luaevalExpr(OPEN_LUA, path, line)
+export const openExpr = (path: string, line: number): string => `luaeval(${vimString(OPEN_LUA)}, [${vimString(path)}, ${whole(line)}])`
 
 export const nvimExprArgv = (server: string, expr: string): string[] => ['nvim', '--server', server, '--remote-expr', expr]
 
-/** Sockets Neovim makes by default under `$TMPDIR/nvim.$USER/<random>/`: `nvim.<pid>.0`. */
+/** Sockets Neovim makes by default: `nvim.<pid>.0`. */
 export const isDefaultSocketName = (name: string): boolean => /^nvim\.\d+\.0$/.test(name)
+
+export type SocketEnv = { TMPDIR?: string; XDG_RUNTIME_DIR?: string; USER?: string }
+
+/**
+ * Where Neovim's `stdpath("run")` puts default sockets: `<TMPDIR or /tmp>/nvim.$USER/<random>/`
+ * (macOS, and Linux without a runtime dir), or `$XDG_RUNTIME_DIR` itself (Linux).
+ */
+export const socketDirs = (env: SocketEnv): Array<{ dir: string; nested: boolean }> => {
+  const trim = (dir: string) => dir.replace(/\/+$/, '')
+  const dirs: Array<{ dir: string; nested: boolean }> = []
+  if (env.USER !== undefined && env.USER !== '' && !env.USER.includes('/')) {
+    for (const base of [env.TMPDIR, '/tmp']) if (base !== undefined && base !== '') dirs.push({ dir: `${trim(base)}/nvim.${env.USER}`, nested: true })
+  }
+  if (env.XDG_RUNTIME_DIR !== undefined && env.XDG_RUNTIME_DIR !== '') dirs.push({ dir: trim(env.XDG_RUNTIME_DIR), nested: false })
+  return dirs.filter((entry, index) => dirs.findIndex(other => other.dir === entry.dir) === index)
+}
 
 export type ServerSearch = {
   explicit?: string
@@ -324,20 +474,55 @@ export type ServerSearch = {
 }
 
 /**
- * `PB_NVIM_SERVER`, then `$NVIM`, each used when it answers; then the first
- * default socket whose Neovim's cwd is the project's. A Neovim open on another
- * project never gets a float.
+ * Every candidate is asked at once, so the search costs one timeout, not one
+ * per socket. Then by rank: `PB_NVIM_SERVER`, `$NVIM`, each used when it
+ * answers; then the first default socket whose Neovim's cwd is the project's.
+ * A Neovim open on another project never gets a float.
  */
 export const pickServer = async (search: ServerSearch): Promise<string | undefined> => {
-  for (const server of [search.explicit, search.inherited]) {
-    if (server !== undefined && server !== '' && !isUnsafeSpelling(server) && (await search.cwdOf(server)) !== undefined) return server
-  }
+  const ranked = [search.explicit, search.inherited].filter((s): s is string => s !== undefined && s !== '' && !isUnsafeSpelling(s))
+  const candidates = [...new Set([...ranked, ...search.sockets])]
+  const answers = await Promise.all(candidates.map(server => search.cwdOf(server).catch(() => undefined)))
+  const cwdOf = new Map(candidates.map((server, i) => [server, answers[i]]))
+  for (const server of ranked) if (cwdOf.get(server) !== undefined) return server
   const wanted = new Set(search.projectDirs.map(dir => dir.replace(/\/+$/, '')))
   for (const socket of search.sockets) {
-    const cwd = await search.cwdOf(socket)
+    const cwd = cwdOf.get(socket)
     if (cwd !== undefined && wanted.has(cwd.trim().replace(/\/+$/, ''))) return socket
   }
   return undefined
+}
+
+/** Servers that failed recently: skipped until `ttlMs` has passed, so a dead socket costs one timeout, not one per click. */
+export const createFailureMemo = (ttlMs = FAILED_SERVER_TTL_MS) => {
+  const failed = new Map<string, number>()
+  return {
+    isSkipped: (server: string, now: number) => {
+      const at = failed.get(server)
+      if (at === undefined) return false
+      if (now - at < ttlMs) return true
+      failed.delete(server)
+      return false
+    },
+    fail: (server: string, now: number) => void failed.set(server, now),
+    ok: (server: string) => void failed.delete(server),
+  }
+}
+
+/** A Map that keeps at most `limit` entries, the oldest written leaving first. */
+export const createBoundedCache = <V>(limit = RENDER_CACHE_LIMIT) => {
+  const entries = new Map<string, V>()
+  return {
+    get: (key: string) => entries.get(key),
+    set: (key: string, value: V) => {
+      entries.delete(key)
+      entries.set(key, value)
+      while (entries.size > limit) entries.delete(entries.keys().next().value as string)
+    },
+    get size() {
+      return entries.size
+    },
+  }
 }
 
 /** Plain lines for the pane: tabs as two spaces, control characters dropped, each line cut. */
@@ -355,6 +540,9 @@ export const cacheKey = (real: string, size: number, mtimeMs: number): string =>
   }
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
+
+/** A private (0700) directory of its own for thumbnails, never a predictable shared name. */
+export const privateDirArgv = (tmp: string | undefined): string[] => ['mktemp', '-d', `${(tmp || '/tmp').replace(/\/+$/, '')}/pb-file-preview.XXXXXX`]
 
 export const thumbnailArgv = (kind: 'image' | 'video', real: string, out: string): string[] =>
   kind === 'video'

@@ -3,34 +3,38 @@ import type { Hook, Register } from 'claude-code'
 
 import type { PreviewView } from '../types'
 import {
-  HEAD_BYTES,
   LAUNCH_TIMEOUT_MS,
   NVIM_TIMEOUT_MS,
-  SNIFF_BYTES,
+  READ_TIMEOUT_MS,
   TEXT_PREVIEW_MAX_BYTES,
   THUMB_TIMEOUT_MS,
   absoluteOf,
   baseName,
   cacheKey,
+  checkContent,
   checkTarget,
+  createBoundedCache,
+  createFailureMemo,
   createLatest,
-  decodeBase64,
   detectPaths,
   editorArgv,
   editorCommand,
   floatExpr,
-  hasPrivateKey,
   headLines,
   isDefaultSocketName,
+  isForbiddenRoot,
   isNvim,
   isSecretName,
   isTerminalEditor,
   kindOf,
-  looksBinary,
   nvimExprArgv,
   openExpr,
+  parseReadOnce,
   pickServer,
+  privateDirArgv,
+  readOnceArgv,
   readOnlyNvimArgv,
+  socketDirs,
   splitRoots,
   supacodeTabArgv,
   thumbnailArgv,
@@ -41,7 +45,6 @@ import type { Kind, Target } from './core'
 type Api = Parameters<Hook<'ui.press'>>[0]
 
 const PANE = 'file-preview'
-const EXISTS_TTL_MS = 10_000
 
 const EMPTY: PreviewView = { id: 0, title: '', note: '', lines: [], image: '', generation: 0 }
 const view = atom({ plugin: 'project-brain-file-preview', key: 'view' } as const, EMPTY, { shape: 'view-1' })
@@ -56,7 +59,9 @@ type Env = {
   PB_PREVIEW_IMAGES?: string
   SUPACODE_SOCKET_PATH?: string
   TMPDIR?: string
+  XDG_RUNTIME_DIR?: string
   USER?: string
+  HOME?: string
 }
 
 const readEnv = async ($: Api): Promise<Env> => ({
@@ -69,9 +74,12 @@ const readEnv = async ($: Api): Promise<Env> => ({
   PB_PREVIEW_IMAGES: await $.env.get('PB_PREVIEW_IMAGES'),
   SUPACODE_SOCKET_PATH: await $.env.get('SUPACODE_SOCKET_PATH'),
   TMPDIR: await $.env.get('TMPDIR'),
+  XDG_RUNTIME_DIR: await $.env.get('XDG_RUNTIME_DIR'),
   USER: await $.env.get('USER'),
+  HOME: await $.env.get('HOME'),
 })
 
+/** `$.process.run` kills the child when `timeoutMs` passes and rejects; a rejection reads as no answer. */
 const run = async ($: Api, argv: string[], timeoutMs: number) => {
   try {
     return await $.process.run(argv, { timeoutMs })
@@ -86,9 +94,10 @@ const realDir = async ($: Api, path: string): Promise<string | undefined> => {
 }
 
 const projectDirs = async ($: Api, env: Env): Promise<string[]> => {
+  const home = env.HOME === undefined ? undefined : await realDir($, env.HOME)
   const spelled = [await $.session.cwd(), await $.session.root(), ...splitRoots(env.PB_PREVIEW_ROOTS)]
   const resolved = await Promise.all(spelled.map(path => realDir($, path)))
-  return [...new Set(resolved.filter((path): path is string => path !== undefined))]
+  return [...new Set(resolved.filter((path): path is string => path !== undefined && !isForbiddenRoot(path, home ?? env.HOME)))]
 }
 
 type Resolved = { real: string; size: number; mtimeMs: number; kind: Kind }
@@ -105,40 +114,57 @@ const resolveTarget = async ($: Api, env: Env, spelled: string): Promise<Resolve
 const tell = ($: Api, text: string) => $.ui.toast(`file preview: ${text}`)
 
 const sockets = async ($: Api, env: Env): Promise<string[]> => {
-  if (env.TMPDIR === undefined || env.USER === undefined) return []
-  const base = `${env.TMPDIR.replace(/\/+$/, '')}/nvim.${env.USER}`
-  const dirs = await $.fs.list(base).catch(() => [])
   const found: string[] = []
-  for (const dir of dirs) {
-    if (dir.kind !== 'dir') continue
-    const entries = await $.fs.list(`${base}/${dir.name}`).catch(() => [])
-    for (const entry of entries) if (isDefaultSocketName(entry.name)) found.push(`${base}/${dir.name}/${entry.name}`)
+  for (const { dir, nested } of socketDirs(env)) {
+    const entries = await $.fs.list(dir).catch(() => [])
+    if (!nested) {
+      for (const entry of entries) if (isDefaultSocketName(entry.name)) found.push(`${dir}/${entry.name}`)
+      continue
+    }
+    for (const sub of entries) {
+      if (sub.kind !== 'dir') continue
+      const inner = await $.fs.list(`${dir}/${sub.name}`).catch(() => [])
+      for (const entry of inner) if (isDefaultSocketName(entry.name)) found.push(`${dir}/${sub.name}/${entry.name}`)
+    }
   }
   return found
 }
 
-const findServer = async ($: Api, env: Env): Promise<string | undefined> =>
-  pickServer({
+const failures = createFailureMemo()
+
+const findServer = async ($: Api, env: Env): Promise<string | undefined> => {
+  const now = await $.clock.now()
+  return pickServer({
     explicit: env.PB_NVIM_SERVER,
     inherited: env.NVIM,
     sockets: await sockets($, env),
     projectDirs: await projectDirs($, env),
     cwdOf: async server => {
+      if (failures.isSkipped(server, now)) return undefined
       const answer = await run($, nvimExprArgv(server, 'getcwd()'), NVIM_TIMEOUT_MS)
-      return answer?.exitCode === 0 ? answer.stdout.trim() : undefined
+      if (answer?.exitCode !== 0) {
+        failures.fail(server, now)
+        return undefined
+      }
+      failures.ok(server)
+      return answer.stdout.trim()
     },
   })
+}
 
 const hasSupacode = (env: Env) => (env.SUPACODE_SOCKET_PATH ?? '') !== ''
 
-/** Refuses binaries and files whose first bytes hold a private key; answers the head as text otherwise. */
-const sniffText = async ($: Api, real: string): Promise<string | undefined> => {
-  const head = await $.fs.read(real, { as: 'bytes', offset: 0, length: SNIFF_BYTES }).catch(() => undefined)
-  if (head === undefined) return undefined
-  const bytes = decodeBase64(head.base64)
-  if (looksBinary(bytes)) return undefined
-  const text = new TextDecoder().decode(bytes)
-  return hasPrivateKey(text) ? undefined : text
+type Checked = { ok: true; text: string; base64: string; truncated: boolean } | { ok: false; reason: string }
+
+/** The one read of a preview's bytes; everything shown afterwards is these bytes, checked whole. */
+const readChecked = async ($: Api, real: string): Promise<Checked> => {
+  const done = await run($, readOnceArgv(real), READ_TIMEOUT_MS)
+  if (done === undefined || done.exitCode !== 0) return { ok: false, reason: 'the file could not be read (perl is needed)' }
+  const read = parseReadOnce(done.stdout)
+  if (!read.ok) return read
+  const shown = checkContent(read.bytes, bytes => new TextDecoder().decode(bytes))
+  if (!shown.ok) return shown
+  return { ok: true, text: shown.text, base64: read.base64, truncated: read.truncated || read.size > TEXT_PREVIEW_MAX_BYTES }
 }
 
 const showPane = async ($: Api, next: Omit<PreviewView, 'id'>, id: number) => {
@@ -146,12 +172,24 @@ const showPane = async ($: Api, next: Omit<PreviewView, 'id'>, id: number) => {
   await $.ui.open({ id: PANE, title: next.title })
 }
 
+let ownDir: string | undefined
+
+/** The mod's own 0700 directory from `mktemp -d`, made once per load. */
+const privateDir = async ($: Api, env: Env): Promise<string | undefined> => {
+  if (ownDir !== undefined) return ownDir
+  const made = await run($, privateDirArgv(env.TMPDIR), LAUNCH_TIMEOUT_MS)
+  const dir = made?.exitCode === 0 ? made.stdout.trim() : ''
+  if (!dir.startsWith('/') || /[\u0000-\u001f]/.test(dir)) return undefined
+  ownDir = dir
+  return dir
+}
+
 const thumbnail = async ($: Api, env: Env, target: Resolved, isCurrent: () => boolean): Promise<string | undefined> => {
-  if (target.kind === 'text' || env.TMPDIR === undefined) return undefined
-  const dir = `${env.TMPDIR.replace(/\/+$/, '')}/pb-file-preview`
+  if (target.kind === 'text') return undefined
+  const dir = await privateDir($, env)
+  if (dir === undefined) return undefined
   const out = `${dir}/${cacheKey(target.real, target.size, target.mtimeMs)}.png`
   if (await $.fs.exists(out).catch(() => false)) return out
-  await $.fs.write(`${dir}/.keep`, '').catch(() => undefined)
   if (!isCurrent()) return undefined
   const made = await run($, thumbnailArgv(target.kind, target.real, out), THUMB_TIMEOUT_MS)
   return made?.exitCode === 0 && (await $.fs.exists(out).catch(() => false)) ? out : undefined
@@ -185,27 +223,26 @@ const previewFile = async ($: Api, target: Target, surface: string): Promise<voi
       return
     }
 
-    const head = await sniffText($, found.real)
-    if (head === undefined) return tell($, 'binary or key material, not previewed')
+    const checked = await readChecked($, found.real)
+    if (!checked.ok) return tell($, `not previewed: ${checked.reason}`)
     if (!isCurrent()) return
 
-    if (found.size <= TEXT_PREVIEW_MAX_BYTES) {
-      const server = await findServer($, env)
-      if (!isCurrent()) return
-      if (server !== undefined) {
-        const shown = await run($, nvimExprArgv(server, floatExpr(found.real, target.line)), NVIM_TIMEOUT_MS)
-        if (shown?.exitCode === 0) return
-      }
-      if (hasSupacode(env)) {
-        const tab = await run($, supacodeTabArgv(title, readOnlyNvimArgv(found.real, target.line), true), LAUNCH_TIMEOUT_MS)
-        if (tab?.exitCode === 0) return
-      }
+    const server = await findServer($, env)
+    if (!isCurrent()) return
+    if (server !== undefined) {
+      const shown = await run($, nvimExprArgv(server, floatExpr(found.real, checked.base64, target.line)), NVIM_TIMEOUT_MS)
+      if (shown?.exitCode === 0) return
+    }
+    const copy = hasSupacode(env) ? await privateDir($, env) : undefined
+    if (copy !== undefined) {
+      const file = `${copy}/${cacheKey(found.real, found.size, found.mtimeMs)}-${title}`
+      const written = await $.fs.write(file, checked.text).then(() => true, () => false)
+      const tab = written ? await run($, supacodeTabArgv(title, readOnlyNvimArgv(file, target.line), true), LAUNCH_TIMEOUT_MS) : undefined
+      if (tab?.exitCode === 0) return
     }
 
-    const text = found.size <= SNIFF_BYTES ? head : await $.fs.read(found.real, { offset: 0, length: HEAD_BYTES }).catch(() => head)
-    if (!isCurrent()) return
-    const note = found.size > TEXT_PREVIEW_MAX_BYTES ? `${found.real} (over 2 MiB: the head only)` : found.real
-    return showPane($, { title, note, lines: headLines(text), image: '', generation: 0 }, id)
+    const note = checked.truncated ? `${found.real} (the head only)` : found.real
+    return showPane($, { title, note, lines: headLines(checked.text), image: '', generation: 0 }, id)
   })
 }
 
@@ -222,7 +259,7 @@ const openFile = async ($: Api, target: Target): Promise<void> => {
     const server = await findServer($, env)
     if (server !== undefined) {
       const opened = await run($, nvimExprArgv(server, openExpr(found.real, target.line)), NVIM_TIMEOUT_MS)
-      if (opened?.exitCode === 0) return tell($, `opened ${baseName(found.real)} in Neovim`)
+      if (opened?.exitCode === 0 && opened.stdout.trim() === '1') return tell($, `opened ${baseName(found.real)} in Neovim`)
     }
   }
   const argv = editorArgv(editor, found.real, target.line)
@@ -237,28 +274,16 @@ const openFile = async ($: Api, target: Target): Promise<void> => {
   if (launched?.exitCode !== 0) tell($, `${editor[0]} did not start`)
 }
 
-const existsCache = new Map<string, { at: number; ok: boolean }>()
+const detected = createBoundedCache<Target[]>()
 
-/** Keeps only paths that are files inside the roots and not secret-named, so a reply's prose does not grow dead buttons. */
-const existingTargets = async ($: Api, targets: Target[]): Promise<Target[]> => {
-  const now = await $.clock.now()
-  const cwd = await $.session.cwd()
-  const kept: Target[] = []
-  let roots: string[] | undefined
-  for (const target of targets) {
-    if (isSecretName(target.path)) continue
-    const key = `${cwd}\u0000${target.path}`
-    const cached = existsCache.get(key)
-    let ok = cached !== undefined && now - cached.at < EXISTS_TTL_MS ? cached.ok : undefined
-    if (ok === undefined) {
-      roots ??= await projectDirs($, await readEnv($))
-      const stat = await $.fs.stat(absoluteOf(target.path, cwd), { resolve: true }).catch(() => undefined)
-      ok = checkTarget({ spelled: absoluteOf(target.path, cwd), real: stat?.realPath, kind: stat?.kind, roots }).ok
-      existsCache.set(key, { at: now, ok })
-    }
-    if (ok) kept.push(target)
-  }
-  return kept
+/** Shape only: no file system at render. The press runs every check. */
+const replyTargets = (requestId: string, text: string): Target[] => {
+  const key = `${requestId}\u0000${text.length}`
+  const cached = detected.get(key)
+  if (cached !== undefined) return cached
+  const targets = detectPaths(text)
+  detected.set(key, targets)
+  return targets
 }
 
 export const register: Register = on => {
@@ -286,7 +311,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     const row = await next(e)
-    const targets = await existingTargets($, detectPaths(e.props.text))
+    const targets = replyTargets(e.requestId, e.props.text)
     if (targets.length === 0) return row
     const { Box, Text, Button } = $.ui.resolve(e)
     return (

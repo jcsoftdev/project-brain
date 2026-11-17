@@ -2181,7 +2181,8 @@ function filePreviewUnit(): SetupUnit {
     label: "File preview",
     description:
       "installs the project-brain-file-preview mod: under each Read, Edit and Write row and each reply that names files, a path to click for a preview (a floating window in the project's running Neovim, else a Supacode tab, else a pane) and an `open` that opens the file in your editor (PB_EDITOR, VISUAL, EDITOR, else nvim); " +
-      "only files inside the project and never secret-like ones (.env*, keys, credentials); untick to remove the mod",
+      "only files inside the project (never when it is your home folder or /), never secret-like names (.env*, keys, credentials, tokens, kube and docker configs) and never content that looks like a key or token. " +
+      "With the activity pane also installed, the controls show only on the tool rows the pane leaves visible; untick to remove the mod",
     defaultSelected: false,
 
     async inspect(ctx): Promise<UnitState> {
