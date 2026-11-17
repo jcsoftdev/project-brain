@@ -162,7 +162,16 @@ function installFailure(result: ReturnType<SpawnFn>, command: string, label: str
   return `\`${label}\` failed (${failureText(result, result.signal ? `killed by ${result.signal}` : `exit ${result.status}`)})`;
 }
 
-export function cloneDependencies(mainRoot: string, worktreePath: string, spawn: SpawnFn, platform: string = process.platform): DependencyOutcome {
+/** Clones a whole tree in one step, or returns false so the caller falls back to `cp`. */
+export type TreeCloner = (source: string, target: string) => boolean;
+
+export function cloneDependencies(
+  mainRoot: string,
+  worktreePath: string,
+  spawn: SpawnFn,
+  platform: string = process.platform,
+  treeClone?: TreeCloner
+): DependencyOutcome {
   const skipped = (reason: string): DependencyOutcome => ({ cloned: false, note: `node_modules not cloned: ${reason}`, folders: [] });
 
   const present = workspaceDirectories(mainRoot)
@@ -193,6 +202,10 @@ export function cloneDependencies(mainRoot: string, worktreePath: string, spawn:
   const remove = (folders: string[]) => folders.forEach((folder) => rmSync(join(worktreePath, folder), { recursive: true, force: true }));
 
   for (const folder of wanted) {
+    if (platform === "darwin" && treeClone?.(join(mainRoot, folder), join(worktreePath, folder))) {
+      created.push(folder);
+      continue;
+    }
     const command = cloneCommand(platform, join(mainRoot, folder), join(worktreePath, folder))!;
     const result = spawn(command.command, command.args, { encoding: "utf-8" });
     created.push(folder);

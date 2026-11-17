@@ -117,6 +117,26 @@ describe("cloneDependencies with a lockfile that differs", () => {
     }) as unknown as LifecycleDeps["spawn"];
   }
 
+  it("clones each folder in one step when the tree cloner succeeds, without spawning cp", () => {
+    const cloned: string[] = [];
+    const outcome = cloneDependencies(main, worktree, fakeSpawn({ status: 0 }), "darwin", (_from, to) => {
+      cloned.push(to);
+      return true;
+    });
+
+    expect(cloned).toEqual([join(worktree, "node_modules"), join(worktree, "packages", "a", "node_modules")]);
+    expect(calls.map((c) => c.command)).toEqual(["pnpm"]);
+    expect(outcome.cloned).toBe(true);
+    expect(outcome.folders).toEqual(["node_modules", "packages/a/node_modules"]);
+  });
+
+  it("falls back to cp for a folder the tree cloner refuses", () => {
+    const outcome = cloneDependencies(main, worktree, fakeSpawn({ status: 0 }), "darwin", () => false);
+
+    expect(calls.map((c) => c.command)).toEqual(["cp", "cp", "pnpm"]);
+    expect(outcome.cloned).toBe(true);
+  });
+
   it("clones every workspace node_modules, then installs on top", () => {
     const outcome = cloneDependencies(main, worktree, fakeSpawn({ status: 0 }), "darwin");
 
@@ -282,7 +302,7 @@ describe("createWorktree dependency cloning", () => {
   it("keeps today's behavior and says why when the clone command fails", async () => {
     const failingCp = ((command: string, args: string[], options: object) =>
       command === "cp" ? { status: 1, stdout: "", stderr: "not supported" } : spawnSync(command, args, options)) as unknown as LifecycleDeps["spawn"];
-    const { path, dependencies } = await createWorktree({ ...deps, spawn: failingCp }, { name: "nofs", init: async () => {} });
+    const { path, dependencies } = await createWorktree({ ...deps, spawn: failingCp, cloneTree: () => false }, { name: "nofs", init: async () => {} });
 
     if (process.platform === "darwin" || process.platform === "linux") {
       expect(dependencies.cloned).toBe(false);

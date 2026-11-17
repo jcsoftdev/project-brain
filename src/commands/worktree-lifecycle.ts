@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { SpawnFn } from "../bench/mine.js";
+import { cloneTree } from "./clonefile.js";
 import { cloneDependencies, type DependencyOutcome } from "./worktree-dependencies.js";
 import { resolveDefaultBranch, worktreeStatus, type WorktreeStatus } from "./worktree.js";
 
@@ -100,6 +101,8 @@ export interface LifecycleDeps {
   now: () => number;
   /** Drop the brain registry entry (and table) of the worktree rooted at `path`. */
   dropIndex: (path: string) => Promise<void>;
+  /** One-step tree clone for `node_modules`; absent means every folder goes through `cp`. */
+  cloneTree?: (source: string, target: string) => boolean;
 }
 
 /** `lsof -d cwd` lists every process's cwd in one call; `+D` would walk the whole tree. */
@@ -126,6 +129,7 @@ export async function defaultDeps(cwd: string = process.cwd()): Promise<Lifecycl
     cwd: realpathSync(cwd),
     holders: (p) => lsofHolders(p),
     now: Date.now,
+    cloneTree,
     dropIndex: async (path) => {
       const { pruneWorktrees } = await import("./worktree.js");
       await pruneWorktrees({ roots: [path] });
@@ -427,7 +431,7 @@ export async function createWorktree(deps: LifecycleDeps, options: CreateOptions
   const add = git(deps, repo.mainRoot, ["worktree", "add", path, "-b", branch, ...(options.base ? [options.base] : [])]);
   if (!add.ok) throw new Error(add.err || "git worktree add failed");
 
-  const dependencies = cloneDependencies(repo.mainRoot, path, deps.spawn);
+  const dependencies = cloneDependencies(repo.mainRoot, path, deps.spawn, process.platform, deps.cloneTree);
   if (dependencies.cloned) excludeLocally(deps, repo.mainRoot, dependencies.folders.map((folder) => `/${folder}/`));
 
   await options.init(safeRealpath(path));
