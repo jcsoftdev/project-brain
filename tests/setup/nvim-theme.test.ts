@@ -12,7 +12,7 @@ import {
   removeNvimTheme,
 } from "../../src/setup/nvim-theme.js";
 import { allUnits, nvimUnits, type SetupContext } from "../../src/setup/units.js";
-import { blend, themeById } from "../../src/themes/index.js";
+import { blend, themeById, uiRolesOf } from "../../src/themes/index.js";
 
 const theme = themeById("dracula");
 let dir: string;
@@ -122,6 +122,33 @@ io.write(vim.json.encode({ colors = c, hl = hl }))
     expect(colors.diff.add).toBe(blend(theme.background, theme.accents.green, 0.16));
     expect(colors.bg).toBe(theme.background);
     expect(colors.bg_highlight).toBe(blend(theme.background, theme.selection, 0.45));
+  });
+
+  it("computes the same UI roles as the TypeScript every other tool reads", async () => {
+    const { colors, hl } = await evaluate();
+    const roles = uiRolesOf(theme);
+    expect(colors.diff).toEqual({ add: roles.diff.add, delete: roles.diff.delete, change: roles.diff.change, text: roles.diff.text });
+    expect(colors.bg).toBe(roles.surface.base);
+    expect(colors.bg_float).toBe(roles.surface.float);
+    expect(colors.bg_highlight).toBe(roles.surface.line);
+    expect(colors.bg_visual).toBe(roles.surface.selection);
+    expect(colors.fg_dark).toBe(roles.text.fgDim);
+    expect(colors.fg_gutter).toBe(roles.text.gutter);
+    expect(colors.dark5).toBe(roles.text.muted);
+    expect(colors.border).toBe(roles.border.idle);
+    expect(colors.border_highlight).toBe(roles.border.focus);
+    expect(colors.git).toEqual(roles.git);
+    expect([colors.error, colors.warning, colors.info, colors.hint]).toEqual([
+      roles.status.error,
+      roles.status.warning,
+      roles.status.info,
+      roles.status.hint,
+    ]);
+    expect(hl.CursorLine.bg).toBe(roles.surface.line);
+    expect(hl.DiffText.bg).toBe(roles.diff.text);
+    expect(hl.DiffTextAdd.bg).toBe(roles.diff.textAdd);
+    expect(hl.GitSignsDeleteInline.bg).toBe(roles.diff.textDelete);
+    expect(hl.DiffDelete).toEqual({ bg: roles.diff.delete, fg: roles.diff.deleteFiller });
   });
 
   it("paints code the way the theme does: pink keywords, green functions, yellow strings, purple numbers", async () => {

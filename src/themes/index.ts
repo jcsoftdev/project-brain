@@ -3,6 +3,7 @@ import type { ThemeDefinition } from "./types.js";
 
 export type { ThemeDefinition } from "./types.js";
 export { blend, lighten } from "./color.js";
+export { uiRolesOf, type UiRoles } from "./roles.js";
 
 /** Every theme setup can paint. A new theme is one more entry here. */
 export const THEMES: readonly ThemeDefinition[] = [DRACULA];

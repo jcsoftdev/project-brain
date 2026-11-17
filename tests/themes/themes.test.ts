@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { blend, lighten, THEMES, themeById } from "../../src/themes/index.js";
+import { blend, lighten, THEMES, themeById, uiRolesOf } from "../../src/themes/index.js";
 import { claudeCodeThemeOf, claudeCodeThemeRef } from "../../src/themes/claude-code.js";
 
 const HEX = /^#[0-9a-f]{6}$/;
@@ -42,11 +42,14 @@ describe.each(THEMES.map((theme) => [theme.id, theme] as const))("Claude Code th
     for (const [token, value] of Object.entries(overrides)) expect(value, token).toMatch(HEX);
   });
 
-  it("themes the /diff view: rows are the accent mixed into the background, words a stronger mix", () => {
-    expect(overrides.diffAdded).toBe(blend(theme.background, theme.accents.green, 0.2));
-    expect(overrides.diffRemoved).toBe(blend(theme.background, theme.accents.red, 0.2));
-    expect(overrides.diffAddedWord).toBe(blend(theme.background, theme.accents.green, 0.38));
-    expect(overrides.diffRemovedWord).toBe(blend(theme.background, theme.accents.red, 0.38));
+  it("themes the /diff view with the same mix Neovim paints its diffs with", () => {
+    const { diff } = uiRolesOf(theme);
+    expect(overrides.diffAdded).toBe(diff.add);
+    expect(overrides.diffRemoved).toBe(diff.delete);
+    expect(overrides.diffAddedDimmed).toBe(diff.addDim);
+    expect(overrides.diffRemovedDimmed).toBe(diff.deleteDim);
+    expect(overrides.diffAddedWord).toBe(diff.textAdd);
+    expect(overrides.diffRemovedWord).toBe(diff.textDelete);
     expect(overrides.diffAddedDimmed).not.toBe(overrides.diffAdded);
   });
 

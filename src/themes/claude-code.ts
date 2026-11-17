@@ -1,4 +1,5 @@
 import { blend, lighten } from "./color.js";
+import { uiRolesOf } from "./roles.js";
 import type { ThemeDefinition } from "./types.js";
 
 /** What a Claude Code custom theme file holds: a name, the built-in theme it starts from, and the tokens it changes. */
@@ -14,12 +15,12 @@ export const claudeCodeThemeRef = (theme: ThemeDefinition): string => `custom:${
 
 /**
  * Claude Code's UI tokens for a theme: the chat, the prompt, permissions and the /diff view, which the engine draws
- * with these and not with anything a plugin can paint. Diff rows are the accent mixed into the background, so they stay
- * readable on a translucent terminal; the word-level highlight is a stronger mix of the same accent.
+ * with these and not with anything a plugin can paint. The /diff rows and changed words are the same mix Neovim paints
+ * its diffs with (`uiRolesOf`), so a diff reads the same in both.
  */
 export function claudeCodeThemeOf(theme: ThemeDefinition): ClaudeCodeTheme {
   const { background: bg, foreground: fg, selection, comment, accents: a } = theme;
-  const tint = (accent: string, share: number) => blend(bg, accent, share);
+  const { surface, text, diff } = uiRolesOf(theme);
   const raised = (share: number) => blend(bg, selection, share);
   return {
     name: `Project Brain · ${theme.label}`,
@@ -27,11 +28,11 @@ export function claudeCodeThemeOf(theme: ThemeDefinition): ClaudeCodeTheme {
     overrides: {
       claude: a.pink,
       claudeShimmer: lighten(a.pink),
-      text: fg,
+      text: text.fg,
       inverseText: bg,
-      inactive: blend(comment, fg, 0.35),
+      inactive: text.muted,
       inactiveShimmer: blend(comment, fg, 0.55),
-      subtle: comment,
+      subtle: text.comment,
       suggestion: a.cyan,
       permission: a.purple,
       permissionShimmer: lighten(a.purple),
@@ -54,19 +55,19 @@ export function claudeCodeThemeOf(theme: ThemeDefinition): ClaudeCodeTheme {
       fastModeShimmer: lighten(a.orange),
       effortUltra: a.purple,
 
-      diffAdded: tint(a.green, 0.2),
-      diffRemoved: tint(a.red, 0.2),
-      diffAddedDimmed: tint(a.green, 0.12),
-      diffRemovedDimmed: tint(a.red, 0.12),
-      diffAddedWord: tint(a.green, 0.38),
-      diffRemovedWord: tint(a.red, 0.38),
+      diffAdded: diff.add,
+      diffRemoved: diff.delete,
+      diffAddedDimmed: diff.addDim,
+      diffRemovedDimmed: diff.deleteDim,
+      diffAddedWord: diff.textAdd,
+      diffRemovedWord: diff.textDelete,
 
       userMessageBackground: raised(0.55),
       userMessageBackgroundHover: raised(0.8),
       bashMessageBackgroundColor: raised(0.35),
       memoryBackgroundColor: raised(0.55),
-      selectionBg: selection,
-      composerSidebarBackground: bg,
+      selectionBg: surface.selection,
+      composerSidebarBackground: surface.base,
 
       briefLabelYou: a.cyan,
       briefLabelClaude: a.pink,
