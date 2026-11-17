@@ -33,6 +33,7 @@ import type {
   CommitRecord,
   ContextUsage,
   StepContext,
+  SessionIdentityLine,
   Decision,
   DiffPatch,
   DiffRow,
@@ -142,21 +143,21 @@ const branch = atom({ plugin: 'project-brain-activity', key: 'branch' } as const
 const autoOpen = atom({ plugin: 'project-brain-activity', key: 'autoOpen' } as const, true, { shape: 'auto-open-1' })
 const editor = atom({ plugin: 'project-brain-activity', key: 'editor' } as const, { dir: '', tab: '' } as EditorState, { shape: 'editor-1' })
 const accentColor = atom({ plugin: 'project-brain-activity', key: 'accent' } as const, 'claude' as string, { shape: 'accent-1' })
+const mainModel = atom({ plugin: 'project-brain-activity', key: 'mainModel' } as const, '' as string, { shape: 'main-model-1' })
+const identity = atom({ plugin: 'project-brain-activity', key: 'identity' } as const, { account: '', sessionId: '', folder: '' } as SessionIdentityLine, { shape: 'identity-1' })
 
-/** Claude Code's session colours (/color) as their Dracula counterparts; 'default' and unknown names keep the claude tone. */
+/** Claude Code's session colours (/color) as the active theme's agent colours; 'default' and unknown names keep the claude tone. */
 const SESSION_COLORS: Record<string, string> = {
-  red: '#FF5555', blue: '#6272A4', green: '#50FA7B', yellow: '#F1FA8C',
-  purple: '#BD93F9', orange: '#FFB86C', pink: '#FF79C6', cyan: '#8BE9FD',
+  red: 'red_FOR_SUBAGENTS_ONLY', blue: 'blue_FOR_SUBAGENTS_ONLY', green: 'green_FOR_SUBAGENTS_ONLY', yellow: 'yellow_FOR_SUBAGENTS_ONLY',
+  purple: 'purple_FOR_SUBAGENTS_ONLY', orange: 'orange_FOR_SUBAGENTS_ONLY', pink: 'pink_FOR_SUBAGENTS_ONLY', cyan: 'cyan_FOR_SUBAGENTS_ONLY',
 }
 
-/** The pane's palette (Dracula): each tone the rows name, painted as the owner's chosen hex. */
+/** The pane's palette: each tone the rows name, as the active Claude Code theme's colour, so the pane matches the chat. */
 export const PALETTE: Record<Tone, string> = {
-  success: '#50FA7B', error: '#FF5555', warning: '#FFB86C', subtle: '#6272A4', permission: '#BD93F9',
-  claude: '#FF79C6', suggestion: '#8BE9FD', diffAdded: '#50FA7B', diffRemoved: '#FF5555',
+  success: 'success', error: 'error', warning: 'warning', subtle: 'subtle', permission: 'permission',
+  claude: 'claude', suggestion: 'suggestion', diffAdded: 'success', diffRemoved: 'error',
 }
-const COMMENT = '#6272A4'
-/** The pane's own background, darker than the terminal's so the palette stands out. */
-export const PANE_BG = '#181320'
+const COMMENT = 'subtle'
 
 /** A span's colour as the surface draws it: palette tones become hex, a dim span without colour takes the comment grey. */
 export const paint = (one: Pick<Span, 'color' | 'dim'>): { color?: string; dimColor?: boolean } => {
@@ -194,6 +195,30 @@ const refreshAccent = async ($: Api): Promise<void> => {
   if (wasScanned && !found.stdout.includes('"agentColor":"')) return
   const next = accentOf(found.stdout)
   if (next !== (await read($, accentColor))) await update($, accentColor, () => next)
+}
+
+/** Who this session runs as: the login's email, else `API · <host>` from ANTHROPIC_BASE_URL, else nothing. */
+export const accountOf = (config: string, baseUrl: string): string => {
+  try {
+    const email = (JSON.parse(config) as { oauthAccount?: { emailAddress?: unknown } }).oauthAccount?.emailAddress
+    if (typeof email === 'string' && email !== '') return email
+  } catch {}
+  if (baseUrl === '') return ''
+  try { return `API · ${new URL(baseUrl).host}` } catch { return 'API' }
+}
+
+/** `~/x/y` for a folder under HOME, the path otherwise. */
+export const folderOf = (root: string, home: string): string => (home !== '' && (root === home || root.startsWith(`${home}/`)) ? `~${root.slice(home.length)}` : root)
+
+const env = async ($: Api, name: string): Promise<string> =>
+  $.process.run(['/usr/bin/printenv', name]).then(out => out.stdout.trim()).catch(() => '')
+
+/** Reads the account, session id and folder once per session; the global config lives in CLAUDE_CONFIG_DIR, else in HOME. */
+const refreshIdentity = async ($: Api): Promise<void> => {
+  const [sessionId, root, home, configDir, baseUrl] = await Promise.all([$.session.id(), $.session.root(), env($, 'HOME'), env($, 'CLAUDE_CONFIG_DIR'), env($, 'ANTHROPIC_BASE_URL')])
+  const configPath = configDir !== '' ? `${configDir}/.claude.json` : `${home}/.claude.json`
+  const config = home === '' && configDir === '' ? '' : await $.fs.read(configPath).catch(() => '')
+  await update($, identity, () => ({ account: accountOf(config, baseUrl), sessionId, folder: folderOf(root, home) }))
 }
 
 const sessionStart = atom({ plugin: 'project-brain-activity', key: 'sessionStart' } as const, 0, { shape: 'session-start-1' })
@@ -987,6 +1012,13 @@ export const defaultAgent = (records: AgentRecord[], picked: string): string => 
   return running[0]?.id ?? MAIN
 }
 
+/** A model id as people say it: `claude-opus-5-5[1m]` → `opus 5.5`; anything else, trimmed. */
+export const modelLabel = (id: string): string => {
+  const bare = id.trim().toLowerCase().replace(/\[[^\]]*\]$/, '').replace(/^claude-/, '').replace(/-\d{8}$/, '')
+  const named = /^([a-z]+)-(\d+)(?:-(\d+))?$/.exec(bare)
+  return named ? `${named[1]} ${named[2]}${named[3] ? `.${named[3]}` : ''}` : bare
+}
+
 export const mergeAgent = (list: AgentRecord[], record: AgentRecord): AgentRecord[] => {
   const known = list.find(one => one.id === record.id)
   const merged = known ? { ...known, ...record, startedAt: known.startedAt, description: record.description || known.description } : record
@@ -1069,6 +1101,8 @@ export type Snapshot = {
   usd: number
   context: ContextUsage
   steps: Record<string, StepContext>
+  mainModel: string
+  who: SessionIdentityLine
   accent: string
   opened: string[]
   patches: Record<string, DiffPatch>
@@ -1182,6 +1216,9 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
   const { list, flipped, opened, patches, records } = snap
   const accent = snap.accent
   const scope = defaultAgent(records, snap.picked)
+  const modelOf = (id: string): string =>
+    modelLabel(snap.steps[id]?.model ?? (id === MAIN ? snap.mainModel : records.find(one => one.id === id)?.model) ?? '')
+  const mainLabel = modelOf(MAIN)
   const current: Tab = snap.tabByAgent[scope] ?? 'summary'
   const cambios = cambiosScopeOf(snap, scope)
   const agent = records.find(one => one.id === scope)
@@ -1515,16 +1552,19 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
   })
 
   const header: Row[] = [{ key: 'title', cells: [{ spans: [span('ACTIVIDAD', { bold: true })] }], right: [status ? [status] : [], headerRunning(snap.running), headerBlocked(snap.blocked, snap.running.now)].filter(one => one.length > 0).flatMap((one, index) => (index === 0 ? one : [span('  '), ...one])) }]
+  if (snap.who.account !== '') header.push(line('account', snap.who.account, { color: 'success', bold: true }))
+  const facts = [mainLabel, snap.who.sessionId.slice(0, 8), snap.who.folder].filter(one => one !== '')
+  if (facts.length > 0) header.push(line('session-facts', facts.join(' · '), { dim: true }))
   if (records.length > 0) {
     header.push({
       key: 'agents',
-      cells: agentChipsGrouped({ records, scope, expanded: snap.agentsPart.expanded, width }),
+      cells: agentChipsGrouped({ records, scope, expanded: snap.agentsPart.expanded, width, modelOf }),
     })
   }
   if (agent) {
     const look = AGENT_LOOK[agent.state]
     header.push(
-      { key: 'agent-head', cells: [{ spans: [span(`${ICONS.agent} ${shortName(agent)}`, { color: accent, bold: true }), span(` · ${agent.id.slice(0, 4)} · `, { dim: true }), span(look.label, { color: look.color })] }] },
+      { key: 'agent-head', cells: [{ spans: [span(`${ICONS.agent} ${shortName(agent)}`, { color: accent, bold: true }), span(` · ${agent.id.slice(0, 4)} · `, { dim: true }), span(look.label, { color: look.color }), ...(modelOf(agent.id) ? [span(` · ${modelOf(agent.id)}`, { dim: true })] : [])] }] },
       line('agent-task', agent.description, { dim: true }),
       ...rowsAgentReport(agent, snap.agentsPart.reports[agent.id], width),
     )
@@ -1633,7 +1673,8 @@ const readSnapshot = async ($: Api): Promise<Snapshot> => {
     read($, history), read($, historyFiles), read($, accentColor),
     readAgents($), readCi($), readContext($), readProgress($), readRunning($), readBlocked($), readSavings($),
   ])
-  return { accent, list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view, historyView, historyFiles: historyFilesBySha, agentsPart, ci, contextPart, progress, running, blocked, savings }
+  const [model, who] = await Promise.all([read($, mainModel), read($, identity)])
+  return { mainModel: model, who, accent, list, tabByAgent, flipped, files, usd, context, steps, opened, patches, records, picked, isWorking, commitList, scopeByAgent, branchView, view, historyView, historyFiles: historyFilesBySha, agentsPart, ci, contextPart, progress, running, blocked, savings }
 }
 
 /** Fills in the line counts and files of up to ten commits that have none yet. */
@@ -1705,6 +1746,12 @@ async function mainSessionStart($: Api, e: Parameters<Hook<'session.start'>>[1],
   await update($, sessionStart, () => sessionStartOf(stored, now, list, known))
   scheduleRescan($ as Api)
   void refreshAccent($ as Api).catch(() => undefined)
+  void $.session.model().then(model => update($, mainModel, () => model)).catch(() => undefined)
+  void refreshIdentity($ as Api).catch(() => undefined)
+  if (!autoOpenSent && (await read($, autoOpen))) {
+    autoOpenSent = true
+    void $.ui.open(PANE_ARGS).then(opened => (opened?.isPlaced === false ? undefined : paneOpened($ as Api))).catch(() => undefined)
+  }
   return next(e)
 }
 
@@ -1912,6 +1959,7 @@ export const register: Register = on => {
         state: 'running',
         startedAt: await $.clock.now(),
       }
+      if (spawned.model) record.model = spawned.model
       await update($, agents, list => mergeAgent(list, record))
     }
     return spawned
@@ -2091,7 +2139,7 @@ export const register: Register = on => {
 
     const spansOf = (spans: Span[]) =>
       spans.map(one => (
-        <Text {...paint(one)} backgroundColor={one.inverse ? undefined : PANE_BG} bold={one.bold} inverse={one.inverse}>{one.text}</Text>
+        <Text {...paint(one)} bold={one.bold} inverse={one.inverse}>{one.text}</Text>
       ))
     const cellOf = (rowKey: string, cell: Cell, index: number) => {
       const action = cell.action
@@ -2120,7 +2168,7 @@ export const register: Register = on => {
       )
     }
 
-    return <Box flexDirection="column" width={width} height={Math.max(1, e.props.scroll.bodyRows)} backgroundColor={PANE_BG}>{frame.rows.map(row => rowOf(clampRow(row, width)))}</Box>
+    return <Box flexDirection="column" width={width} height={Math.max(1, e.props.scroll.bodyRows)}>{frame.rows.map(row => rowOf(clampRow(row, width)))}</Box>
   })
   on('session.start', async ($, e, next) => {
     const once = onceNext(next as never)
