@@ -93,7 +93,7 @@ export interface SetupContext {
 export interface SetupUnit {
   /** Stable across releases — it is persisted in the selection file. */
   id: string;
-  group: "Hosts" | "Guidance" | "Skills" | "Claude TUI" | "Other";
+  group: "Hosts" | "Guidance" | "Skills" | "Claude TUI" | "Neovim" | "Other";
   label: string;
   /** One line, shown beside the checkbox. */
   description: string;
@@ -1617,7 +1617,7 @@ async function chromeDevtoolsEntries(ctx: SetupContext): Promise<Array<[string, 
  * Code's.
  */
 export function allUnits(ctx: SetupContext): SetupUnit[] {
-  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...claudeTuiUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit(), mcpPruneJevUnit()];
+  return [...hostUnits(ctx.installed), routingSkillUnit(), ...guidanceUnits(), ...skillUnits(), ...claudeTuiUnits(), ...nvimUnits(), ...otherUnits(), ...featureUnits(), contextSlimUnit(), mcpPruneUnit(), mcpPruneJevUnit()];
 }
 
 
@@ -1964,6 +1964,47 @@ const ghosttyConfigOf = async (ctx: SetupContext) => {
   return ghosttyConfigPath(dirname(dirname(ctx.claudeSettingsPath)));
 };
 
+/** The Neovim setup: the colour theme now; options, keymaps, languages and tools as their own units. */
+export function nvimUnits(): SetupUnit[] {
+  return [nvimThemeUnit()];
+}
+
+/** The Neovim config the theme files go into: $XDG_CONFIG_HOME/nvim, else ~/.config/nvim. */
+const nvimConfigDirOf = async (ctx: SetupContext) => {
+  const { nvimConfigDir } = await import("./nvim-theme.js");
+  return nvimConfigDir(dirname(dirname(ctx.claudeSettingsPath)));
+};
+
+function nvimThemeUnit(): SetupUnit {
+  return {
+    id: "nvim:theme",
+    group: "Neovim",
+    label: "Neovim colour theme",
+    description:
+      "writes three files into your Neovim config (lua/project-brain/palette.lua, lua/project-brain/highlights.lua, lua/plugins/project-brain-theme.lua): the active theme's palette on tokyonight, with Dracula's syntax roles and diffs that read as green added, red removed and a stronger tint on changed words; " +
+      "needs LazyVim; untick to delete those files (a file of yours at one of those paths is never touched)",
+    defaultSelected: false,
+
+    async inspect(ctx): Promise<UnitState> {
+      const { nvimThemeState } = await import("./nvim-theme.js");
+      const { themeById } = await import("../themes/index.js");
+      return nvimThemeState(await nvimConfigDirOf(ctx), themeById());
+    },
+
+    async apply(ctx): Promise<void> {
+      const { applyNvimTheme } = await import("./nvim-theme.js");
+      const { themeById } = await import("../themes/index.js");
+      await applyNvimTheme(await nvimConfigDirOf(ctx), themeById());
+    },
+
+    async remove(ctx): Promise<void> {
+      const { removeNvimTheme } = await import("./nvim-theme.js");
+      const { themeById } = await import("../themes/index.js");
+      await removeNvimTheme(await nvimConfigDirOf(ctx), themeById());
+    },
+  };
+}
+
 function claudeThemeUnit(): SetupUnit {
   return {
     id: "tui:claude-theme",
@@ -1977,7 +2018,7 @@ function claudeThemeUnit(): SetupUnit {
     async inspect(ctx): Promise<UnitState> {
       const { claudeThemeState } = await import("./claude-theme.js");
       const { themeById } = await import("../themes/index.js");
-      return claudeThemeState(ctx.claudeSettingsPath, themeById());
+      return claudeThemeState(ctx.claudeSettingsPath, ctx.dataDir, themeById());
     },
 
     async apply(ctx): Promise<void> {

@@ -122,6 +122,7 @@ All three are written to `~/.project-brain/claude-plugins/` and registered in `~
 | Readable replies | Marked block in `~/.claude/CLAUDE.md`: result first, evidence last | `~/.claude/CLAUDE.md` | `tui:readable-replies` | Untick (deletes only the block) | on |
 | Terminal theme | Marked block at the end of the Ghostty config: the active theme's colours, opacity 0.88, blur 20, translucent cells | `~/Library/Application Support/com.mitchellh.ghostty/config.ghostty` (or `~/.config/ghostty/`) | `tui:terminal-theme` | Untick (deletes only the block) | off |
 | Claude Code theme | Custom theme file generated from the same theme definition (`src/themes`): chat, prompt, permissions and the `/diff` view | `~/.claude/themes/project-brain-<theme>.json`, `theme` in `~/.claude/settings.json` | `tui:claude-theme` | Untick (deletes the file, restores the previous `theme`) | off |
+| Neovim colour theme | Three managed files generated from the same theme definition: palette, highlights (syntax roles and readable diffs) and a lazy.nvim spec | `~/.config/nvim/lua/project-brain/*.lua`, `lua/plugins/project-brain-theme.lua` | `nvim:theme` | Untick (deletes those files only) | off |
 
 ### Delegation
 

@@ -175,10 +175,11 @@ const GROUP_BLURBS: Record<string, string> = {
   Guidance: "rules and hooks written into those tools",
   Skills: "skills installed for every detected tool",
   "Claude TUI": "Claude Code's terminal: the activity pane (in the fullscreen renderer) and readable replies",
+  Neovim: "Your Neovim config (LazyVim): colour theme and, as separate units, the rest of the setup",
   Other: "machine-wide extras",
 };
 
-const GROUP_ORDER = ["Hosts", "Guidance", "Skills", "Claude TUI", "Other"];
+const GROUP_ORDER = ["Hosts", "Guidance", "Skills", "Claude TUI", "Neovim", "Other"];
 
 /**
  * Split the inspected rows into one section per group, in a stable order.

@@ -1,0 +1,137 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+  NVIM_THEME_MARKER,
+  applyNvimTheme,
+  nvimConfigDir,
+  nvimThemeFiles,
+  nvimThemeState,
+  removeNvimTheme,
+} from "../../src/setup/nvim-theme.js";
+import { allUnits, nvimUnits, type SetupContext } from "../../src/setup/units.js";
+import { blend, themeById } from "../../src/themes/index.js";
+
+const theme = themeById("dracula");
+let dir: string;
+let config: string;
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), "pb-nvim-theme-"));
+  config = join(dir, ".config", "nvim");
+});
+afterEach(() => rm(dir, { recursive: true, force: true }));
+
+describe("Neovim theme files", () => {
+  it("writes the palette, the highlights and the spec, each starting with the marker", async () => {
+    expect(await nvimThemeState(config, theme)).toBe("absent");
+    await applyNvimTheme(config, theme);
+    expect(await nvimThemeState(config, theme)).toBe("current");
+    for (const rel of Object.keys(nvimThemeFiles(theme))) {
+      expect((await readFile(join(config, rel), "utf8")).startsWith(NVIM_THEME_MARKER)).toBe(true);
+    }
+    const palette = await readFile(join(config, "lua/project-brain/palette.lua"), "utf8");
+    expect(palette).toContain('background = "#17141d"');
+    expect(palette).toContain('pink = "#ff79c6"');
+  });
+
+  it("calls an edited file stale and puts it back on apply", async () => {
+    await applyNvimTheme(config, theme);
+    await writeFile(join(config, "lua/project-brain/palette.lua"), `${NVIM_THEME_MARKER}\nreturn {}\n`);
+    expect(await nvimThemeState(config, theme)).toBe("stale");
+    await applyNvimTheme(config, theme);
+    expect(await nvimThemeState(config, theme)).toBe("current");
+  });
+
+  it("never touches a file of the user's at one of its paths", async () => {
+    const mine = join(config, "lua/plugins/project-brain-theme.lua");
+    await mkdir(dirname(mine), { recursive: true });
+    await writeFile(mine, "return { -- mine\n}\n");
+    expect(await nvimThemeState(config, theme)).toBe("foreign");
+    await applyNvimTheme(config, theme);
+    await removeNvimTheme(config, theme);
+    expect(await readFile(mine, "utf8")).toBe("return { -- mine\n}\n");
+    expect(existsSync(join(config, "lua/project-brain/palette.lua"))).toBe(false);
+  });
+
+  it("removes only its own files, and the directory it made", async () => {
+    await mkdir(join(config, "lua/plugins"), { recursive: true });
+    await writeFile(join(config, "lua/plugins/colorscheme.lua"), "return {}\n");
+    await applyNvimTheme(config, theme);
+    await removeNvimTheme(config, theme);
+    expect(await readdir(join(config, "lua/plugins"))).toEqual(["colorscheme.lua"]);
+    expect(existsSync(join(config, "lua/project-brain"))).toBe(false);
+  });
+
+  it("finds the config under XDG_CONFIG_HOME when it is absolute, else under ~/.config", () => {
+    expect(nvimConfigDir("/h", "/x")).toBe("/x/nvim");
+    expect(nvimConfigDir("/h", undefined)).toBe("/h/.config/nvim");
+    expect(nvimConfigDir("/h", "relative")).toBe("/h/.config/nvim");
+  });
+
+  it("is its own group, off by default", () => {
+    const unit = nvimUnits()[0]!;
+    expect(unit.id).toBe("nvim:theme");
+    expect(unit.group).toBe("Neovim");
+    expect(unit.defaultSelected).toBe(false);
+    expect(unit.description).toContain("untick");
+    const ctx = { dataDir: "/tmp/x", installed: [], claudeSettingsPath: "/tmp/x/.claude/settings.json", routingConfigPath: "/tmp/none.json" } as unknown as SetupContext;
+    expect(allUnits(ctx).some((one) => one.id === "nvim:theme")).toBe(true);
+  });
+});
+
+const NVIM = Bun.which("nvim");
+
+describe.skipIf(!NVIM)("Neovim highlights, evaluated by Neovim itself", () => {
+  const evaluate = async () => {
+    await applyNvimTheme(config, theme);
+    const probe = join(dir, "probe.lua");
+    await writeFile(
+      probe,
+      `package.path = ${JSON.stringify(join(config, "lua"))} .. "/?.lua;" .. package.path
+local p = require("project-brain.palette")
+local h = require("project-brain.highlights")
+local c = { git = {}, gitSigns = {}, diff = {} }
+h.colors(c, p)
+local hl = {}
+h.groups(hl, c, p)
+io.write(vim.json.encode({ colors = c, hl = hl }))
+`
+    );
+    const out = Bun.spawnSync([NVIM!, "--headless", "-u", "NONE", "-l", probe], { stdout: "pipe", stderr: "pipe" });
+    expect(out.stderr.toString()).toBe("");
+    return JSON.parse(out.stdout.toString()) as { colors: Record<string, any>; hl: Record<string, any> };
+  };
+
+  it("paints a diff that reads as green added, red removed, and a stronger tint on changed words", async () => {
+    const { hl } = await evaluate();
+    const bg = theme.background;
+    expect(hl.DiffAdd.bg).toBe(blend(bg, theme.accents.green, 0.16));
+    expect(hl.DiffDelete.bg).toBe(blend(bg, theme.accents.red, 0.16));
+    expect(hl.DiffChange.bg).toBe(blend(bg, theme.accents.cyan, 0.07));
+    expect(hl.DiffText.bg).toBe(blend(bg, theme.accents.orange, 0.32));
+    expect(hl.DiffText.bold).toBe(true);
+    expect(hl.DiffTextAdd.bg).toBe(blend(bg, theme.accents.green, 0.34));
+    // The deleted-line filler (the hatch) is a quiet red, not a loud one.
+    expect(hl.DiffDelete.fg).toBe(blend(theme.accents.red, bg, 0.5));
+  });
+
+  it("agrees with the TypeScript blend, so the Lua and the registry cannot drift", async () => {
+    const { colors } = await evaluate();
+    expect(colors.diff.add).toBe(blend(theme.background, theme.accents.green, 0.16));
+    expect(colors.bg).toBe(theme.background);
+    expect(colors.bg_highlight).toBe(blend(theme.background, theme.selection, 0.45));
+  });
+
+  it("paints code the way the theme does: pink keywords, green functions, yellow strings, purple numbers", async () => {
+    const { hl } = await evaluate();
+    expect(hl["@keyword"].fg).toBe(theme.accents.pink);
+    expect(hl["@function.call"].fg).toBe(theme.accents.green);
+    expect(hl["@string"].fg).toBe(theme.accents.yellow);
+    expect(hl["@number"].fg).toBe(theme.accents.purple);
+    expect(hl["@type"].fg).toBe(theme.accents.cyan);
+    expect(hl["@variable.parameter"]).toEqual({ fg: theme.accents.orange, italic: true });
+    expect(hl.Comment).toEqual({ fg: theme.comment, italic: true });
+  });
+});
