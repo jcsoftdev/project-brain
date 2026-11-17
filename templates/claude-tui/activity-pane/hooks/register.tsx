@@ -269,7 +269,16 @@ const lastLines = (raw: string | undefined, count: number): string =>
 
 export const dollars = (usd: number): string => `~$${usd < 10 ? usd.toFixed(2) : usd.toFixed(1)}`
 
-export const seconds = (ms: number | undefined): string => (ms === undefined ? '' : `${(ms / 1000).toFixed(1)} s`)
+/** A duration as people read it: `4.2 s` under a minute, `3 min 05 s` under an hour, `2 h 21 min` beyond. */
+export const seconds = (ms: number | undefined): string => {
+  if (ms === undefined) return ''
+  const total = Math.max(0, ms) / 1000
+  if (total < 60) return `${total.toFixed(1)} s`
+  const whole = Math.round(total)
+  if (whole < 3600) return `${Math.floor(whole / 60)} min ${String(whole % 60).padStart(2, '0')} s`
+  const minutes = Math.round(whole / 60)
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`
+}
 
 export const fit = (value: string, width: number): string => {
   const room = Math.max(1, width)
@@ -294,6 +303,13 @@ export const compact = (count: number): string => {
   return `${trimmed(count / 1_000_000)}M`
 }
 
+/**
+ * The main loop's fill against the window that triggers compaction, when the breakdown measured it:
+ * on a 1M model that compacts near 367k, 28 % of 1M is really 70 % of the room left before compacting.
+ */
+export const againstCompaction = (usage: ContextUsage, compactionWindow: number): ContextUsage =>
+  usage.tokens === undefined || compactionWindow <= 0 || compactionWindow >= usage.window ? usage : { tokens: usage.tokens, window: compactionWindow }
+
 export const contextPercentOf = (usage: ContextUsage): number | undefined =>
   usage.tokens === undefined || usage.window <= 0 ? undefined : (usage.percent ?? (usage.tokens / usage.window) * 100)
 
@@ -308,8 +324,8 @@ export const contextLabel = (usage: ContextUsage): string => {
  * The context of the selected loop: the session's own figures for the main loop; for a subagent, its last
  * model request (input + cache written + cache read) over the main window when it runs the same model.
  */
-export const scopedContext = (snap: Pick<Snapshot, 'context' | 'steps'>, scope: string): ContextUsage => {
-  if (scope === MAIN) return snap.context
+export const scopedContext = (snap: Pick<Snapshot, 'context' | 'steps'> & { contextPart?: Pick<ContextPart, 'breakdown'> }, scope: string): ContextUsage => {
+  if (scope === MAIN) return againstCompaction(snap.context, snap.contextPart?.breakdown.window ?? 0)
   const own = snap.steps[scope]
   if (own === undefined) return { window: snap.context.window }
   const sameModel = snap.steps[MAIN] !== undefined && snap.steps[MAIN].model === own.model
@@ -1517,8 +1533,8 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
             ]),
       ),
       ...section(`history-${scope}`, `${ICONS.log} ${scope === MAIN ? 'Historial de comandos' : 'Historial de este agente'} · ${commands.length}`, false, historyRows),
-      ...section(`context-${scope}`, `${ICONS.brain} Contexto consultado`, false, () => [
-        contextRow('ctx-usage', '  '),
+      ...section(`context-${scope}`, `${ICONS.brain} Archivos consultados · ${readFiles.length}`, false, () => [
+        ...(readFiles.length === 0 ? [line('ctx-none', '  Ninguno todavía.', { dim: true })] : []),
         ...readFiles.slice(0, 30).map(path => line(`ctx-${path}`, `  ${fileIcon(path)} ${path}`)),
       ]),
     ]
@@ -1551,8 +1567,7 @@ export const buildPane = (snap: Snapshot, width: number): PaneModel => {
     spans: [span(` ${label}${look ? ' ' : ' '}`, { inverse: isOn, bold: isOn }), ...(look ? [span(`${look.icon} `, { color: look.color, inverse: isOn })] : []), span(' ')],
   })
 
-  const header: Row[] = [{ key: 'title', cells: [{ spans: [span('ACTIVIDAD', { bold: true })] }], right: [status ? [status] : [], headerRunning(snap.running), headerBlocked(snap.blocked, snap.running.now)].filter(one => one.length > 0).flatMap((one, index) => (index === 0 ? one : [span('  '), ...one])) }]
-  if (snap.who.account !== '') header.push(line('account', snap.who.account, { color: 'success', bold: true }))
+  const header: Row[] = [{ key: 'title', cells: [{ spans: [snap.who.account !== '' ? span(fit(snap.who.account, Math.max(8, width - 24)), { color: 'success', bold: true }) : span('ACTIVIDAD', { bold: true })] }], right: [status ? [status] : [], headerRunning(snap.running), headerBlocked(snap.blocked, snap.running.now)].filter(one => one.length > 0).flatMap((one, index) => (index === 0 ? one : [span('  '), ...one])) }]
   const facts = [mainLabel, snap.who.sessionId.slice(0, 8), snap.who.folder].filter(one => one !== '')
   if (facts.length > 0) header.push(line('session-facts', facts.join(' · '), { dim: true }))
   if (records.length > 0) {

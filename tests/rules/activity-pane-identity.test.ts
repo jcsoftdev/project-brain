@@ -5,6 +5,8 @@ interface PaneModule {
   modelLabel(id: string): string;
   accountOf(config: string, baseUrl: string): string;
   folderOf(root: string, home: string): string;
+  seconds(ms: number | undefined): string;
+  againstCompaction(usage: { tokens?: number; window: number; percent?: number }, compactionWindow: number): { tokens?: number; window: number; percent?: number };
 }
 
 const MOD_PATH = join(import.meta.dir, "../../templates/claude-tui/activity-pane/hooks/register.tsx");
@@ -55,5 +57,31 @@ describe("activity pane account line", () => {
     expect(pane.folderOf("/Users/dev/code/app", "/Users/dev")).toBe("~/code/app");
     expect(pane.folderOf("/Users/devx/app", "/Users/dev")).toBe("/Users/devx/app");
     expect(pane.folderOf("/srv/app", "")).toBe("/srv/app");
+  });
+});
+
+describe("activity pane durations", () => {
+  it.each([
+    [undefined, ""],
+    [4_200, "4.2 s"],
+    [59_940, "59.9 s"],
+    [185_000, "3 min 05 s"],
+    [8_507_000, "2 h 22 min"],
+    [95_658_200, "26 h 34 min"],
+  ])("%p ms reads as %p", (ms, label) => {
+    expect(pane.seconds(ms as number | undefined)).toBe(label);
+  });
+});
+
+describe("activity pane context against the compaction window", () => {
+  it("measures the main loop against the window that triggers compaction", () => {
+    expect(pane.againstCompaction({ tokens: 282_000, window: 1_000_000, percent: 28 }, 400_000)).toEqual({ tokens: 282_000, window: 400_000 });
+  });
+
+  it("keeps the live figures when no smaller compaction window was measured", () => {
+    const live = { tokens: 120_000, window: 200_000, percent: 60 };
+    expect(pane.againstCompaction(live, 0)).toBe(live);
+    expect(pane.againstCompaction(live, 200_000)).toBe(live);
+    expect(pane.againstCompaction({ window: 1_000_000 }, 400_000)).toEqual({ window: 1_000_000 });
   });
 });
