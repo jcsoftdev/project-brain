@@ -67,6 +67,22 @@ export interface InitResult {
  * Core init logic — testable with injectable options.
  * Idempotent: safe to run multiple times in the same project.
  */
+/**
+ * The id the base checkout's tables were created under. A recorded id wins over a derived
+ * one (the same rule `worktreeStatus` follows): a checkout whose id differs from its remote's
+ * name, such as a renamed repository, would otherwise look un-indexed, the seed would be
+ * refused with "no-base-index", and every new worktree would re-embed the whole tree.
+ */
+export async function baseProjectId(mainRoot: string): Promise<string> {
+  try {
+    const parsed = JSON.parse(await readFile(join(mainRoot, CONFIG_DIR, "project.json"), "utf-8")) as { projectId?: unknown };
+    if (typeof parsed.projectId === "string" && parsed.projectId.length > 0) return parsed.projectId;
+  } catch {
+    // not initialized: fall back to the derived id
+  }
+  return deriveProjectId(mainRoot);
+}
+
 export async function runInit(options: InitOptions = {}): Promise<InitResult> {
   const root = options.root ?? process.cwd();
   const dotDir = join(root, CONFIG_DIR);
@@ -225,7 +241,7 @@ export async function runInit(options: InitOptions = {}): Promise<InitResult> {
             dbPath: options.dbPath ?? DB_PATH,
             baseRoot: gitContext.mainRoot,
             worktreeRoot: root,
-            baseProject: await deriveProjectId(gitContext.mainRoot),
+            baseProject: await baseProjectId(gitContext.mainRoot),
             worktreeProject: projectId,
             isMain: false,
             target: { model: embeddings.model, dim: embeddings.dim },
