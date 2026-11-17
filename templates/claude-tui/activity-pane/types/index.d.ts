@@ -86,6 +86,9 @@ export type ContextUsage = { tokens?: number; window: number; percent?: number }
 
 export type StepContext = { tokens: number; model: string }
 
+/** What one loop has spent across its model requests; `usd` turns null for good once a step's model has no known price. */
+export type AgentUsage = { input: number; output: number; cacheWrite: number; cacheRead: number; usd: number | null }
+
 export type SessionIdentityLine = { account: string; sessionId: string; folder: string }
 
 export type EditorState = { dir: string; tab: string }
@@ -100,6 +103,7 @@ declare module 'claude-code' {
       costUsd: Shaped<number>
       context: Shaped<ContextUsage>
       stepContext: Shaped<Record<string, StepContext>>
+      agentUsage: Shaped<Record<string, AgentUsage>>
       mainModel: Shaped<string>
       identity: Shaped<SessionIdentityLine>
       openFiles: Shaped<string[]>

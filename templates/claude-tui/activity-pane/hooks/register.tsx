@@ -25,6 +25,7 @@ import { notifyCommand, notifyTurnComplete } from './feat-notify'
 import type {
   AgentRecord,
   AgentState,
+  AgentUsage,
   BranchCommit,
   BranchView,
   CallStatus,
@@ -133,6 +134,7 @@ const openFiles = atom({ plugin: 'project-brain-activity', key: 'openFiles' } as
 const diffs = atom({ plugin: 'project-brain-activity', key: 'diffs' } as const, {} as Record<string, DiffPatch>, { shape: 'diffs-2' })
 const costUsd = atom({ plugin: 'project-brain-activity', key: 'costUsd' } as const, 0, { shape: 'cost-1' })
 const stepContext = atom({ plugin: 'project-brain-activity', key: 'stepContext' } as const, {} as Record<string, StepContext>, { shape: 'step-context-1' })
+export const agentUsage = atom({ plugin: 'project-brain-activity', key: 'agentUsage' } as const, {} as Record<string, AgentUsage>, { shape: 'agent-usage-1' })
 const contextUsage = atom({ plugin: 'project-brain-activity', key: 'context' } as const, { window: 0 } as ContextUsage, { shape: 'context-2' })
 const agents = atom({ plugin: 'project-brain-activity', key: 'agents' } as const, [] as AgentRecord[], { shape: 'agents-1' })
 const pickedAgent = atom({ plugin: 'project-brain-activity', key: 'pickedAgent' } as const, '', { shape: 'picked-1' })
@@ -1058,6 +1060,106 @@ export const modelLabel = (id: string): string => {
   return named ? `${named[1]} ${named[2]}${named[3] ? `.${named[3]}` : ''}` : bare
 }
 
+// ---------------------------------------------------------------- pricing
+
+/** USD per million tokens. Cache writes at the 5-minute rate, the one Claude Code uses. */
+export type Rates = { input: number; cacheWrite: number; cacheRead: number; output: number }
+
+/** One model request's usage as the engine reports it; the cache fields may be null or absent. */
+export type StepUsage = {
+  input_tokens?: number | null
+  output_tokens?: number | null
+  cache_creation_input_tokens?: number | null
+  cache_read_input_tokens?: number | null
+}
+
+const rates = (input: number, cacheWrite: number, cacheRead: number, output: number): Rates => ({ input, cacheWrite, cacheRead, output })
+
+/** Public list prices as of 2026-11-17, from https://platform.claude.com/docs/en/about-claude/pricing, keyed by `modelLabel`. */
+const PRICES: Record<string, Rates> = {
+  'fable 5.2': rates(8, 10, 0.2, 40),
+  'fable 5.1': rates(10, 12.5, 0.25, 50),
+  'fable 5': rates(10, 12.5, 1, 50),
+  'opus 5.5': rates(4, 5, 0.2, 20),
+  'opus 5': rates(5, 6.25, 0.5, 25),
+  'opus 4.8': rates(5, 6.25, 0.5, 25),
+  'opus 4.7': rates(5, 6.25, 0.5, 25),
+  'opus 4.6': rates(5, 6.25, 0.5, 25),
+  'opus 4.5': rates(5, 6.25, 0.5, 25),
+  'opus 4.1': rates(15, 18.75, 1.5, 75),
+  'opus 4': rates(15, 18.75, 1.5, 75),
+  'sonnet 5.5': rates(2, 2.5, 0.1, 10),
+  'sonnet 5': rates(2, 2.5, 0.2, 10),
+  'sonnet 4.6': rates(3, 3.75, 0.3, 15),
+  'sonnet 4.5': rates(3, 3.75, 0.3, 15),
+  'sonnet 4': rates(3, 3.75, 0.3, 15),
+  'haiku 4.5': rates(1, 1.25, 0.1, 5),
+}
+
+/** Haiku 5.5 is priced by the size of each request's prompt: input, cache writes and cache reads together. */
+const HAIKU_5_5 = { label: 'haiku 5.5', promptLimit: 100_000, small: rates(0.1, 0.125, 0.01, 0.5), large: rates(0.5, 0.625, 0.05, 2.5) }
+
+const tokenCount = (value: number | null | undefined): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0)
+
+/** The rates for a model id and a request's prompt size; null for any model the price list does not name. */
+export const priceOf = (modelId: string, promptTokens = 0): Rates | null => {
+  const label = modelLabel(modelId)
+  if (label === HAIKU_5_5.label) return promptTokens > HAIKU_5_5.promptLimit ? HAIKU_5_5.large : HAIKU_5_5.small
+  return PRICES[label] ?? null
+}
+
+/** The estimated USD one model request cost; null when its model has no known price. */
+export const costOf = (usage: StepUsage, modelId: string): number | null => {
+  const input = tokenCount(usage.input_tokens)
+  const cacheWrite = tokenCount(usage.cache_creation_input_tokens)
+  const cacheRead = tokenCount(usage.cache_read_input_tokens)
+  const price = priceOf(modelId, input + cacheWrite + cacheRead)
+  if (price === null) return null
+  const perToken = price.input * input + price.cacheWrite * cacheWrite + price.cacheRead * cacheRead + price.output * tokenCount(usage.output_tokens)
+  return perToken / 1_000_000
+}
+
+/** Adds one model request to its loop's running total; a request without usage leaves the totals as they were. */
+export const addUsage = (all: Record<string, AgentUsage>, agentId: string, usage: StepUsage | undefined, modelId: string): Record<string, AgentUsage> => {
+  if (!usage) return all
+  const before = all[agentId] ?? { input: 0, output: 0, cacheWrite: 0, cacheRead: 0, usd: 0 }
+  const step = costOf(usage, modelId)
+  return {
+    ...all,
+    [agentId]: {
+      input: before.input + tokenCount(usage.input_tokens),
+      output: before.output + tokenCount(usage.output_tokens),
+      cacheWrite: before.cacheWrite + tokenCount(usage.cache_creation_input_tokens),
+      cacheRead: before.cacheRead + tokenCount(usage.cache_read_input_tokens),
+      usd: before.usd === null || step === null ? null : before.usd + step,
+    },
+  }
+}
+
+export const totalTokens = (usage: AgentUsage): number => usage.input + usage.cacheWrite + usage.cacheRead + usage.output
+
+/** `~$1.84` from ten cents up, `~$0.045` below, `<$0.001` for dust. */
+export const estimatedUsd = (usd: number): string => {
+  if (usd < 0.001) return '<$0.001'
+  return `~$${usd < 0.1 ? usd.toFixed(3) : usd.toFixed(2)}`
+}
+
+const USAGE_GAP = '   '
+const LABEL_ROOM = 12
+
+/**
+ * The usage text that goes before a row's right-hand `base` (its duration) in `width` columns, gap included:
+ * `412k tok · ~$1.84   `, then without the price, then nothing, as the room for a readable label runs out.
+ */
+export const usageRight = (usage: AgentUsage | undefined, base: string, width: number): string => {
+  if (usage === undefined) return ''
+  const total = totalTokens(usage)
+  if (total <= 0) return ''
+  const tokens = `${compact(total)} tok`
+  const choices = usage.usd === null ? [tokens] : [`${tokens} · ${estimatedUsd(usage.usd)}`, tokens]
+  return choices.map(text => `${text}${USAGE_GAP}`).find(text => text.length + base.length + LABEL_ROOM + 8 <= width) ?? ''
+}
+
 export const mergeAgent = (list: AgentRecord[], record: AgentRecord): AgentRecord[] => {
   const known = list.find(one => one.id === record.id)
   const merged = known ? { ...known, ...record, startedAt: known.startedAt, description: record.description || known.description } : record
@@ -1981,6 +2083,7 @@ export const register: Register = on => {
     if (used) {
       const tokens = used.input_tokens + used.cache_creation_input_tokens + used.cache_read_input_tokens
       await update($, stepContext, all => ({ ...all, [e.agentId ?? MAIN]: { tokens, model: used.model } })).catch(() => undefined)
+      await update($, agentUsage, all => addUsage(all, e.agentId ?? MAIN, used, used.model ?? '')).catch(() => undefined)
     }
     return result
   })

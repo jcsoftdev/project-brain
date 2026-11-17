@@ -3,7 +3,8 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { Api, Row, Span, Tone } from './register'
-import { ICONS, clean, fit, shortName, span } from './register'
+import { ICONS, agentUsage, clean, fit, shortName, span, usageRight } from './register'
+import type { AgentUsage } from '../types'
 import { notify } from './feat-notify'
 
 export type RunningKind = 'bash' | 'monitor' | 'agent' | 'workflow'
@@ -31,7 +32,8 @@ export type RunningTask = {
   isInferred?: boolean
 }
 
-export type RunningPart = { tasks: RunningTask[]; now: number }
+/** `usage` is keyed by agent id: a background agent's task id is the agent id its model requests report. */
+export type RunningPart = { tasks: RunningTask[]; now: number; usage?: Record<string, AgentUsage> }
 
 /** What a background-launching tool call reported. */
 export type Launch = Pick<RunningTask, 'id' | 'kind' | 'label'> & Partial<Pick<RunningTask, 'outputFile' | 'deadline'>>
@@ -288,15 +290,18 @@ export const rowsRunning = (part: RunningPart, ctx: { width: number; accent: str
     cells: [{ spans: [span(fit(title, width), { bold: true, color: live > 0 ? ctx.accent : undefined })], action: { kind: 'toggle', key: SECTION_KEY }, label: 'En curso', key: `btn-${SECTION_KEY}` }],
   }]
   if (!open) return rows
+  const usageOf = (task: RunningTask, base: string): string => (task.kind === 'agent' ? usageRight(part.usage?.[task.id], base, width) : '')
+  const withUsage = (spent: string, right: Span[]): Span[] => (spent === '' ? right : [span(spent, { dim: true }), ...right])
   for (const task of shown) {
     const who = task.agentLabel !== undefined ? `${clean(task.agentLabel)} · ` : ''
     const label = clean(task.label)
     if (task.status === 'running') {
       const right = elapsed(part.now - task.startedAt)
+      const spent = usageOf(task, right)
       rows.push({
         key: `running-${task.id}`,
-        cells: [{ spans: [span(`  ${ICONS.running} `, { color: 'warning' }), span(`${kindIcon(task.kind)} ${fit(label, width - right.length - 8)}`)] }],
-        right: [span(right, { color: 'warning' })],
+        cells: [{ spans: [span(`  ${ICONS.running} `, { color: 'warning' }), span(`${kindIcon(task.kind)} ${fit(label, width - spent.length - right.length - 8)}`)] }],
+        right: withUsage(spent, [span(right, { color: 'warning' })]),
       })
       const detail = `${who}${clean(task.lastLine ?? '')}`
       if (detail !== '') rows.push({ key: `running-${task.id}-line`, cells: [{ spans: [span(fit(`      └ ${detail}`, width), { dim: true })] }] })
@@ -306,10 +311,11 @@ export const rowsRunning = (part: RunningPart, ctx: { width: number; accent: str
     const verdict = verdictOfTask(task)
     const took = elapsed((task.endedAt ?? part.now) - task.startedAt)
     const rightText = verdict ? `${verdict} ${took}` : took
+    const spent = usageOf(task, rightText)
     rows.push({
       key: `running-${task.id}`,
-      cells: [{ spans: [span(`  ${look.icon} `, { color: look.color }), span(`${kindIcon(task.kind)} ${fit(`${who}${label}`, width - rightText.length - 8)}`, { dim: true })] }],
-      right: verdict ? [span(verdict, { color: verdict === 'PASS' ? 'success' : 'error' }), span(` ${took}`, { dim: true })] : [span(took, { dim: true })],
+      cells: [{ spans: [span(`  ${look.icon} `, { color: look.color }), span(`${kindIcon(task.kind)} ${fit(`${who}${label}`, width - spent.length - rightText.length - 8)}`, { dim: true })] }],
+      right: withUsage(spent, verdict ? [span(verdict, { color: verdict === 'PASS' ? 'success' : 'error' }), span(` ${took}`, { dim: true })] : [span(took, { dim: true })]),
     })
   }
   return rows
@@ -346,8 +352,8 @@ export const notifyLineOf = (task: RunningTask): string => {
 // ---------------------------------------------------------------- engine
 
 export async function readRunning($: Api): Promise<RunningPart> {
-  const [tasks, now] = await Promise.all([read($, tasksAtom), $.clock.now(), read($, tickAtom)])
-  return { tasks, now }
+  const [tasks, now, , usage] = await Promise.all([read($, tasksAtom), $.clock.now(), read($, tickAtom), read($, agentUsage)])
+  return { tasks, now, usage }
 }
 
 function announce($: Api, ended: RunningTask[]): void {
