@@ -1951,9 +1951,42 @@ export function claudeTuiUnits(): SetupUnit[] {
       },
     },
 
+    terminalThemeUnit(),
     skillListingUnit(),
     contextGateUnit(),
   ];
+}
+
+/** The Ghostty config (Supacode merges the same file) setup writes the Dracula theme into. */
+const ghosttyConfigOf = async (ctx: SetupContext) => {
+  const { ghosttyConfigPath } = await import("./terminal-theme.js");
+  return ghosttyConfigPath(dirname(dirname(ctx.claudeSettingsPath)));
+};
+
+function terminalThemeUnit(): SetupUnit {
+  return {
+    id: "tui:terminal-theme",
+    group: "Claude TUI",
+    label: "Terminal theme (Dracula)",
+    description:
+      "adds a marked block to your Ghostty config (Supacode reads the same file): Dracula colours, background opacity 0.88 and blur 20, matching the activity pane; untick to delete only the block",
+    defaultSelected: false,
+
+    async inspect(ctx): Promise<UnitState> {
+      const { readTerminalConfig, terminalThemeState } = await import("./terminal-theme.js");
+      return terminalThemeState(await readTerminalConfig(await ghosttyConfigOf(ctx)));
+    },
+
+    async apply(ctx): Promise<void> {
+      const { applyTerminalTheme } = await import("./terminal-theme.js");
+      await applyTerminalTheme(await ghosttyConfigOf(ctx));
+    },
+
+    async remove(ctx): Promise<void> {
+      const { removeTerminalTheme } = await import("./terminal-theme.js");
+      await removeTerminalTheme(await ghosttyConfigOf(ctx));
+    },
+  };
 }
 
 /** Where Claude Code keeps its transcripts, beside the settings file so a redirected one stays redirected. */
