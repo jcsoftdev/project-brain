@@ -35,6 +35,7 @@ export type AgentRecord = {
   name?: string
   state: AgentState
   startedAt: number
+  model?: string
 }
 
 export type PaneScroll = { offset: number; follow: boolean }
@@ -85,6 +86,8 @@ export type ContextUsage = { tokens?: number; window: number; percent?: number }
 
 export type StepContext = { tokens: number; model: string }
 
+export type SessionIdentityLine = { account: string; sessionId: string; folder: string }
+
 export type EditorState = { dir: string; tab: string }
 
 declare module 'claude-code' {
@@ -97,6 +100,8 @@ declare module 'claude-code' {
       costUsd: Shaped<number>
       context: Shaped<ContextUsage>
       stepContext: Shaped<Record<string, StepContext>>
+      mainModel: Shaped<string>
+      identity: Shaped<SessionIdentityLine>
       openFiles: Shaped<string[]>
       diffs: Shaped<Record<string, DiffPatch>>
       agents: Shaped<AgentRecord[]>

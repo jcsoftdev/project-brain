@@ -24,7 +24,7 @@ export type AgentsCell = Omit<Cell, 'action'> & { action?: Action | AgentsAction
 
 export type AgentsPart = { expanded: boolean; reports: Record<string, string> }
 
-export type GroupedInput = { records: AgentRecord[]; scope: string; expanded: boolean; width: number }
+export type GroupedInput = { records: AgentRecord[]; scope: string; expanded: boolean; width: number; modelOf?: (id: string) => string }
 
 export type Verdict = { token: string; tone: Tone }
 
@@ -34,12 +34,13 @@ const newestFirst = (a: AgentRecord, b: AgentRecord): number => b.startedAt - a.
 
 const widthOf = (cell: AgentsCell): number => cell.spans.reduce((sum, one) => sum + [...one.text].length, 0)
 
-const chipOf = (key: string, label: string, isOn: boolean, action: Action, look?: Look): AgentsCell => ({
+const chipOf = (key: string, label: string, isOn: boolean, action: Action, look?: Look, model = ''): AgentsCell => ({
   key,
   label,
   action,
   spans: [
     span(` ${label} `, { inverse: isOn, bold: isOn }),
+    ...(model ? [span(`${model} `, { inverse: isOn, dim: !isOn })] : []),
     ...(look ? [span(`${look.icon} `, { color: look.color, inverse: isOn })] : []),
     span(' '),
   ],
@@ -95,14 +96,14 @@ const windowed = (pinned: AgentsCell[], chips: AgentsCell[], selected: number, i
  * The agent chips grouped: "Principal" and the ended agents' toggle stay pinned; running agents follow,
  * newest first; ended agents show after them only when expanded. The selected agent is always shown.
  */
-export const agentChipsGrouped = ({ records, scope, expanded, width }: GroupedInput): AgentsCell[] => {
+export const agentChipsGrouped = ({ records, scope, expanded, width, modelOf }: GroupedInput): AgentsCell[] => {
   const live = records.filter(one => !isEnded(one)).sort(newestFirst)
   const ended = records.filter(isEnded).sort(newestFirst)
   const shownEnded = expanded ? ended : ended.filter(one => one.id === scope)
   const visible = [...live, ...shownEnded]
   const principal = chipOf(`agents-chip-${MAIN}`, 'Principal', scope === MAIN, { kind: 'agent', id: MAIN })
   const pinned = ended.length > 0 ? [principal, toggleOf(ended, expanded)] : [principal]
-  const chips = visible.map(one => chipOf(`agents-chip-${one.id}`, shortName(one), scope === one.id, { kind: 'agent', id: one.id }, AGENT_LOOK[one.state]))
+  const chips = visible.map(one => chipOf(`agents-chip-${one.id}`, shortName(one), scope === one.id, { kind: 'agent', id: one.id }, AGENT_LOOK[one.state], modelOf?.(one.id) ?? ''))
   return windowed(pinned, chips, visible.findIndex(one => one.id === scope), visible.map(one => one.id), Math.max(1, width))
 }
 
