@@ -59,15 +59,15 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      # OIDC trusted publishing needs npm >= 11.5.1; assert it rather than discover it as a failure.
+      # OIDC for dist-tag changes needs npm >= 11.21.0 (publishing alone needs 11.5.1); assert it rather than discover it as a failure.
       - name: Ensure npm supports OIDC trusted publishing
         shell: bash
         run: |
           have="$(npm --version)"
-          if node -e 'const a=process.argv[1].split(".").map(Number),b=[11,5,1];process.exit((a[0]>b[0]||(a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>=b[2]))))?0:1)' "$have"; then
+          if node -e 'const a=process.argv[1].split(".").map(Number),b=[11,21,0];process.exit((a[0]>b[0]||(a[0]===b[0]&&(a[1]>b[1]||(a[1]===b[1]&&a[2]>=b[2]))))?0:1)' "$have"; then
             echo "npm $have is new enough for OIDC trusted publishing"
           else
-            echo "npm $have is older than 11.5.1 - upgrading"
+            echo "npm $have is older than 11.21.0 - upgrading"
             npm install -g npm@11
           fi
 
