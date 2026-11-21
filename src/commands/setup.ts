@@ -562,6 +562,7 @@ export async function probeContext(options: {
     },
     skipOllama: false,
     routingConfigPath: options.routingConfigPath,
+    claudeCli: (await import("../setup/claude-tui.js")).runClaudeCli,
   };
 }
 

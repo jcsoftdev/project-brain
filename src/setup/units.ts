@@ -50,6 +50,11 @@ export interface SetupContext {
    */
   serviceDir?: string;
   runService?: (argv: string[]) => Promise<number>;
+  /**
+   * Runs the `claude` CLI so a mod is installed when setup writes it. Set by the real `setup`;
+   * absent in tests, which must never touch a real Claude Code install.
+   */
+  claudeCli?: import("./claude-tui.js").ClaudeCli;
   ollamaBin?: string | null;
   defaultOllamaServiceFiles?: string[];
   portAnswers?: (port: number) => Promise<boolean>;
@@ -1911,6 +1916,20 @@ function mcpPruneJevUnit(): SetupUnit {
 const claudeMdOf = (ctx: SetupContext) => join(dirname(ctx.claudeSettingsPath), "CLAUDE.md");
 
 /**
+ * After a mod's files and settings entries are written, has Claude Code install it now. Only when
+ * the context carries a Claude CLI (the real `setup` does; a test context does not, so no test
+ * touches a real Claude install), and not for a plugin the user switched off.
+ */
+async function registerMod(ctx: SetupContext, settings: Record<string, unknown>, mod: import("./claude-tui.js").Mod): Promise<void> {
+  if (!ctx.claudeCli) return;
+  const { registerWithClaude, pluginKey } = await import("./claude-tui.js");
+  const enabled = (settings.enabledPlugins ?? {}) as Record<string, unknown>;
+  if (enabled[pluginKey(mod)] === false) return;
+  const note = await registerWithClaude(ctx.dataDir, mod, ctx.claudeCli);
+  if (note) console.warn(`Warning: ${note}.`);
+}
+
+/**
  * The Claude Code terminal setup: the activity pane mod (with the fullscreen renderer it docks in) and the reply rules.
  * Never `autoOnUpgrade`: each changes ~/.claude, so an upgrader sees them as new and decides.
  */
@@ -1939,11 +1958,12 @@ export function claudeTuiUnits(): SetupUnit[] {
           console.warn(`Warning: ${ctx.claudeSettingsPath} is not valid JSON — activity pane not installed.`);
           return;
         }
-        const { activityPaneState, installActivityPane } = await import("./claude-tui.js");
+        const { activityPaneState, installActivityPane, ACTIVITY_MOD } = await import("./claude-tui.js");
         if ((await activityPaneState(settings, ctx.dataDir)) === "foreign") return;
         const next = await installActivityPane(settings, ctx.dataDir);
         await mkdir(dirname(ctx.claudeSettingsPath), { recursive: true });
         await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+        await registerMod(ctx, next, ACTIVITY_MOD);
       },
 
       async remove(ctx): Promise<void> {
@@ -2160,6 +2180,7 @@ function skillListingUnit(): SetupUnit {
       const next = await installMod(settings, ctx.dataDir, SKILL_LISTING_MOD);
       await mkdir(dirname(ctx.claudeSettingsPath), { recursive: true });
       await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+      await registerMod(ctx, next, SKILL_LISTING_MOD);
     },
 
     async remove(ctx): Promise<void> {
@@ -2203,6 +2224,7 @@ function filePreviewUnit(): SetupUnit {
       const next = await installMod(settings, ctx.dataDir, FILE_PREVIEW_MOD);
       await mkdir(dirname(ctx.claudeSettingsPath), { recursive: true });
       await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+      await registerMod(ctx, next, FILE_PREVIEW_MOD);
     },
 
     async remove(ctx): Promise<void> {
@@ -2245,6 +2267,7 @@ function contextGateUnit(): SetupUnit {
       const next = await installMod(settings, ctx.dataDir, CONTEXT_GATE_MOD);
       await mkdir(dirname(ctx.claudeSettingsPath), { recursive: true });
       await Bun.write(ctx.claudeSettingsPath, `${JSON.stringify(next, null, 2)}\n`);
+      await registerMod(ctx, next, CONTEXT_GATE_MOD);
     },
 
     async remove(ctx): Promise<void> {

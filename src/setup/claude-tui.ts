@@ -241,6 +241,50 @@ export async function installMod(settings: Settings | null, dataDir: string, mod
   return next;
 }
 
+/** Runs `claude <args>`; `code` is -1 when the binary could not be started. */
+export type ClaudeCli = (args: string[]) => Promise<{ code: number; out: string }>;
+
+export async function runClaudeCli(args: string[]): Promise<{ code: number; out: string }> {
+  const bin = Bun.which("claude");
+  if (!bin) return { code: -1, out: "claude is not on PATH" };
+  try {
+    const proc = Bun.spawn([bin, ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    return { code: await proc.exited, out: `${out}${err}`.trim() };
+  } catch (error) {
+    return { code: -1, out: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Makes Claude Code know the mod now instead of whenever it next starts.
+ *
+ * Writing the marketplace and `enabledPlugins` is only a request: nothing on that path installs
+ * the plugin, and a mod that is enabled but not installed loads nowhere, with no error to say so
+ * (the file-preview mod sat like that until it was installed by hand). Adds the marketplace when
+ * Claude does not list it yet, then installs the plugin, which is a no-op for one already installed.
+ *
+ * Returns a note when it could not finish, never throws: the settings entries are already written,
+ * so the worst case is the old behaviour of Claude picking the plugin up at its next start.
+ */
+export async function registerWithClaude(dataDir: string, mod: Mod, cli: ClaudeCli): Promise<string | null> {
+  const listed = await cli(["plugin", "marketplace", "list", "--json"]);
+  if (listed.code === -1) return `${listed.out}; Claude Code will install the mod at its next start`;
+  let known = false;
+  try {
+    known = (JSON.parse(listed.out) as Array<{ name?: string }>).some((entry) => entry.name === MARKETPLACE_NAME);
+  } catch {
+    // unreadable list: try adding, which is harmless when it is already there
+  }
+  if (!known) {
+    const added = await cli(["plugin", "marketplace", "add", marketplaceDir(dataDir)]);
+    if (added.code !== 0) return `could not add the project-brain marketplace to Claude Code (${added.out.split("\n").pop()})`;
+  }
+  const installed = await cli(["plugin", "install", pluginKey(mod)]);
+  if (installed.code !== 0) return `could not install ${pluginKey(mod)} (${installed.out.split("\n").pop()})`;
+  return null;
+}
+
 /**
  * Drops the mod's plugin entry and files. The marketplace entry and its own files go with the last
  * of our mods; while another stays, the manifest is rewritten without this one.
