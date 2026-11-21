@@ -51,7 +51,13 @@ const SKIPS_PREAMBLE = [
   "stats",
 ];
 
-if (!SKIPS_PREAMBLE.includes(command as string)) {
+// `setup`, `init` and `update` change real state and ignore flags they do not know, so `setup --help`
+// used to apply the saved selection. Asking for help must be side-effect free: it skips the preamble
+// below (which refreshes skills and repairs configs) and prints usage before any command runs.
+const WANTS_HELP =
+  ["setup", "init", "update"].includes(command as string) && (args.includes("--help") || args.includes("-h"));
+
+if (!SKIPS_PREAMBLE.includes(command as string) && !WANTS_HELP) {
   // A checkout run from source (a worktree, a feature branch) must not write its
   // unreleased skills or configs into the owner's global state. See env/install-origin.ts.
   const { mayWriteGlobalState } = await import("./env/install-origin.js");
@@ -255,6 +261,11 @@ Options:
   --help, -h     Show this help message
   --version, -v  Print the installed version
 `);
+}
+
+if (WANTS_HELP) {
+  printHelp();
+  process.exit(0);
 }
 
 switch (command) {

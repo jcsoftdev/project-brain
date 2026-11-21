@@ -153,3 +153,26 @@ describe("CLI entry point", () => {
     expect(stdout).toContain("--judge-model jev");
   });
 });
+
+describe("help on commands that change state", () => {
+  it.each(["setup", "init", "update"])("'%s --help' prints usage and writes nothing", async (command) => {
+    const { mkdtempSync, readdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const home = mkdtempSync(join(tmpdir(), "pb-help-home-"));
+    try {
+      const proc = Bun.spawn(["bun", "run", CLI_PATH, command, "--help"], {
+        cwd: CWD,
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, HOME: home, BRAIN_DATA_DIR: join(home, "data") },
+      });
+      const out = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      expect(out).toContain("Usage: project-brain");
+      expect(out).not.toContain("Selection:");
+      expect(readdirSync(home)).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
