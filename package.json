@@ -2,7 +2,7 @@
   "name": "project-brain",
   "version": "0.48.1",
   "type": "module",
-  "description": "Local-first MCP server that gives AI tools semantic memory of your codebase.",
+  "description": "Local-first context layer for AI coding assistants: codebase memory, project knowledge, and session guardrails over MCP.",
   "author": "jcsoftdev",
   "license": "MIT",
   "repository": {

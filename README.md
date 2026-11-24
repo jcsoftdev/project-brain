@@ -1,10 +1,25 @@
 # project-brain
 
-Local-first MCP server that gives AI tools semantic memory of your codebase.
+A local-first context layer for AI coding assistants: it knows your codebase, keeps the reasoning behind it, and shapes what the assistant reads, does and spends in every session.
+
+It started as semantic memory of a codebase, and that is still the core. Around it, project-brain now runs the rest of the session: it picks the context and skills each prompt needs, drops the ones it does not, guards edits and commits against your own rules, isolates parallel work in worktrees, and keeps the machine and the index tidy.
 
 The whole Claude Code flow on one page (every piece, how to turn it off, what leaves the machine, troubleshooting): [docs/flow-map.md](docs/flow-map.md).
 
-project-brain indexes your project files into a local LanceDB vector store using Ollama embeddings, and builds a SQLite **structural graph** (symbols + call edges) with a WASM tree-sitter parser. Once indexed, AI assistants connected via MCP can search your codebase **semantically** (by meaning) AND **structurally** (exact symbols, callers/callees, change blast-radius), track module documentation, and maintain knowledge that persists across sessions.
+## What it does
+
+| Area | What you get | Read more |
+|---|---|---|
+| **Codebase memory** | Semantic search by meaning (LanceDB + Ollama embeddings), keyword search (BM25), and a structural graph from tree-sitter: symbols, callers, callees, blast radius, call paths, a ranked repo map. Structural and keyword search work with no model at all. | [MCP Tools](#mcp-tools), [Structural commands](#structural--lexical-commands-find-callers-callees-impact-trace-map-code) |
+| **Knowledge, the *why*** | An Open Knowledge Format bundle for decisions, constraints and traps, audited against the code graph so stale or broken knowledge fails CI. Module docs refresh from each commit. | [`okf`](#okf--knowledge-bundles-the-why-not-the-what) |
+| **Context economy** | Per-prompt retrieval injected by a hook, skill and tool suggestions, a context gate that drops injected text the prompt does not need, unused MCP servers pruned per project, `CLAUDE.md` sections moved into on-demand skills, and `stats` to see what each session cost. | [Context-economy units](#context-economy-units), [Skill suggestions](#skill-suggestions), [`stats`](#stats) |
+| **Guardrails** | Pre-edit guards for your coding rules and your architecture's layer boundaries, a commit check, model routing for delegated agents, and commit attribution control. | [Coding rules guard](#coding-rules-guard), [Architecture guard](#architecture-guard), [Model routing](#model-routing-for-sub-agents) |
+| **Parallel work** | Worktrees with their own index (seeded from the main checkout), their own leased port, and `node_modules` cloned copy-on-write; finished worktrees are swept once merged. | [Worktree lifecycle](#worktree-lifecycle) |
+| **Host skills** | Skills that run inside the assistant on top of the MCP tools: project audit, design review, UX review, QA, video recording of a flow, commit messages, OKF writing. | [Host skills](#host-skills-setup-installs) |
+| **Claude Code terminal** | An activity pane (todos, commands, changes, agents, CI, filters), themes, readable-reply rules, session titles, and a shared headless browser. | [Claude TUI](#claude-tui) |
+| **Housekeeping** | `status` across every registered project, idle-session pruning, index compaction, dead-worktree cleanup, and live updates that move a running MCP server to the new binary. | [`status`](#status), [Disk maintenance](#disk-maintenance), [Live updates](#live-updates) |
+
+Everything beyond codebase memory is a unit in `project-brain setup`: you see each one with its state before anything is written, and unticking a unit undoes exactly what it wrote. The Jev pieces (reranking, skill picks, the context gate, the commit check) only call out when you configure a TypeSafe token, and they fail open; post-commit module docs use the Anthropic API by default and can run on local Ollama instead (`setup --concept-provider ollama`). [docs/flow-map.md](docs/flow-map.md) lists exactly what leaves the machine.
 
 ## Quick Start
 
